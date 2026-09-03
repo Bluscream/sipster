@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# AppImage entry point. Keeps the app self-contained while still using the
+# host's graphics/audio stack (Wayland/X11, PipeWire/ALSA).
+set -euo pipefail
+HERE="$(dirname "$(readlink -f "${0}")")"
+export PATH="${HERE}/usr/bin:${PATH}"
+export LD_LIBRARY_PATH="${HERE}/usr/lib:${LD_LIBRARY_PATH:-}"
+exec "${HERE}/usr/bin/sipster" "$@"

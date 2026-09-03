@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Sipster
+GenericName=Softphone
+Comment=Place and take SIP calls from your desktop
+Exec=sipster
+Icon=sipster
+Terminal=false
+Categories=Network;Telephony;
+Keywords=SIP;VoIP;phone;softphone;telephony;FritzBox;
+StartupWMClass=sipster-ui

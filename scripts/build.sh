@@ -1,20 +1,38 @@
 #!/usr/bin/env bash
+# Multi-target builder for Sipster.
+#
+# All artifacts are named  sipster-{os}-{arch}.{ext}  and land in dist/.
+# Builds are expected to run inside the `build-box` distrobox, which carries
+# the cross toolchains, alsa/pkg-config and cmake (for libopus).
 set -euo pipefail
 
-# Standardized multi-target builder for Sipster using build-box distrobox container
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+DIST_DIR="${ROOT_DIR}/dist"
+PKG_DIR="${ROOT_DIR}/packaging"
 
 export PKG_CONFIG_ALLOW_CROSS=1
 
-TARGET="${1:-all}"
+usage() {
+    cat <<EOF
+Usage: $0 [target]
 
+Targets:
+  x86_64-linux      aarch64-linux    i686-linux      armv7-linux
+  x86_64-windows    x86-windows      aarch64-windows
+  appimage          Linux x86_64 AppImage (sipster-linux-x86_64.AppImage)
+  linux             all Linux binaries
+  all               every target above, including the AppImage
+
+Artifacts are written to dist/ as sipster-{os}-{arch}.{ext}
+EOF
+}
+
+# build_target <rust-target> <binary-name> <output-name>
 build_target() {
-    local target="$1"
-    local bin_name="$2"
-    local output_name="$3"
+    local target="$1" bin_name="$2" output_name="$3"
 
-    echo "===> Building ${target} -> ${output_name}..."
+    echo "===> Building ${target} -> ${output_name}"
     case "${target}" in
         aarch64-unknown-linux-gnu)
             PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig \
@@ -42,44 +60,71 @@ build_target() {
             ;;
     esac
 
-    mkdir -p "${ROOT_DIR}/dist"
-    cp "${ROOT_DIR}/target/${target}/release/${bin_name}" "${ROOT_DIR}/dist/${output_name}"
-    echo "Saved ${ROOT_DIR}/dist/${output_name}"
+    mkdir -p "${DIST_DIR}"
+    cp "${ROOT_DIR}/target/${target}/release/${bin_name}" "${DIST_DIR}/${output_name}"
+    echo "Saved ${DIST_DIR}/${output_name}"
 }
 
+# Packages the x86_64 Linux build as an AppImage.
+build_appimage() {
+    local target="x86_64-unknown-linux-gnu"
+    local out="${DIST_DIR}/sipster-linux-x86_64.AppImage"
+
+    if ! command -v appimagetool >/dev/null 2>&1; then
+        echo "error: appimagetool not found in PATH" >&2
+        echo "  get it from https://github.com/AppImage/appimagetool/releases" >&2
+        return 1
+    fi
+
+    cargo build --release -p sipster-ui --target "${target}"
+
+    local appdir
+    appdir="$(mktemp -d)/Sipster.AppDir"
+    mkdir -p "${appdir}/usr/bin"
+
+    install -m755 "${ROOT_DIR}/target/${target}/release/sipster-ui" "${appdir}/usr/bin/sipster"
+    install -m755 "${PKG_DIR}/AppRun"                               "${appdir}/AppRun"
+    install -m644 "${PKG_DIR}/sipster.desktop"                      "${appdir}/sipster.desktop"
+    install -m644 "${PKG_DIR}/sipster.png"                          "${appdir}/sipster.png"
+
+    mkdir -p "${DIST_DIR}"
+    # ARCH: required when appimagetool cannot infer the target arch.
+    # APPIMAGE_EXTRACT_AND_RUN: appimagetool is itself an AppImage and cannot
+    #   self-mount inside the container (no FUSE), so make it self-extract.
+    ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 appimagetool "${appdir}" "${out}"
+    rm -rf "$(dirname "${appdir}")"
+    echo "Saved ${out}"
+}
+
+build_linux() {
+    build_target "x86_64-unknown-linux-gnu"        "sipster-ui" "sipster-linux-x86_64"
+    build_target "aarch64-unknown-linux-gnu"       "sipster-ui" "sipster-linux-aarch64"
+    build_target "i686-unknown-linux-gnu"          "sipster-ui" "sipster-linux-x86"
+    build_target "armv7-unknown-linux-gnueabihf"   "sipster-ui" "sipster-linux-armv7"
+}
+
+build_windows() {
+    build_target "x86_64-pc-windows-gnu"  "sipster-ui.exe" "sipster-windows-x86_64.exe"
+    build_target "i686-pc-windows-gnu"    "sipster-ui.exe" "sipster-windows-x86.exe"
+    build_target "aarch64-pc-windows-msvc" "sipster-ui.exe" "sipster-windows-aarch64.exe"
+}
+
+# Accept both "appimage" and the legacy "--appimage" spelling.
+TARGET="${1:-all}"
+TARGET="${TARGET#--}"
+
 case "${TARGET}" in
-    x86_64-linux)
-        build_target "x86_64-unknown-linux-gnu" "sipster-ui" "sipster-linux-x86_64"
-        ;;
-    aarch64-linux)
-        build_target "aarch64-unknown-linux-gnu" "sipster-ui" "sipster-linux-aarch64"
-        ;;
-    i686-linux)
-        build_target "i686-unknown-linux-gnu" "sipster-ui" "sipster-linux-x86"
-        ;;
-    armv7-linux)
-        build_target "armv7-unknown-linux-gnueabihf" "sipster-ui" "sipster-linux-armv7"
-        ;;
-    x86_64-windows)
-        build_target "x86_64-pc-windows-gnu" "sipster-ui.exe" "sipster-windows-x86_64.exe"
-        ;;
-    x86-windows)
-        build_target "i686-pc-windows-gnu" "sipster-ui.exe" "sipster-windows-x86.exe"
-        ;;
-    aarch64-windows)
-        build_target "aarch64-pc-windows-msvc" "sipster-ui.exe" "sipster-windows-aarch64.exe"
-        ;;
-    all)
-        build_target "x86_64-unknown-linux-gnu" "sipster-ui" "sipster-linux-x86_64"
-        build_target "aarch64-unknown-linux-gnu" "sipster-ui" "sipster-linux-aarch64"
-        build_target "i686-unknown-linux-gnu" "sipster-ui" "sipster-linux-x86"
-        build_target "armv7-unknown-linux-gnueabihf" "sipster-ui" "sipster-linux-armv7"
-        build_target "x86_64-pc-windows-gnu" "sipster-ui.exe" "sipster-windows-x86_64.exe"
-        build_target "i686-pc-windows-gnu" "sipster-ui.exe" "sipster-windows-x86.exe"
-        build_target "aarch64-pc-windows-msvc" "sipster-ui.exe" "sipster-windows-aarch64.exe"
-        ;;
-    *)
-        echo "Usage: $0 [x86_64-linux|aarch64-linux|i686-linux|armv7-linux|x86_64-windows|x86-windows|aarch64-windows|all]"
-        exit 1
-        ;;
+    x86_64-linux)     build_target "x86_64-unknown-linux-gnu"      "sipster-ui" "sipster-linux-x86_64" ;;
+    aarch64-linux)    build_target "aarch64-unknown-linux-gnu"     "sipster-ui" "sipster-linux-aarch64" ;;
+    i686-linux|x86-linux)
+                      build_target "i686-unknown-linux-gnu"        "sipster-ui" "sipster-linux-x86" ;;
+    armv7-linux)      build_target "armv7-unknown-linux-gnueabihf" "sipster-ui" "sipster-linux-armv7" ;;
+    x86_64-windows)   build_target "x86_64-pc-windows-gnu"   "sipster-ui.exe" "sipster-windows-x86_64.exe" ;;
+    x86-windows)      build_target "i686-pc-windows-gnu"     "sipster-ui.exe" "sipster-windows-x86.exe" ;;
+    aarch64-windows)  build_target "aarch64-pc-windows-msvc" "sipster-ui.exe" "sipster-windows-aarch64.exe" ;;
+    appimage)         build_appimage ;;
+    linux)            build_linux ;;
+    all)              build_linux; build_windows; build_appimage ;;
+    help|-h)          usage ;;
+    *)                usage; exit 1 ;;
 esac

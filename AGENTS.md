@@ -23,5 +23,6 @@ Build a modern, 100% pure-Rust softphone (SIP client) optimized for desktop Linu
    - Support both 64-bit and 32-bit targets (e.g. `x86_64`, `i686`, `aarch64`).
    - Use target-conditional pragmas and feature gating (e.g. `[target.'cfg(...)'.dependencies]`) to bypass upstream 32-bit blockers without losing modern features on 64-bit.
    - We may drop 32-bit support in the future if required, but maintain it as long as possible without sacrificing modern features.
+   - If something we want would require to drop a OS like windows, try splitting the code first into multiple paths, and if absolutely necessary, ask for the user to drop support.
 6. **Reference Code:**
    - Look in `.references/` for patterns (e.g., `microsip` for user-friendly flow, `rvoip` for pure-Rust SIP state handling, `gnome-calls` for Linux dialer UX). Do NOT commit `.references/`.

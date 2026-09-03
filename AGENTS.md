@@ -19,5 +19,9 @@ Build a modern, 100% pure-Rust softphone (SIP client) optimized for desktop Linu
    - Audio I/O: `cpal` (PipeWire / ALSA).
    - Codecs: `audio-codec` (prioritize PCMA/PCMU G.711, G.722, and Opus).
    - Media transport: `rtp` and `sdp`.
-5. **Reference Code:**
+5. **Architecture & 32-Bit Support:**
+   - Support both 64-bit and 32-bit targets (e.g. `x86_64`, `i686`, `aarch64`).
+   - Use target-conditional pragmas and feature gating (e.g. `[target.'cfg(...)'.dependencies]`) to bypass upstream 32-bit blockers without losing modern features on 64-bit.
+   - We may drop 32-bit support in the future if required, but maintain it as long as possible without sacrificing modern features.
+6. **Reference Code:**
    - Look in `.references/` for patterns (e.g., `microsip` for user-friendly flow, `rvoip` for pure-Rust SIP state handling, `gnome-calls` for Linux dialer UX). Do NOT commit `.references/`.

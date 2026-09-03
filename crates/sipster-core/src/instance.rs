@@ -26,11 +26,18 @@ pub struct Guard {
 ///
 /// Returns an error only if creating or accessing the lock file itself failed.
 pub fn claim() -> io::Result<Option<Guard>> {
+    use std::fs::OpenOptions;
+
     let path = lock_path();
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let file = File::create(&path)?;
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)?;
 
     match file.try_lock() {
         Ok(()) => Ok(Some(Guard { _file: file })),

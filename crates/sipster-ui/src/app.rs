@@ -28,6 +28,7 @@ pub struct IncomingCall {
 
 pub struct SipsterApp {
     engine: Option<EngineHandle>,
+    pending_command: Option<Command>,
     pub registration: RegistrationState,
     pub dial_number: String,
     pub status: String,
@@ -65,6 +66,7 @@ impl SipsterApp {
     pub fn new() -> (Self, Task<Message>) {
         let app = Self {
             engine: None,
+            pending_command: None,
             registration: RegistrationState::Unregistered,
             dial_number: String::new(),
             status: "Starting…".into(),
@@ -99,6 +101,9 @@ impl SipsterApp {
             Message::EngineReady(engine) => {
                 self.engine = Some(engine);
                 self.status = "Engine ready".into();
+                if let Some(cmd) = self.pending_command.take() {
+                    return self.handle_ipc(cmd);
+                }
                 Task::none()
             }
             Message::EngineFailed(err) => {
@@ -106,7 +111,14 @@ impl SipsterApp {
                 Task::none()
             }
             Message::Call(event) => self.on_call_event(event),
-            Message::Ipc(cmd) => self.handle_ipc(cmd),
+            Message::Ipc(cmd) => {
+                if self.engine.is_none() {
+                    self.pending_command = Some(cmd);
+                    Task::none()
+                } else {
+                    self.handle_ipc(cmd)
+                }
+            }
             Message::TrayTick => {
                 // Drain one pending tray request per tick (non-blocking).
                 if let Some(req) = self.tray.as_mut().and_then(|t| t.requests.try_recv().ok()) {

@@ -141,7 +141,7 @@ fn percent_decode(input: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-use std::fs::{File, TryLockError};
+use crate::instance::{self, Guard};
 
 /// Path of the control socket for this user.
 ///
@@ -151,19 +151,6 @@ pub fn socket_path() -> PathBuf {
     let dir = std::env::var("XDG_RUNTIME_DIR")
         .map_or_else(|_| std::env::temp_dir(), PathBuf::from);
     dir.join("sipster.sock")
-}
-
-/// Advisory lock path in the runtime directory.
-pub fn lock_path() -> PathBuf {
-    let dir = std::env::var("XDG_RUNTIME_DIR")
-        .map_or_else(|_| std::env::temp_dir(), PathBuf::from);
-    dir.join("sipster.lock")
-}
-
-/// A held lock claim. Dropping it or process termination releases the kernel lock.
-#[derive(Debug)]
-pub struct Guard {
-    _file: File,
 }
 
 /// Outcome of trying to become the single running instance.
@@ -178,24 +165,10 @@ pub enum Instance {
     Forwarded,
 }
 
-/// Tries to claim the kernel advisory file lock.
-/// Returns `Ok(Some(Guard))` if lock acquired, `Ok(None)` if already held by another instance.
-pub fn claim_lock() -> Result<Option<Guard>> {
-    let path = lock_path();
-    if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    let file = File::create(&path)?;
-    match file.try_lock() {
-        Ok(()) => Ok(Some(Guard { _file: file })),
-        Err(TryLockError::WouldBlock) => Ok(None),
-        Err(TryLockError::Error(err)) => Err(Error::Io(err)),
-    }
-}
-
 /// Attempts to connect to an existing instance and forward the command.
-async fn try_forward(path: &std::path::Path, command: Option<Command>) -> Result<Option<Instance>> {
-    if let Ok(mut stream) = UnixStream::connect(path).await {
+pub async fn try_forward(command: Option<Command>) -> Result<Option<Instance>> {
+    let path = socket_path();
+    if let Ok(mut stream) = UnixStream::connect(&path).await {
         if let Some(command) = command {
             let mut line = serde_json::to_string(&command)
                 .map_err(|e| Error::Config(format!("encode command: {e}")))?;
@@ -222,22 +195,22 @@ fn remove_stale_socket(path: &std::path::Path) -> Result<()> {
 /// Becomes the primary instance, or forwards `command` to the one already
 /// running.
 ///
-/// Uses `File::try_lock` for kernel-level advisory mutual exclusion, paired with
-/// Unix domain socket IPC for command forwarding.
+/// Mutual exclusion is enforced by [`crate::instance::claim`], while command
+/// forwarding is handled over the Unix domain socket.
 pub async fn acquire(command: Option<Command>) -> Result<Instance> {
     let path = socket_path();
 
-    // 1. First, check the kernel advisory lock:
-    let lock_guard = match claim_lock()? {
+    // 1. Check the kernel advisory lock from the dedicated instance module:
+    let lock_guard = match instance::claim()? {
         Some(guard) => guard,
         None => {
             // Another instance holds the file lock. Forward the command.
-            if let Some(instance) = try_forward(&path, command.clone()).await? {
+            if let Some(instance) = try_forward(command.clone()).await? {
                 return Ok(instance);
             }
             // If forward failed but lock is held, wait briefly and retry forward once.
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            if let Some(instance) = try_forward(&path, command).await? {
+            if let Some(instance) = try_forward(command).await? {
                 return Ok(instance);
             }
             info!("another instance holds lock; exiting");

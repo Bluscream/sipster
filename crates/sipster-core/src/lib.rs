@@ -10,6 +10,7 @@ pub mod call;
 pub mod config;
 pub mod engine;
 pub mod error;
+pub mod instance;
 pub mod ipc;
 pub mod net;
 
@@ -17,6 +18,7 @@ pub use call::{CallDirection, CallEvent, CallId, CallState, RegistrationState};
 pub use config::{Config, SipAccount, Transport};
 pub use engine::SipEngine;
 pub use error::{Error, Result};
+pub use instance::Guard;
 pub use ipc::{Command, Instance};
 
 /// Builds an rvoip `Endpoint` from a validated [`SipAccount`].

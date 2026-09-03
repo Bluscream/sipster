@@ -16,7 +16,7 @@ use sipster_core::ipc::{self, Command, Instance};
 
 /// Primary instance state held across Iced boot.
 pub(crate) struct PrimaryState {
-    pub(crate) _lock: sipster_core::ipc::Guard,
+    pub(crate) _lock: sipster_core::instance::Guard,
     pub(crate) listener: std::os::unix::net::UnixListener,
     pub(crate) initial_command: Option<Command>,
 }

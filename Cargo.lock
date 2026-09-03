@@ -3451,6 +3451,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "sipster-tests"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde_json",
+ "sipster-core",
+ "tokio",
+ "tracing",
+ "uuid 1.26.0",
+]
+
+[[package]]
 name = "sipster-ui"
 version = "0.1.0"
 dependencies = [

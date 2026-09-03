@@ -43,3 +43,19 @@ sdp = "0.17"
 rtp = "0.17"
 audio-codec = "0.4"
 cpal = "0.18"
+
+# --- Profile Optimizations for Disk Space & Build Speed ---
+
+[profile.dev]
+# Line numbers only for panic stack traces; cuts debug symbols by ~60%
+debug = 1
+
+[profile.dev.package."*"]
+# Zero debug symbols for third-party dependencies (wgpu, iced, tokio, etc.)
+debug = 0
+
+[profile.release]
+# Strip symbol tables and enable thin LTO for small, lean binaries
+strip = true
+lto = "thin"
+codegen-units = 1

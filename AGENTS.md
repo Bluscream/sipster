@@ -21,5 +21,3 @@ Build a modern, 100% pure-Rust softphone (SIP client) optimized for desktop Linu
    - Media transport: `rtp` and `sdp`.
 5. **Reference Code:**
    - Look in `.references/` for patterns (e.g., `microsip` for user-friendly flow, `rvoip` for pure-Rust SIP state handling, `gnome-calls` for Linux dialer UX). Do NOT commit `.references/`.
-6. **Licensing:**
-   - Public domain ([UNLICENSE](file:///run/media/system/Data/Projects/sipster/UNLICENSE)).

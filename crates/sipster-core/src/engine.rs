@@ -32,17 +32,31 @@ enum Tracked {
 }
 
 /// Maps our stable [`CallId`]s to rvoip handles and back.
-#[derive(Default)]
-struct Registry {
-    tracked: HashMap<CallId, Tracked>,
+///
+/// Generic over the handle type purely for testability: rvoip's call handles
+/// cannot be constructed without a live stack, so tests substitute a stand-in
+/// and still exercise the real bookkeeping.
+struct Registry<T = Tracked> {
+    tracked: HashMap<CallId, T>,
     /// rvoip `Call-ID` string -> our [`CallId`], for correlating inbound events.
     by_rvoip: HashMap<String, CallId>,
     /// Live OS audio bindings; dropping an entry stops that call's audio.
     audio: HashMap<CallId, CallAudio>,
 }
 
-impl Registry {
-    fn insert(&mut self, rvoip_id: String, tracked: Tracked) -> CallId {
+// Hand-written so `T` needs no `Default` bound of its own.
+impl<T> Default for Registry<T> {
+    fn default() -> Self {
+        Self {
+            tracked: HashMap::new(),
+            by_rvoip: HashMap::new(),
+            audio: HashMap::new(),
+        }
+    }
+}
+
+impl<T> Registry<T> {
+    fn insert(&mut self, rvoip_id: String, tracked: T) -> CallId {
         let id = CallId::new();
         self.by_rvoip.insert(rvoip_id, id);
         self.tracked.insert(id, tracked);
@@ -53,11 +67,18 @@ impl Registry {
         self.by_rvoip.get(rvoip_id).copied()
     }
 
-    fn remove(&mut self, id: CallId) {
-        self.tracked.remove(&id);
+    /// Forgets a call and returns its handle so the caller can still act on it
+    /// (send BYE/CANCEL) after the bookkeeping is gone.
+    ///
+    /// Returning the handle is the whole point: an earlier version cleared the
+    /// entry first and then tried to read it, silently skipping the BYE while
+    /// still stopping audio — the call stayed up with no sound.
+    fn take(&mut self, id: CallId) -> Option<T> {
+        let tracked = self.tracked.remove(&id);
         self.by_rvoip.retain(|_, v| *v != id);
         // Dropping the CallAudio stops capture/playback for this call.
         self.audio.remove(&id);
+        tracked
     }
 }
 
@@ -215,21 +236,17 @@ impl SipEngine {
 
     /// Hang up (or decline) a call by our id.
     pub async fn hangup(&self, id: CallId) -> Result<()> {
-        let tracked = {
-            let mut reg = self.registry.lock().await;
-            reg.remove(id);
-            reg.tracked.remove(&id)
-        };
+        let tracked = self.registry.lock().await.take(id);
         match tracked {
             Some(Tracked::Active(call)) => call
                 .hangup()
                 .await
-                .map_err(|e| Error::Config(format!("hangup failed: {e}"))),
+                .map_err(|e| Error::Sip(format!("hangup failed: {e}"))),
             Some(Tracked::Incoming(incoming)) => incoming
                 .decline()
                 .await
-                .map_err(|e| Error::Config(format!("decline failed: {e}"))),
-            None => Ok(()),
+                .map_err(|e| Error::Sip(format!("decline failed: {e}"))),
+            None => Err(Error::UnknownCall(id)),
         }
     }
 }
@@ -383,11 +400,64 @@ async fn terminate(
         let mut reg = registry.lock().await;
         let id = reg.resolve(&rvoip_id);
         if let Some(id) = id {
-            reg.remove(id);
+            reg.take(id);
         }
         id
     };
     if let Some(id) = id {
         let _ = tx.send(CallEvent::Terminated { id, reason });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Stand-in for an rvoip call handle, which cannot be built without a
+    /// live stack.
+    type TestRegistry = Registry<&'static str>;
+
+    #[test]
+    fn resolve_maps_rvoip_id_to_our_call_id() {
+        let mut reg = TestRegistry::default();
+        let id = reg.insert("rvoip-call-1".into(), "handle");
+        assert_eq!(reg.resolve("rvoip-call-1"), Some(id));
+        assert_eq!(reg.resolve("unknown"), None);
+    }
+
+    /// The regression behind "hanging up doesn't work but audio stopped":
+    /// `take` must hand back the call handle it removes, or the BYE is never
+    /// sent while the audio binding is dropped anyway.
+    #[test]
+    fn take_returns_the_handle_it_removes() {
+        let mut reg = TestRegistry::default();
+        let id = reg.insert("rvoip-call-1".into(), "handle");
+        assert_eq!(reg.take(id), Some("handle"), "hangup needs the handle back");
+    }
+
+    #[test]
+    fn take_clears_every_index_for_the_call() {
+        let mut reg = TestRegistry::default();
+        let id = reg.insert("rvoip-call-1".into(), "handle");
+        reg.take(id);
+        assert_eq!(reg.resolve("rvoip-call-1"), None, "rvoip id must be forgotten");
+        assert!(reg.tracked.is_empty());
+        assert!(reg.audio.is_empty());
+    }
+
+    #[test]
+    fn taking_an_unknown_call_is_not_an_error() {
+        let mut reg = TestRegistry::default();
+        assert_eq!(reg.take(CallId::new()), None);
+    }
+
+    #[test]
+    fn calls_are_tracked_independently() {
+        let mut reg = TestRegistry::default();
+        let first = reg.insert("rvoip-1".into(), "a");
+        let second = reg.insert("rvoip-2".into(), "b");
+        reg.take(first);
+        assert_eq!(reg.resolve("rvoip-2"), Some(second), "unrelated call survives");
+        assert_eq!(reg.take(second), Some("b"));
     }
 }

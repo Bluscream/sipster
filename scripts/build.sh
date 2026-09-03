@@ -10,6 +10,15 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 DIST_DIR="${ROOT_DIR}/dist"
 PKG_DIR="${ROOT_DIR}/packaging"
+BOX="${SIPSTER_BOX:-build-box}"
+
+in_container() {
+    [[ -f /run/.containerenv || -f /.dockerenv || -n "${CONTAINER_ID:-}" ]]
+}
+
+if ! in_container && command -v distrobox >/dev/null 2>&1; then
+    exec distrobox enter "${BOX}" -- "${SCRIPT_DIR}/build.sh" "$@"
+fi
 
 export PKG_CONFIG_ALLOW_CROSS=1
 
@@ -23,6 +32,7 @@ Targets:
   appimage          Linux x86_64 AppImage (sipster-linux-x86_64.AppImage)
   linux             all Linux binaries
   all               every target above, including the AppImage
+  check             cargo check + clippy + test on workspace
 
 Artifacts are written to dist/ as sipster-{os}-{arch}.{ext}
 EOF
@@ -125,6 +135,12 @@ case "${TARGET}" in
     appimage)         build_appimage ;;
     linux)            build_linux ;;
     all)              build_linux; build_windows; build_appimage ;;
+    check)
+                      echo "===> Checking workspace (cargo check, clippy, test)"
+                      cargo check --workspace --all-targets
+                      cargo clippy --workspace --all-targets
+                      cargo test --workspace
+                      ;;
     help|-h)          usage ;;
     *)                usage; exit 1 ;;
 esac

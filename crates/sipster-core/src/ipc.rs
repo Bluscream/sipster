@@ -153,8 +153,11 @@ pub fn socket_path() -> PathBuf {
 
 /// Outcome of trying to become the single running instance.
 pub enum Instance {
-    /// We are the first instance; commands arrive on this receiver.
-    Primary(mpsc::UnboundedReceiver<Command>),
+    /// We are the first instance; owns the bound listener and optional initial command.
+    Primary {
+        listener: UnixListener,
+        initial_command: Option<Command>,
+    },
     /// Another instance is already running and has been sent the command.
     Forwarded,
 }
@@ -192,8 +195,7 @@ fn remove_stale_socket(path: &std::path::Path) -> Result<()> {
 /// running.
 ///
 /// `command` is what this invocation was asked to do — e.g. the `tel:` URI it
-/// was launched with. When we are the primary it is returned through the
-/// receiver so the same handling path runs either way.
+/// was launched with.
 pub async fn acquire(command: Option<Command>) -> Result<Instance> {
     let path = socket_path();
 
@@ -206,16 +208,14 @@ pub async fn acquire(command: Option<Command>) -> Result<Instance> {
     let listener = UnixListener::bind(&path)?;
     info!(socket = %path.display(), "listening for control commands");
 
-    let (tx, rx) = mpsc::unbounded_channel();
-    if let Some(command) = command {
-        let _ = tx.send(command);
-    }
-    tokio::spawn(serve(listener, tx));
-    Ok(Instance::Primary(rx))
+    Ok(Instance::Primary {
+        listener,
+        initial_command: command,
+    })
 }
 
-/// Accepts control connections and forwards decoded commands.
-async fn serve(listener: UnixListener, tx: mpsc::UnboundedSender<Command>) {
+/// Accepts control connections and forwards decoded commands to `tx`.
+pub async fn serve(listener: UnixListener, tx: mpsc::UnboundedSender<Command>) {
     loop {
         let Ok((stream, _)) = listener.accept().await else {
             warn!("control socket closed");

@@ -13,12 +13,14 @@ use std::sync::OnceLock;
 
 use app::SipsterApp;
 use sipster_core::ipc::{self, Command, Instance};
-use tokio::sync::mpsc::UnboundedReceiver;
 
-/// IPC command receiver — produced before Iced starts, consumed once by
-/// [`SipsterApp::new`] via [`engine_bridge::run`].
-static IPC_RX: OnceLock<std::sync::Mutex<Option<UnboundedReceiver<Command>>>> =
-    OnceLock::new();
+/// Primary instance state held across Iced boot.
+pub(crate) struct PrimaryState {
+    pub(crate) listener: tokio::net::UnixListener,
+    pub(crate) initial_command: Option<Command>,
+}
+
+static PRIMARY_STATE: OnceLock<std::sync::Mutex<Option<PrimaryState>>> = OnceLock::new();
 
 /// Tray handle — produced before Iced starts, consumed once by
 /// [`SipsterApp::new`].
@@ -35,26 +37,27 @@ pub fn main() -> iced::Result {
     let command = Command::from_args(&args).or(Some(Command::Show));
 
     // Always check single-instance before starting Iced.
-    let ipc_rx = {
+    {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("failed to create tokio runtime");
 
         match rt.block_on(ipc::acquire(command)) {
-            Ok(Instance::Primary(rx)) => rx,
+            Ok(Instance::Primary { listener, initial_command }) => {
+                PRIMARY_STATE
+                    .set(std::sync::Mutex::new(Some(PrimaryState {
+                        listener,
+                        initial_command,
+                    })))
+                    .ok();
+            }
             Ok(Instance::Forwarded) => return Ok(()),
             Err(e) => {
                 eprintln!("sipster: IPC socket error: {e}");
-                // Start without IPC rather than refusing to open.
-                tokio::sync::mpsc::unbounded_channel::<Command>().1
             }
         }
-    };
-
-    IPC_RX
-        .set(std::sync::Mutex::new(Some(ipc_rx)))
-        .ok();
+    }
 
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -91,9 +94,9 @@ pub fn main() -> iced::Result {
     app.run()
 }
 
-/// Called by [`engine_bridge::run`] to take the IPC receiver exactly once.
-pub(crate) fn take_ipc_rx() -> Option<UnboundedReceiver<Command>> {
-    IPC_RX.get()?.lock().ok()?.take()
+/// Called by [`engine_bridge::run`] to take the primary state exactly once.
+pub(crate) fn take_primary_state() -> Option<PrimaryState> {
+    PRIMARY_STATE.get()?.lock().ok()?.take()
 }
 
 /// Called by [`SipsterApp::new`] to take the tray handle exactly once.

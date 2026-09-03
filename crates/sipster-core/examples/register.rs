@@ -67,9 +67,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(target) = std::env::args().nth(1) {
         println!("dialing {target}…");
         let id = engine.dial(&target).await?;
-        println!("call {id} placed; waiting 30s (Ctrl-C to stop)");
+        println!("call {id} placed — listen now; hanging up in 30s (Ctrl-C to stop)");
         tokio::time::sleep(Duration::from_secs(30)).await;
+        println!("hanging up");
         engine.hangup(id).await?;
+        // Let the BYE reach the peer before the runtime tears the sockets down.
+        tokio::time::sleep(Duration::from_millis(500)).await;
     } else {
         println!("registered; idling 60s to observe refresh / inbound calls");
         tokio::time::sleep(Duration::from_mins(1)).await;

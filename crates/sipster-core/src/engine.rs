@@ -292,8 +292,15 @@ async fn translate(
                 display_name: None,
             });
         }
-        EndpointEvent::CallProgress { call_id, .. } => {
-            emit_state(call_id.to_string(), CallState::Ringing, registry, tx).await;
+        EndpointEvent::CallProgress { call_id, has_sdp, .. } => {
+            let rvoip_id = call_id.to_string();
+            // A 183 with SDP means early media: ringback tones, announcements
+            // and IVR prompts arrive before any 200 OK. Bind the speaker now,
+            // or the user hears silence through the whole announcement.
+            if has_sdp {
+                attach_audio_if_missing(&rvoip_id, registry, devices).await;
+            }
+            emit_state(rvoip_id, CallState::Ringing, registry, tx).await;
         }
         EndpointEvent::CallAnswered { call, .. } => {
             let rvoip_id = call.id().to_string();
@@ -302,14 +309,9 @@ async fn translate(
                 reg.resolve(&rvoip_id)
             };
             if let Some(id) = id {
-                // Outbound call answered: bind mic/speaker before reporting active.
-                let bound = audio::warn_on_failure(audio::attach(&call, devices).await);
-                let mut reg = registry.lock().await;
-                reg.tracked.insert(id, Tracked::Active(call));
-                if let Some(bound) = bound {
-                    reg.audio.insert(id, bound);
-                }
-                drop(reg);
+                registry.lock().await.tracked.insert(id, Tracked::Active(call));
+                // No-op when early media already bound the devices.
+                attach_audio_if_missing(&rvoip_id, registry, devices).await;
                 let _ = tx.send(CallEvent::StateChanged {
                     id,
                     state: CallState::Active,
@@ -324,6 +326,39 @@ async fn translate(
             terminate(call_id.to_string(), "cancelled".into(), registry, tx).await;
         }
         _ => debug!("unhandled rvoip event"),
+    }
+}
+
+/// Binds OS audio for an already-tracked call, unless it is already bound.
+///
+/// Used for early media, where audio starts flowing before the call is
+/// answered. Answering later is a no-op because the entry already exists.
+async fn attach_audio_if_missing(
+    rvoip_id: &str,
+    registry: &Arc<Mutex<Registry>>,
+    devices: &DeviceSelection,
+) {
+    // Clone the handle and release the lock before awaiting the device open,
+    // which is slow and must not block the event pump's registry.
+    let call = {
+        let reg = registry.lock().await;
+        let Some(id) = reg.resolve(rvoip_id) else {
+            return;
+        };
+        if reg.audio.contains_key(&id) {
+            return;
+        }
+        match reg.tracked.get(&id) {
+            Some(Tracked::Active(call)) => Some((id, call.clone())),
+            _ => None,
+        }
+    };
+
+    let Some((id, call)) = call else {
+        return;
+    };
+    if let Some(bound) = audio::warn_on_failure(audio::attach(&call, devices).await) {
+        registry.lock().await.audio.insert(id, bound);
     }
 }
 

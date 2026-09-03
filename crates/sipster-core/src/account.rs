@@ -21,11 +21,11 @@ impl Default for SipAccount {
     fn default() -> Self {
         Self {
             label: "Default Account".into(),
-            registrar: "".into(),
+            registrar: String::new(),
             port: 5060,
-            username: "".into(),
-            auth_user: "".into(),
-            password: "".into(),
+            username: String::new(),
+            auth_user: String::new(),
+            password: String::new(),
         }
     }
 }

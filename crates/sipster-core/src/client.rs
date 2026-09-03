@@ -1,6 +1,6 @@
 use crate::account::SipAccount;
 use crate::audio::AudioEngine;
-use crate::call::{CallEvent, CallId, CallState};
+use crate::call::{CallEvent, CallId};
 use crate::error::Result;
 use tokio::sync::broadcast;
 use tracing::info;

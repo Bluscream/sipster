@@ -5,9 +5,10 @@ use std::sync::Arc;
 
 pub fn main() -> iced::Result {
     tracing_subscriber::fmt::init();
-    iced::application("Sipster", SipsterApp::update, SipsterApp::view)
-        .theme(|_| Theme::Dark)
-        .run_with(SipsterApp::new)
+    iced::application(SipsterApp::new, SipsterApp::update, SipsterApp::view)
+        .title("Sipster")
+        .theme(SipsterApp::theme)
+        .run()
 }
 
 struct SipsterApp {
@@ -74,6 +75,11 @@ impl SipsterApp {
         }
     }
 
+    #[allow(clippy::unused_self)]
+    fn theme(&self) -> Theme {
+        Theme::Dark
+    }
+
     fn view(&self) -> Element<'_, Message> {
         let status = text(&self.status_text).size(14);
 
@@ -82,7 +88,6 @@ impl SipsterApp {
             .padding(10)
             .size(20);
 
-        // Dialpad 3x4 grid
         let dial_btn = |digit: char| -> Element<'_, Message> {
             button(text(digit.to_string()).size(22))
                 .width(Length::Fixed(70.0))
@@ -117,11 +122,11 @@ impl SipsterApp {
         let content = column![
             text("Sipster Phone").size(28),
             status,
-            Space::with_height(15),
+            Space::new().height(15),
             number_input,
-            Space::with_height(15),
+            Space::new().height(15),
             dialpad,
-            Space::with_height(20),
+            Space::new().height(20),
             action_row,
         ]
         .align_x(Alignment::Center)

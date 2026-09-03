@@ -1,4 +1,4 @@
-use sipster_core::{CallEvent, CallId, CallState, SipAccount, SipClient};
+use sipster_core::{CallEvent, SipAccount, SipClient};
 
 #[tokio::test]
 async fn test_sip_account_default_config() {
@@ -26,13 +26,13 @@ async fn test_client_event_dispatch() {
 
     match rx.recv().await {
         Ok(CallEvent::RegistrationSuccess) => {}
-        other => panic!("Expected RegistrationSuccess, got {:?}", other),
+        other => panic!("Expected RegistrationSuccess, got {other:?}"),
     }
 
     let call_id = client.dial("101").await.expect("Dial failed");
     match rx.recv().await {
         Ok(CallEvent::Ringing { id }) => assert_eq!(id, call_id),
-        other => panic!("Expected Ringing, got {:?}", other),
+        other => panic!("Expected Ringing, got {other:?}"),
     }
 
     client.hangup(call_id).await.expect("Hangup failed");
@@ -41,6 +41,6 @@ async fn test_client_event_dispatch() {
             assert_eq!(id, call_id);
             assert!(reason.contains("ended by user"));
         }
-        other => panic!("Expected Terminated, got {:?}", other),
+        other => panic!("Expected Terminated, got {other:?}"),
     }
 }

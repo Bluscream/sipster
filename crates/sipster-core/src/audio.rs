@@ -19,11 +19,11 @@ impl AudioEngine {
         let devices = host
             .input_devices()
             .map_err(|e| SipsterError::Audio(e.to_string()))?;
-        
+
         let mut names = Vec::new();
         for dev in devices {
-            if let Ok(name) = dev.name() {
-                names.push(name);
+            if let Ok(desc) = dev.description() {
+                names.push(desc.name().to_string());
             }
         }
         Ok(names)
@@ -34,11 +34,11 @@ impl AudioEngine {
         let devices = host
             .output_devices()
             .map_err(|e| SipsterError::Audio(e.to_string()))?;
-        
+
         let mut names = Vec::new();
         for dev in devices {
-            if let Ok(name) = dev.name() {
-                names.push(name);
+            if let Ok(desc) = dev.description() {
+                names.push(desc.name().to_string());
             }
         }
         Ok(names)

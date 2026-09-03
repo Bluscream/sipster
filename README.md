@@ -2,6 +2,8 @@
 
 A lightweight, modern, 100% pure-Rust softphone / SIP client designed for Linux (Bazzite/Fedora/Wayland) and standard SIP telephony.
 
+![Sipster Preview](https://raw.githubusercontent.com/Bluscream/sipster/assets/assets/screenshot.png)
+
 ## Architecture
 
 This project is organized as a Cargo workspace with clean separation between the protocol/media engine and the graphical frontend:

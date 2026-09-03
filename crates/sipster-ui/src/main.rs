@@ -16,11 +16,11 @@ use sipster_core::ipc::{self, Command, Instance};
 
 /// Primary instance state held across Iced boot.
 pub(crate) struct PrimaryState {
-    pub(crate) _lock: sipster_core::instance::Guard,
     pub(crate) listener: std::os::unix::net::UnixListener,
     pub(crate) initial_command: Option<Command>,
 }
 
+static PRIMARY_LOCK: OnceLock<sipster_core::instance::Guard> = OnceLock::new();
 static PRIMARY_STATE: OnceLock<std::sync::Mutex<Option<PrimaryState>>> = OnceLock::new();
 
 /// Tray handle — produced before Iced starts, consumed once by
@@ -46,9 +46,10 @@ pub fn main() -> iced::Result {
 
         match rt.block_on(ipc::acquire(command)) {
             Ok(Instance::Primary { lock, listener, initial_command }) => {
+                // Retain lock globally for the lifetime of the process:
+                let _ = PRIMARY_LOCK.set(lock);
                 PRIMARY_STATE
                     .set(std::sync::Mutex::new(Some(PrimaryState {
-                        _lock: lock,
                         listener,
                         initial_command,
                     })))
@@ -56,7 +57,8 @@ pub fn main() -> iced::Result {
             }
             Ok(Instance::Forwarded) => return Ok(()),
             Err(e) => {
-                eprintln!("sipster: IPC socket error: {e}");
+                eprintln!("sipster: already running or IPC error: {e}");
+                return Ok(());
             }
         }
     }

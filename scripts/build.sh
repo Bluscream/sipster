@@ -25,8 +25,8 @@ RESET="\033[0m"
 flows_text=$(cat <<'EOF'
 RECOMMENDED FLOWS & RECIPES:
   • Local Check / Dev Loop:
-      ./scripts/build.sh --lint --compile --test --start
-      (Performs quality checks, compiles workspace, runs tests, and launches UI)
+      ./scripts/build.sh --lint --compile --test --start 5
+      (Performs quality checks, compiles workspace, runs tests, and runs UI smoke test for 5s)
 
   • Full Local Deployment:
       ./scripts/build.sh --lint --test --compile --appimage --deploy
@@ -63,16 +63,16 @@ Usage: ./scripts/build.sh [OPTIONS...]
 Options can be chained in sequence (e.g. ./scripts/build.sh --lint --compile --test)
 
 Available Options:
-  --lint             Run cargo clippy across workspace and check file length (<= 1000 lines)
-  --compile          Build workspace in release mode (--release)
-  --test             Run all tests (sipster-core, sipster-ui, sipster-tests)
-  --appimage         Create standalone AppImage bundle
-  --deploy           Install binary and desktop shortcut to ~/.local
-  --start            Run sipster-ui directly
-  --commit [MSG]     Commit changes to git (auto-stages tracked/new non-ignored files)
-  --push             Push commits to git origin
-  --release <VER>    Publish GitHub release for <VER> (attaching AppImage via gh CLI)
-  --help, -h         Show this usage menu
+  --lint               Run cargo clippy across workspace and check file length (<= 1000 lines)
+  --compile            Build workspace in release mode (--release)
+  --test               Run all tests (sipster-core, sipster-ui, sipster-tests)
+  --appimage           Create standalone AppImage bundle
+  --deploy             Install binary and desktop shortcut to ~/.local
+  --start [TIME_S]     Run sipster-ui. If [TIME_S] is given, runs for N seconds, captures stats/logs, then exits
+  --commit [MSG]       Commit changes to git (auto-stages tracked/new non-ignored files)
+  --push               Push commits to git origin
+  --release <VER>      Publish GitHub release for <VER> (attaching AppImage via gh CLI)
+  --help, -h           Show this usage menu
 
 ${CYAN}${flows_text}${RESET}
 EOF
@@ -185,8 +185,74 @@ EOF
 }
 
 do_start() {
-    log_info "Starting Sipster UI..."
-    cargo run -p sipster-ui
+    local duration="${1:-0}"
+    local LOG_DIR="${WORKSPACE_ROOT}/target/logs"
+    mkdir -p "${LOG_DIR}"
+    local LOG_FILE="${LOG_DIR}/sipster_run.log"
+
+    if [ "$duration" -eq 0 ]; then
+        log_info "Starting Sipster UI interactively (press Ctrl+C to stop)..."
+        cargo run -p sipster-ui
+        return 0
+    fi
+
+    log_info "Running Sipster UI smoke test for ${duration} seconds..."
+    # Build first so compilation time does not count against smoke test duration
+    cargo build -p sipster-ui
+
+    local BINARY="${WORKSPACE_ROOT}/target/debug/sipster-ui"
+    "${BINARY}" > "${LOG_FILE}" 2>&1 &
+    local APP_PID=$!
+
+    log_info "Launched sipster-ui [PID: ${APP_PID}]. Monitoring for ${duration}s..."
+    local elapsed=0
+    local crashed=0
+
+    while [ "$elapsed" -lt "$duration" ]; do
+        if ! kill -0 "$APP_PID" 2>/dev/null; then
+            crashed=1
+            break
+        fi
+        sleep 1
+        elapsed=$((elapsed + 1))
+    done
+
+    echo ""
+    echo "=================================================================="
+    echo "                      PROCESS DIAGNOSTICS                         "
+    echo "=================================================================="
+
+    if [ "$crashed" -eq 1 ]; then
+        wait "$APP_PID" || exit_code=$?
+        log_error "Process crashed or exited prematurely! (Exit Code: ${exit_code:-unknown})"
+    else
+        log_info "Process is alive after ${duration}s. Gathering stats..."
+        # Query process stats via ps before termination
+        if ps -p "$APP_PID" -o pid,vsz,rss,%cpu,%mem,comm 2>/dev/null; then
+            :
+        fi
+
+        log_info "Terminating process cleanly [PID: ${APP_PID}]..."
+        kill -TERM "$APP_PID" 2>/dev/null || true
+        sleep 0.5
+        kill -KILL "$APP_PID" 2>/dev/null || true
+        wait "$APP_PID" 2>/dev/null || true
+        log_success "Process terminated cleanly."
+    fi
+
+    echo "------------------------------------------------------------------"
+    echo " Last 20 lines of output (${LOG_FILE}):"
+    echo "------------------------------------------------------------------"
+    if [ -f "${LOG_FILE}" ]; then
+        tail -n 20 "${LOG_FILE}"
+    else
+        echo "(Log file is empty)"
+    fi
+    echo "=================================================================="
+
+    if [ "$crashed" -eq 1 ]; then
+        exit 1
+    fi
 }
 
 do_commit() {
@@ -263,8 +329,13 @@ while [ $# -gt 0 ]; do
             shift
             ;;
         --start)
-            do_start
             shift
+            duration=0
+            if [ $# -gt 0 ] && [[ "$1" =~ ^[0-9]+$ ]]; then
+                duration="$1"
+                shift
+            fi
+            do_start "$duration"
             ;;
         --commit)
             shift

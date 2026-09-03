@@ -8,6 +8,11 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT}"
 export PKG_CONFIG_PATH="/var/home/linuxbrew/.linuxbrew/lib/pkgconfig:${PKG_CONFIG_PATH:-}"
 
+# Throttle Cargo to ~80% of CPU cores so the system stays responsive
+TOTAL_CORES=$(nproc 2>/dev/null || echo 4)
+export CARGO_BUILD_JOBS=$(( TOTAL_CORES * 80 / 100 ))
+[ "${CARGO_BUILD_JOBS}" -lt 1 ] && export CARGO_BUILD_JOBS=1
+
 C_BOLD="\033[1m"; C_GREEN="\033[0;32m"; C_RED="\033[0;31m"; C_BLUE="\033[0;34m"; C_CYAN="\033[0;36m"; C_RESET="\033[0m"
 
 flows_text=$(cat <<'EOF'

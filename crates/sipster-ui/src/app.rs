@@ -43,7 +43,8 @@ pub enum Message {
     EngineFailed(String),
     Call(CallEvent),
     Ipc(Command),
-    // From the tray:
+    // From the tray (also dispatched from TrayTick via handle_tray):
+    #[allow(dead_code)]
     TrayRequest(tray::Request),
     // Periodic tray poll tick:
     TrayTick,
@@ -108,7 +109,7 @@ impl SipsterApp {
             Message::Ipc(cmd) => self.handle_ipc(cmd),
             Message::TrayTick => {
                 // Drain one pending tray request per tick (non-blocking).
-                if let Some(req) = self.tray.as_ref().and_then(|t| t.requests.try_recv().ok()) {
+                if let Some(req) = self.tray.as_mut().and_then(|t| t.requests.try_recv().ok()) {
                     return self.handle_tray(req);
                 }
                 Task::none()

@@ -27,3 +27,7 @@ rtp.workspace = true
 # Audio & Codecs (Pure Rust)
 audio-codec.workspace = true
 cpal.workspace = true
+
+[target.'cfg(target_pointer_width = "64")'.dependencies.audio-codec]
+workspace = true
+features = ["opus"]

@@ -1,6 +1,6 @@
 # Sipster
 
-A lightweight, modern, 100% pure-Rust softphone / SIP client designed for Linux (Bazzite/Fedora/Wayland) and FRITZ!Box telephony.
+A lightweight, modern, 100% pure-Rust softphone / SIP client designed for Linux (Bazzite/Fedora/Wayland) and standard SIP telephony.
 
 ## Architecture
 

@@ -27,7 +27,7 @@ impl SipClient {
         self.event_tx.subscribe()
     }
 
-    /// Register with the SIP server (e.g. FRITZ!Box)
+    /// Register with the configured SIP registrar
     pub async fn register(&self) -> Result<()> {
         info!(
             "Registering account {} with {}:{}",

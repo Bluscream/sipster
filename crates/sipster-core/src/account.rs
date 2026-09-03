@@ -1,15 +1,15 @@
 use serde::{Deserialize, Serialize};
 
-/// Configuration for a SIP Account (e.g. FRITZ!Box IP phone)
+/// Configuration for a SIP Account
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SipAccount {
-    /// Friendly label (e.g. "Fritz!Box Home")
+    /// Friendly label (e.g. "Home Office", "SIP Provider")
     pub label: String,
-    /// Registrar host or IP (e.g. "fritz.box" or "192.168.178.1")
+    /// Registrar host or IP
     pub registrar: String,
     /// Registrar port (default 5060)
     pub port: u16,
-    /// SIP username / Extension (e.g. "620")
+    /// SIP username / Extension
     pub username: String,
     /// Authentication user (often identical to username)
     pub auth_user: String,
@@ -20,11 +20,11 @@ pub struct SipAccount {
 impl Default for SipAccount {
     fn default() -> Self {
         Self {
-            label: "FRITZ!Box Phone".into(),
-            registrar: "fritz.box".into(),
+            label: "Default Account".into(),
+            registrar: "".into(),
             port: 5060,
-            username: "620".into(),
-            auth_user: "620".into(),
+            username: "".into(),
+            auth_user: "".into(),
             password: "".into(),
         }
     }

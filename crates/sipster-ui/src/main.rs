@@ -34,7 +34,7 @@ impl SipsterApp {
             account,
             client: None,
             dial_number: String::new(),
-            status_text: "Ready (Fritz!Box: fritz.box / 620)".into(),
+            status_text: "Ready".into(),
             current_call: None,
         };
 
@@ -67,7 +67,7 @@ impl SipsterApp {
             Message::AccountConnected => {
                 if let Ok(client) = SipClient::new(self.account.clone()) {
                     self.client = Some(Arc::new(client));
-                    self.status_text = "Connected to FRITZ!Box (SIP ready)".into();
+                    self.status_text = "Connected (SIP ready)".into();
                 }
                 Task::none()
             }

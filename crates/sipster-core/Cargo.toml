@@ -6,6 +6,9 @@ authors.workspace = true
 license.workspace = true
 description = "Core pure-Rust SIP client, registration, RTP audio pipeline and call state machine for Sipster"
 
+[lints]
+workspace = true
+
 [dependencies]
 tokio.workspace = true
 tracing.workspace = true

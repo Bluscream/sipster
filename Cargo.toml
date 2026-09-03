@@ -2,6 +2,7 @@
 members = [
     "crates/sipster-core",
     "crates/sipster-ui",
+    "crates/sipster-tests",
 ]
 resolver = "2"
 
@@ -9,7 +10,18 @@ resolver = "2"
 version = "0.1.0"
 edition = "2021"
 authors = ["Sipster Authors"]
-license = "MIT OR Apache-2.0"
+license = "Unlicense"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"
+fn_params_excessive_bools = "warn"
+too_many_lines = "warn" # Enforces concise functions
+cognitive_complexity = ["warn", { limit = 20 }]
+
 
 [workspace.dependencies]
 tokio = { version = "1.43", features = ["full"] }

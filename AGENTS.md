@@ -10,11 +10,16 @@ Build a modern, 100% pure-Rust softphone (SIP client) optimized for desktop Linu
 2. **Workspace Architecture:**
    - `crates/sipster-core`: Headless protocol engine, state machine, audio pipeline, and SIP account management. Exposes high-level async APIs and event streams.
    - `crates/sipster-ui`: Modern GUI client (Iced) communicating with `sipster-core`.
-3. **Audio & Media:**
+   - `crates/sipster-tests`: Dedicated integration, end-to-end, and PBX scenario testing suite.
+3. **Code Quality, Testing & Lint Standards:**
+   - Run `cargo clippy --workspace --all-targets` and ensure zero warnings.
+   - **Line limits:** Maximum **100 lines per function** (enforced by clippy `too_many_lines` / `clippy.toml`) and maximum **1,000 lines per file**.
+   - Keep integration tests centralized in `crates/sipster-tests/`.
+4. **Audio & Media:**
    - Audio I/O: `cpal` (PipeWire / ALSA).
    - Codecs: `audio-codec` (prioritize PCMA/PCMU G.711, G.722, and Opus).
    - Media transport: `rtp` and `sdp`.
-4. **Reference Code:**
+5. **Reference Code:**
    - Look in `.references/` for patterns (e.g., `microsip` for user-friendly flow, `rvoip` for pure-Rust SIP state handling, `gnome-calls` for Linux dialer UX). Do NOT commit `.references/`.
-5. **Licensing:**
+6. **Licensing:**
    - Public domain ([UNLICENSE](file:///run/media/system/Data/Projects/sipster/UNLICENSE)).

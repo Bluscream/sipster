@@ -1,23 +1,18 @@
 [package]
-name = "sipster-ui"
+name = "sipster-tests"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Modern pure-Rust desktop GUI client for Sipster"
+description = "Integration and end-to-end test suite for Sipster"
 
 [lints]
 workspace = true
 
 [dependencies]
 sipster-core = { path = "../sipster-core" }
-
 tokio.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true
-serde.workspace = true
+uuid.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
-
-# Pure Rust GUI Framework (Iced)
-iced = { version = "0.14", features = ["tokio", "svg", "advanced"] }

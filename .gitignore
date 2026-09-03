@@ -1,0 +1,22 @@
+# Rust target and build artifacts
+/target/
+**/*.rs.bk
+*.pdb
+
+# Local environment & secrets
+.env
+.env.local
+*.local
+
+# Reference projects (cloned upstream repos)
+/.references/
+
+# IDE and Editor configurations
+.vscode/
+.idea/
+*.swp
+*~
+
+# Operating system files
+.DS_Store
+Thumbs.db

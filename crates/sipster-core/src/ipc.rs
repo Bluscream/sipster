@@ -141,6 +141,8 @@ fn percent_decode(input: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
+use std::fs::{File, TryLockError};
+
 /// Path of the control socket for this user.
 ///
 /// Lives in `XDG_RUNTIME_DIR`, which is per-user, `0700`, and cleared on
@@ -151,20 +153,46 @@ pub fn socket_path() -> PathBuf {
     dir.join("sipster.sock")
 }
 
+/// Advisory lock path in the runtime directory.
+pub fn lock_path() -> PathBuf {
+    let dir = std::env::var("XDG_RUNTIME_DIR")
+        .map_or_else(|_| std::env::temp_dir(), PathBuf::from);
+    dir.join("sipster.lock")
+}
+
+/// A held lock claim. Dropping it or process termination releases the kernel lock.
+#[derive(Debug)]
+pub struct Guard {
+    _file: File,
+}
+
 /// Outcome of trying to become the single running instance.
 pub enum Instance {
-    /// We are the first instance; owns the bound listener and optional initial command.
+    /// We are the first instance; owns the kernel file lock, bound listener and optional initial command.
     Primary {
-        listener: UnixListener,
+        lock: Guard,
+        listener: std::os::unix::net::UnixListener,
         initial_command: Option<Command>,
     },
     /// Another instance is already running and has been sent the command.
     Forwarded,
 }
 
-/// Becomes the primary instance, or forwards `command` to the one already
-/// running.
-///
+/// Tries to claim the kernel advisory file lock.
+/// Returns `Ok(Some(Guard))` if lock acquired, `Ok(None)` if already held by another instance.
+pub fn claim_lock() -> Result<Option<Guard>> {
+    let path = lock_path();
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let file = File::create(&path)?;
+    match file.try_lock() {
+        Ok(()) => Ok(Some(Guard { _file: file })),
+        Err(TryLockError::WouldBlock) => Ok(None),
+        Err(TryLockError::Error(err)) => Err(Error::Io(err)),
+    }
+}
+
 /// Attempts to connect to an existing instance and forward the command.
 async fn try_forward(path: &std::path::Path, command: Option<Command>) -> Result<Option<Instance>> {
     if let Ok(mut stream) = UnixStream::connect(path).await {
@@ -194,28 +222,52 @@ fn remove_stale_socket(path: &std::path::Path) -> Result<()> {
 /// Becomes the primary instance, or forwards `command` to the one already
 /// running.
 ///
-/// `command` is what this invocation was asked to do — e.g. the `tel:` URI it
-/// was launched with.
+/// Uses `File::try_lock` for kernel-level advisory mutual exclusion, paired with
+/// Unix domain socket IPC for command forwarding.
 pub async fn acquire(command: Option<Command>) -> Result<Instance> {
     let path = socket_path();
 
-    if let Some(instance) = try_forward(&path, command.clone()).await? {
-        return Ok(instance);
-    }
+    // 1. First, check the kernel advisory lock:
+    let lock_guard = match claim_lock()? {
+        Some(guard) => guard,
+        None => {
+            // Another instance holds the file lock. Forward the command.
+            if let Some(instance) = try_forward(&path, command.clone()).await? {
+                return Ok(instance);
+            }
+            // If forward failed but lock is held, wait briefly and retry forward once.
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            if let Some(instance) = try_forward(&path, command).await? {
+                return Ok(instance);
+            }
+            info!("another instance holds lock; exiting");
+            return Ok(Instance::Forwarded);
+        }
+    };
 
+    // 2. We hold the lock! Clean up any stale socket from past unclean shutdowns.
     remove_stale_socket(&path)?;
 
-    let listener = UnixListener::bind(&path)?;
+    let std_listener = std::os::unix::net::UnixListener::bind(&path)?;
+    std_listener.set_nonblocking(true)?;
     info!(socket = %path.display(), "listening for control commands");
 
     Ok(Instance::Primary {
-        listener,
+        lock: lock_guard,
+        listener: std_listener,
         initial_command: command,
     })
 }
 
 /// Accepts control connections and forwards decoded commands to `tx`.
-pub async fn serve(listener: UnixListener, tx: mpsc::UnboundedSender<Command>) {
+pub async fn serve(std_listener: std::os::unix::net::UnixListener, tx: mpsc::UnboundedSender<Command>) {
+    let listener = match UnixListener::from_std(std_listener) {
+        Ok(l) => l,
+        Err(e) => {
+            warn!(error = %e, "failed to convert std UnixListener to tokio");
+            return;
+        }
+    };
     loop {
         let Ok((stream, _)) = listener.accept().await else {
             warn!("control socket closed");

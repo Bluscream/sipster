@@ -16,7 +16,8 @@ use sipster_core::ipc::{self, Command, Instance};
 
 /// Primary instance state held across Iced boot.
 pub(crate) struct PrimaryState {
-    pub(crate) listener: tokio::net::UnixListener,
+    pub(crate) _lock: sipster_core::ipc::Guard,
+    pub(crate) listener: std::os::unix::net::UnixListener,
     pub(crate) initial_command: Option<Command>,
 }
 
@@ -44,9 +45,10 @@ pub fn main() -> iced::Result {
             .expect("failed to create tokio runtime");
 
         match rt.block_on(ipc::acquire(command)) {
-            Ok(Instance::Primary { listener, initial_command }) => {
+            Ok(Instance::Primary { lock, listener, initial_command }) => {
                 PRIMARY_STATE
                     .set(std::sync::Mutex::new(Some(PrimaryState {
+                        _lock: lock,
                         listener,
                         initial_command,
                     })))

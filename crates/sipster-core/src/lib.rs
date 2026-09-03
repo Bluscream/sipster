@@ -10,6 +10,7 @@ pub mod call;
 pub mod config;
 pub mod engine;
 pub mod error;
+pub mod net;
 
 pub use call::{CallDirection, CallEvent, CallId, CallState, RegistrationState};
 pub use config::{Config, SipAccount, Transport};
@@ -22,6 +23,14 @@ pub use error::{Error, Result};
 /// engine (registration loop, event translation, call handles) builds on top.
 pub(crate) async fn build_endpoint(account: &SipAccount) -> Result<rvoip_sip::Endpoint> {
     account.validate()?;
+
+    // The SIP stack defaults to binding 127.0.0.1, which makes every send to a
+    // LAN registrar fail with EINVAL. Bind to the interface that actually
+    // routes to the registrar, and advertise that same address.
+    let peer = net::resolve(&account.registrar, account.port)?;
+    let bind = net::bind_address(peer, account.local_port)?;
+    tracing::debug!(%peer, %bind, "binding SIP transport");
+
     // Boxed: constructing the rvoip endpoint produces a very large future.
     Box::pin(
         rvoip_sip::Endpoint::builder()
@@ -30,6 +39,7 @@ pub(crate) async fn build_endpoint(account: &SipAccount) -> Result<rvoip_sip::En
             .password(&account.password)
             .registrar(account.registrar_uri())
             .expires(account.expires)
+            .bind_addr(bind)
             .build(),
     )
     .await

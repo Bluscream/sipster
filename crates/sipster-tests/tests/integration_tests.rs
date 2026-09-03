@@ -89,6 +89,71 @@ fn registrar_uri_handles_ipv6() {
 }
 
 #[test]
+fn env_config_accepts_the_short_sip_prefix() {
+    // Credentials may live in ~/.config/environment.d using SIP_* names.
+    let env = |key: &str| -> Option<String> {
+        match key {
+            "SIP_REGISTRAR" => Some("192.168.2.1".into()),
+            "SIP_USERNAME" => Some("bluscream".into()),
+            "SIP_PASSWORD" => Some("pw".into()),
+            _ => None,
+        }
+    };
+    let config = Config::from_lookup(env).expect("SIP_ prefix should be accepted");
+    let account = &config.accounts[0];
+    assert_eq!(account.registrar, "192.168.2.1");
+    assert_eq!(account.username, "bluscream");
+    assert_eq!(account.effective_auth_user(), "bluscream");
+    assert_eq!(account.registrar_uri(), "sip:192.168.2.1:5060");
+}
+
+#[test]
+fn sipster_prefix_wins_over_short_prefix() {
+    let env = |key: &str| -> Option<String> {
+        match key {
+            "SIPSTER_REGISTRAR" => Some("preferred.example".into()),
+            "SIP_REGISTRAR" => Some("fallback.example".into()),
+            "SIP_USERNAME" => Some("user".into()),
+            _ => None,
+        }
+    };
+    let config = Config::from_lookup(env).unwrap();
+    assert_eq!(config.accounts[0].registrar, "preferred.example");
+}
+
+#[test]
+fn env_config_requires_registrar_and_username() {
+    assert!(Config::from_lookup(|_| None).is_err());
+    let only_registrar = |k: &str| (k == "SIP_REGISTRAR").then(|| "fritz.box".to_string());
+    assert!(Config::from_lookup(only_registrar).is_err());
+}
+
+/// Binding SIP to loopback makes every send to a LAN registrar fail with
+/// EINVAL; the bind address must be on the interface that routes to the peer.
+#[test]
+fn bind_address_is_not_loopback_for_a_routable_peer() {
+    let peer: std::net::SocketAddr = "1.1.1.1:5060".parse().unwrap();
+    let Ok(bind) = sipster_core::net::bind_address(peer, 0) else {
+        return; // no route in a sandboxed environment; nothing to assert
+    };
+    assert!(!bind.ip().is_loopback(), "bound loopback for a routable peer: {bind}");
+    assert!(bind.is_ipv4(), "address family must match the peer: {bind}");
+}
+
+#[test]
+fn resolve_prefers_ipv4() {
+    let addr = sipster_core::net::resolve("127.0.0.1", 5060).expect("literal resolves");
+    assert_eq!(addr.port(), 5060);
+    assert!(addr.is_ipv4());
+}
+
+#[test]
+fn resolve_reports_the_host_it_could_not_resolve() {
+    let err = sipster_core::net::resolve("no-such-host.invalid", 5060).unwrap_err();
+    assert!(format!("{err}").contains("no-such-host.invalid"));
+}
+
+#[test]
 fn password_is_never_shown_in_debug() {
     let account = SipAccount {
         password: "s3cr3t-pw".into(),

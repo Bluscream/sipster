@@ -41,6 +41,10 @@ pub struct SipAccount {
     /// Re-registration interval requested from the registrar, in seconds.
     #[serde(default = "default_expires")]
     pub expires: u32,
+    /// Local UDP port to bind SIP to. 5060 by convention; if it is already in
+    /// use an ephemeral port is chosen instead.
+    #[serde(default = "default_port")]
+    pub local_port: u16,
 }
 
 fn default_label() -> String {
@@ -66,6 +70,7 @@ impl Default for SipAccount {
             password: String::new(),
             transport: Transport::default(),
             expires: default_expires(),
+            local_port: default_port(),
         }
     }
 }
@@ -83,6 +88,7 @@ impl std::fmt::Debug for SipAccount {
             .field("password", &"<redacted>")
             .field("transport", &self.transport)
             .field("expires", &self.expires)
+            .field("local_port", &self.local_port)
             .finish()
     }
 }
@@ -161,25 +167,40 @@ impl Config {
         }
     }
 
-    /// Builds a single-account config from `SIPSTER_*` environment variables.
+    /// Builds a single-account config from environment variables.
     ///
-    /// This is the credential path used for testing against a real PBX without
-    /// writing secrets into the repo or the chat transcript.
+    /// Accepts either the `SIPSTER_` prefix or the shorter `SIP_` prefix
+    /// (`SIP_REGISTRAR`, `SIP_USERNAME`, `SIP_AUTH_USER`, `SIP_PASSWORD`), so
+    /// credentials can live in something like
+    /// `~/.config/environment.d/95-sip.conf` instead of being typed each run.
     pub fn from_env() -> Result<Self> {
-        let get = |k: &str| std::env::var(k).ok().filter(|v| !v.is_empty());
-        let registrar = get("SIPSTER_REGISTRAR")
-            .ok_or_else(|| Error::Config("SIPSTER_REGISTRAR not set".into()))?;
-        let username = get("SIPSTER_USERNAME")
-            .ok_or_else(|| Error::Config("SIPSTER_USERNAME not set".into()))?;
+        Self::from_lookup(|key| std::env::var(key).ok())
+    }
+
+    /// The testable core of [`Config::from_env`], with the environment
+    /// injected so tests do not mutate global process state.
+    pub fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Result<Self> {
+        let get = |name: &str| {
+            lookup(&format!("SIPSTER_{name}"))
+                .or_else(|| lookup(&format!("SIP_{name}")))
+                .filter(|value| !value.is_empty())
+        };
+
+        let registrar = get("REGISTRAR")
+            .ok_or_else(|| Error::Config("SIP_REGISTRAR (or SIPSTER_REGISTRAR) not set".into()))?;
+        let username = get("USERNAME")
+            .ok_or_else(|| Error::Config("SIP_USERNAME (or SIPSTER_USERNAME) not set".into()))?;
+
         let account = SipAccount {
-            label: get("SIPSTER_LABEL").unwrap_or_else(|| "env".into()),
+            label: get("LABEL").unwrap_or_else(|| "env".into()),
             registrar,
-            port: get("SIPSTER_PORT").and_then(|p| p.parse().ok()).unwrap_or(5060),
-            auth_user: get("SIPSTER_AUTH_USER").unwrap_or_default(),
+            port: get("PORT").and_then(|p| p.parse().ok()).unwrap_or_else(default_port),
+            auth_user: get("AUTH_USER").unwrap_or_default(),
             username,
-            password: get("SIPSTER_PASSWORD").unwrap_or_default(),
+            password: get("PASSWORD").unwrap_or_default(),
             transport: Transport::Udp,
-            expires: get("SIPSTER_EXPIRES").and_then(|e| e.parse().ok()).unwrap_or(600),
+            expires: get("EXPIRES").and_then(|e| e.parse().ok()).unwrap_or_else(default_expires),
+            local_port: get("LOCAL_PORT").and_then(|p| p.parse().ok()).unwrap_or_else(default_port),
         };
         Ok(Self { accounts: vec![account] })
     }

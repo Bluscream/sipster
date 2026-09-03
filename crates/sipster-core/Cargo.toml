@@ -20,6 +20,8 @@ toml.workspace = true
 
 # SIP calling engine (see workspace Cargo.toml for the codec rationale).
 rvoip-sip.workspace = true
+# Microphone/speaker bridge for active calls.
+rvoip-audio-device.workspace = true
 
 [dev-dependencies]
 tracing-subscriber.workspace = true

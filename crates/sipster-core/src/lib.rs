@@ -5,6 +5,7 @@
 //! call/registration state, and — as they land — contacts and the call list.
 //! `sipster-ui` is presentation only; it must not contain telephony logic.
 
+pub mod audio;
 pub mod call;
 pub mod config;
 pub mod engine;

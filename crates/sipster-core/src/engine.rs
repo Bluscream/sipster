@@ -15,6 +15,7 @@ use tracing::{debug, info, warn};
 
 use rvoip_sip::{EndpointCall, EndpointControl, EndpointEvent, EndpointEvents, EndpointIncomingCall};
 
+use crate::audio::{self, CallAudio, DeviceSelection};
 use crate::call::{CallEvent, CallId, CallState, RegistrationState};
 use crate::config::SipAccount;
 use crate::error::{Error, Result};
@@ -36,6 +37,8 @@ struct Registry {
     tracked: HashMap<CallId, Tracked>,
     /// rvoip `Call-ID` string -> our [`CallId`], for correlating inbound events.
     by_rvoip: HashMap<String, CallId>,
+    /// Live OS audio bindings; dropping an entry stops that call's audio.
+    audio: HashMap<CallId, CallAudio>,
 }
 
 impl Registry {
@@ -53,6 +56,8 @@ impl Registry {
     fn remove(&mut self, id: CallId) {
         self.tracked.remove(&id);
         self.by_rvoip.retain(|_, v| *v != id);
+        // Dropping the CallAudio stops capture/playback for this call.
+        self.audio.remove(&id);
     }
 }
 
@@ -62,6 +67,7 @@ pub struct SipEngine {
     control: Arc<EndpointControl>,
     event_tx: broadcast::Sender<CallEvent>,
     registry: Arc<Mutex<Registry>>,
+    devices: Arc<DeviceSelection>,
     pump: JoinHandle<()>,
 }
 
@@ -80,13 +86,15 @@ impl SipEngine {
 
         let (event_tx, _) = broadcast::channel(64);
         let registry = Arc::new(Mutex::new(Registry::default()));
-        let pump = spawn_pump(events, registry.clone(), event_tx.clone());
+        let devices = Arc::new(DeviceSelection::default());
+        let pump = spawn_pump(events, registry.clone(), event_tx.clone(), devices.clone());
 
         Ok(Self {
             account,
             control: Arc::new(control),
             event_tx,
             registry,
+            devices,
             pump,
         })
     }
@@ -180,9 +188,16 @@ impl SipEngine {
                     .answer()
                     .await
                     .map_err(|e| Error::Config(format!("answer failed: {e}")))?;
+                // Bind mic/speaker before announcing the call as active, so the
+                // user is not told they are connected while still silent.
+                let bound = audio::warn_on_failure(audio::attach(&call, &self.devices).await);
                 let mut reg = self.registry.lock().await;
                 reg.by_rvoip.insert(call.id().to_string(), id);
                 reg.tracked.insert(id, Tracked::Active(call));
+                if let Some(bound) = bound {
+                    reg.audio.insert(id, bound);
+                }
+                drop(reg);
                 let _ = self.event_tx.send(CallEvent::StateChanged {
                     id,
                     state: CallState::Active,
@@ -238,11 +253,12 @@ fn spawn_pump(
     mut events: EndpointEvents,
     registry: Arc<Mutex<Registry>>,
     tx: broadcast::Sender<CallEvent>,
+    devices: Arc<DeviceSelection>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
             match events.next().await {
-                Ok(Some(event)) => translate(event, &registry, &tx).await,
+                Ok(Some(event)) => translate(event, &registry, &tx, &devices).await,
                 Ok(None) => {
                     debug!("rvoip event stream closed");
                     break;
@@ -261,6 +277,7 @@ async fn translate(
     event: EndpointEvent,
     registry: &Arc<Mutex<Registry>>,
     tx: &broadcast::Sender<CallEvent>,
+    devices: &DeviceSelection,
 ) {
     match event {
         EndpointEvent::IncomingCall(incoming) => {
@@ -285,7 +302,14 @@ async fn translate(
                 reg.resolve(&rvoip_id)
             };
             if let Some(id) = id {
-                registry.lock().await.tracked.insert(id, Tracked::Active(call));
+                // Outbound call answered: bind mic/speaker before reporting active.
+                let bound = audio::warn_on_failure(audio::attach(&call, devices).await);
+                let mut reg = registry.lock().await;
+                reg.tracked.insert(id, Tracked::Active(call));
+                if let Some(bound) = bound {
+                    reg.audio.insert(id, bound);
+                }
+                drop(reg);
                 let _ = tx.send(CallEvent::StateChanged {
                     id,
                     state: CallState::Active,

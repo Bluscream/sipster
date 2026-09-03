@@ -90,8 +90,8 @@ EOF
     echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==" | base64 -d > "${AD}/sipster.png"
     cp "${AD}/sipster.png" "${AD}/usr/share/icons/hicolor/256x256/apps/"
 
-    ARCH=x86_64 appimagetool "${AD}" "${ROOT}/target/Sipster-x86_64.AppImage"
-    log_s "AppImage created at target/Sipster-x86_64.AppImage"
+    ARCH=x86_64 appimagetool "${AD}" "${ROOT}/target/sipster-x86_64.AppImage"
+    log_s "AppImage created at target/sipster-x86_64.AppImage"
 }
 
 do_deploy() {
@@ -159,7 +159,7 @@ do_push() {
 
 do_release() {
     local ver="${1:-}"; [ -z "$ver" ] && { log_e "--release requires version"; echo "$flows_text"; exit 1; }
-    local img="${ROOT}/target/Sipster-x86_64.AppImage"
+    local img="${ROOT}/target/sipster-x86_64.AppImage"
     [ -f "$img" ] || do_appimage
     command -v gh >/dev/null || { log_e "'gh' CLI required."; exit 1; }
     gh release create "$ver" "$img" --title "Sipster $ver" --generate-notes

@@ -28,7 +28,7 @@ pub(crate) async fn build_endpoint(account: &SipAccount) -> Result<rvoip_sip::En
             .account(&account.username)
             .auth_username(account.effective_auth_user())
             .password(&account.password)
-            .registrar(format!("{}:{}", account.registrar, account.port))
+            .registrar(account.registrar_uri())
             .expires(account.expires)
             .build(),
     )

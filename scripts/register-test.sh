@@ -36,7 +36,10 @@ fi
 read -r -p "Registrar host [fritz.box]: " REGISTRAR
 REGISTRAR="${REGISTRAR:-fritz.box}"
 
-read -r -p "SIP username / internal number: " USERNAME
+# On a Fritz!Box this is the "Benutzername" on the telephony device's
+# "Anmeldedaten" tab — a name like "bluscream", NOT the internal number (620)
+# and NOT the router's admin login.
+read -r -p "SIP username (Fritz!Box 'Benutzername'): " USERNAME
 if [[ -z "${USERNAME}" ]]; then
     echo "error: username is required" >&2
     exit 1

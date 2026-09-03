@@ -107,6 +107,38 @@ impl SipAccount {
             &self.auth_user
         }
     }
+
+    /// Builds the registrar as a SIP URI, which is what the engine requires.
+    ///
+    /// Users type what the Fritz!Box shows them — `fritz.box` or `192.168.2.1`
+    /// — so accept a bare host, `host:port`, or an already-complete
+    /// `sip:`/`sips:` URI, and add the scheme and port when missing.
+    pub fn registrar_uri(&self) -> String {
+        let raw = self.registrar.trim();
+        let (scheme, rest) = if let Some(rest) = raw.strip_prefix("sips:") {
+            ("sips", rest)
+        } else if let Some(rest) = raw.strip_prefix("sip:") {
+            ("sip", rest)
+        } else {
+            ("sip", raw)
+        };
+        let rest = rest.trim_start_matches("//");
+
+        if has_port(rest) {
+            format!("{scheme}:{rest}")
+        } else {
+            format!("{scheme}:{rest}:{}", self.port)
+        }
+    }
+}
+
+/// Whether `host` already carries an explicit `:port`, accounting for the
+/// bracketed IPv6 form (`[::1]:5060`) where colons are part of the address.
+fn has_port(host: &str) -> bool {
+    host.rfind(']').map_or_else(
+        || host.matches(':').count() == 1,
+        |bracket| host[bracket..].contains(':'),
+    )
 }
 
 /// Top-level config. A file holds zero or more accounts; the UI edits this.

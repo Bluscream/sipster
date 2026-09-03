@@ -46,6 +46,48 @@ fn auth_user_falls_back_to_username() {
     assert_eq!(explicit.effective_auth_user(), "sip620");
 }
 
+/// The engine rejects a registrar without a `sip:` scheme, which is exactly
+/// how the first real Fritz!Box attempt failed.
+#[test]
+fn registrar_uri_gains_scheme_and_port() {
+    let account = SipAccount {
+        registrar: "192.168.2.1".into(),
+        port: 5060,
+        ..SipAccount::default()
+    };
+    assert_eq!(account.registrar_uri(), "sip:192.168.2.1:5060");
+}
+
+#[test]
+fn registrar_uri_accepts_the_forms_users_type() {
+    let with = |registrar: &str, port: u16| {
+        SipAccount { registrar: registrar.into(), port, ..SipAccount::default() }.registrar_uri()
+    };
+
+    // Bare hostname, as shown in the Fritz!Box UI.
+    assert_eq!(with("fritz.box", 5060), "sip:fritz.box:5060");
+    // Explicit port must be preserved, not doubled.
+    assert_eq!(with("fritz.box:5070", 5060), "sip:fritz.box:5070");
+    // Already a full URI.
+    assert_eq!(with("sip:fritz.box:5060", 5060), "sip:fritz.box:5060");
+    assert_eq!(with("sip:fritz.box", 5060), "sip:fritz.box:5060");
+    // TLS scheme is preserved rather than downgraded.
+    assert_eq!(with("sips:secure.example", 5061), "sips:secure.example:5061");
+    // Surrounding whitespace from copy/paste.
+    assert_eq!(with("  fritz.box  ", 5060), "sip:fritz.box:5060");
+}
+
+#[test]
+fn registrar_uri_handles_ipv6() {
+    let with = |registrar: &str| {
+        SipAccount { registrar: registrar.into(), port: 5060, ..SipAccount::default() }
+            .registrar_uri()
+    };
+    // Bare IPv6 has many colons but no port; it must not be mistaken for one.
+    assert_eq!(with("[2001:db8::1]"), "sip:[2001:db8::1]:5060");
+    assert_eq!(with("[2001:db8::1]:5070"), "sip:[2001:db8::1]:5070");
+}
+
 #[test]
 fn password_is_never_shown_in_debug() {
     let account = SipAccount {

@@ -36,17 +36,20 @@ thiserror = "2.0"
 anyhow = "1.0"
 bytes = "1.10"
 uuid = { version = "1.13", features = ["v4", "serde"] }
+toml = "0.8"
 
-# SIP, SDP & RTP media crates (100% pure Rust)
-rsip = "0.4.0"
-sdp = "0.17"
-rtp = "0.17"
-cpal = "0.18"
-
-[workspace.dependencies.audio-codec]
-version = "0.4"
-default-features = false
-features = ["std"]
+# SIP engine: rvoip provides the transaction/dialog/registrar/media stack behind
+# a softphone-oriented Endpoint API.
+#
+# Pinned to an upstream git rev rather than crates.io 0.3.8 for API currency
+# (0.3.9 line: Endpoint API, cleaner codec feature gating). The `opus` feature
+# is enabled deliberately: Opus is our preferred codec (best quality) and is
+# offered first, with G.711 (PCMU/PCMA, pure Rust) as the universal fallback
+# every PBX — including the Fritz!Box — accepts. Opus is backed by libopus,
+# built via cmake in the build-box; that C codec dependency is accepted.
+rvoip-sip = { git = "https://github.com/eisenzopf/rvoip.git", rev = "ed8100ae9e072af9353580e0d3ce09c1e4523cec", features = ["opus"] }
+# OS audio-device bridge (cpal microphone/speaker <-> call AudioStream).
+rvoip-audio-device = { git = "https://github.com/eisenzopf/rvoip.git", rev = "ed8100ae9e072af9353580e0d3ce09c1e4523cec" }
 
 # --- Profile Optimizations for Disk Space & Build Speed ---
 

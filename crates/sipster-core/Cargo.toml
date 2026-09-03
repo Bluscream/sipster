@@ -4,7 +4,7 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
-description = "Core pure-Rust SIP client, registration, RTP audio pipeline and call state machine for Sipster"
+description = "Reusable headless engine for Sipster: SIP account management, call orchestration, contacts and call list. UI-agnostic — any frontend skin sits on top of this."
 
 [lints]
 workspace = true
@@ -15,19 +15,8 @@ tracing.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-anyhow.workspace = true
-bytes.workspace = true
 uuid.workspace = true
+toml.workspace = true
 
-# SIP / SDP / RTP Protocol Primitives (Pure Rust)
-rsip.workspace = true
-sdp.workspace = true
-rtp.workspace = true
-
-# Audio & Codecs (Pure Rust)
-audio-codec.workspace = true
-cpal.workspace = true
-
-[target.'cfg(target_pointer_width = "64")'.dependencies.audio-codec]
-workspace = true
-features = ["opus"]
+# SIP calling engine (see workspace Cargo.toml for the C-free rationale).
+rvoip-sip.workspace = true

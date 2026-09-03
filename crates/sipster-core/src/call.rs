@@ -1,6 +1,10 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Opaque identifier for a call, used to correlate UI actions and events.
+///
+/// This is Sipster's internal handle, distinct from the SIP `Call-ID` header
+/// (which lives on the dialog inside the engine).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CallId(pub Uuid);
 
@@ -28,22 +32,37 @@ pub enum CallDirection {
     Outgoing,
 }
 
+/// Lifecycle of a single call. Transitions are driven by the engine; the UI
+/// treats this as read-only display state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CallState {
-    Idle,
+    /// Outgoing: INVITE sent, awaiting a provisional/final response.
     Dialing,
+    /// A 180/183 was received (outgoing) or an INVITE arrived (incoming).
     Ringing,
+    /// `200 OK` exchanged and `ACK`ed; media is flowing.
     Active,
+    /// Locally put on hold (re-INVITE with sendonly/inactive).
     Holding,
+    /// Terminated, with a human-readable reason.
     Terminated,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// Registration status for an account, surfaced to the UI status line.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum RegistrationState {
+    Unregistered,
+    Registering,
+    Registered,
+    Failed(String),
+}
+
+/// Events emitted by the engine on its broadcast channel. The UI subscribes and
+/// re-renders; nothing here carries engine-internal handles.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum CallEvent {
-    IncomingCall { id: CallId, remote_uri: String },
-    Ringing { id: CallId },
-    Connected { id: CallId },
+    Registration(RegistrationState),
+    IncomingCall { id: CallId, remote_uri: String, display_name: Option<String> },
+    StateChanged { id: CallId, state: CallState },
     Terminated { id: CallId, reason: String },
-    RegistrationSuccess,
-    RegistrationFailed(String),
 }

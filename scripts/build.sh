@@ -1,22 +1,6 @@
 #!/usr/bin/env bash
 # ==============================================================================
 # Sipster Build & Automation Script
-#
-# Flags supported:
-#   --lint            Run cargo clippy and enforce file length checks (<= 1000 lines)
-#   --compile         Compile the workspace in release mode
-#   --test            Run workspace tests including sipster-tests crate
-#   --appimage        Package sipster-ui into a standalone Linux AppImage
-#   --deploy          Deploy compiled binary and desktop entry to ~/.local
-#   --start           Launch sipster-ui
-#   --commit [MSG]    Stage changes and commit with an optional message
-#   --push            Push committed changes to upstream git remote
-#   --release <VER>   Create a GitHub release (via gh release create) with AppImage asset
-#   --flow <MODE>     Run bundled workflows:
-#                       check  -> lint + compile + test + start
-#                       local  -> lint + test + compile + appimage + deploy (no push/release)
-#                       remote -> lint + test + compile + appimage + deploy + commit + push + release <VER>
-#   --help, -h        Display this help text
 # ==============================================================================
 
 set -euo pipefail
@@ -34,7 +18,25 @@ GREEN="\033[0;32m"
 YELLOW="\033[0;33m"
 RED="\033[0;31m"
 BLUE="\033[0;34m"
+CYAN="\033[0;36m"
 RESET="\033[0m"
+
+# Recommended command recipes / flows for users and agents
+flows_text=$(cat <<'EOF'
+RECOMMENDED FLOWS & RECIPES:
+  • Local Check / Dev Loop:
+      ./scripts/build.sh --lint --compile --test --start
+      (Performs quality checks, compiles workspace, runs tests, and launches UI)
+
+  • Full Local Deployment:
+      ./scripts/build.sh --lint --test --compile --appimage --deploy
+      (Runs tests/lints, builds AppImage, and installs to ~/.local/bin and applications)
+
+  • Full Remote Release:
+      ./scripts/build.sh --lint --test --compile --appimage --deploy --commit "Release v0.1.0" --push --release v0.1.0
+      (Full pipeline: validates, packages, deploys locally, commits, pushes, and creates GitHub release)
+EOF
+)
 
 log_info() {
     echo -e "${BLUE}${BOLD}[INFO]${RESET} $1"
@@ -56,9 +58,11 @@ show_help() {
     cat <<EOF
 ${BOLD}Sipster Build & Automation Tool${RESET}
 
-Usage: ./scripts/build.sh [OPTIONS]
+Usage: ./scripts/build.sh [OPTIONS...]
 
-Individual Actions:
+Options can be chained in sequence (e.g. ./scripts/build.sh --lint --compile --test)
+
+Available Options:
   --lint             Run cargo clippy across workspace and check file length (<= 1000 lines)
   --compile          Build workspace in release mode (--release)
   --test             Run all tests (sipster-core, sipster-ui, sipster-tests)
@@ -68,14 +72,9 @@ Individual Actions:
   --commit [MSG]     Commit changes to git (auto-stages tracked/new non-ignored files)
   --push             Push commits to git origin
   --release <VER>    Publish GitHub release for <VER> (attaching AppImage via gh CLI)
-
-Bundled Workflows:
-  --flow check       Runs: lint -> compile -> test -> start
-  --flow local       Runs: lint -> test -> compile -> appimage -> deploy (local only, no push/release)
-  --flow remote [V]  Runs: lint -> test -> compile -> appimage -> deploy -> commit -> push -> release [VER]
-
-General:
   --help, -h         Show this usage menu
+
+${CYAN}${flows_text}${RESET}
 EOF
 }
 
@@ -284,64 +283,12 @@ while [ $# -gt 0 ]; do
             shift
             if [ $# -eq 0 ] || [[ "$1" =~ ^-- ]]; then
                 log_error "--release requires a version string (e.g. --release v0.1.0)"
+                echo -e "\n${flows_text}"
                 exit 1
             fi
             version="$1"
             shift
             do_release "$version"
-            ;;
-        --flow)
-            shift
-            if [ $# -eq 0 ] || [[ "$1" =~ ^-- ]]; then
-                log_error "--flow requires a mode: 'check', 'local', or 'remote'"
-                exit 1
-            fi
-            flow_mode="$1"
-            shift
-
-            case "$flow_mode" in
-                check)
-                    log_info "Executing flow: check (lint -> compile -> test -> start)..."
-                    do_lint
-                    do_compile
-                    do_test
-                    do_start
-                    ;;
-                local)
-                    log_info "Executing flow: local (lint -> test -> compile -> appimage -> deploy)..."
-                    do_lint
-                    do_test
-                    do_compile
-                    do_appimage
-                    do_deploy
-                    log_success "Local flow completed successfully!"
-                    ;;
-                remote)
-                    release_ver=""
-                    if [ $# -gt 0 ] && [[ ! "$1" =~ ^-- ]]; then
-                        release_ver="$1"
-                        shift
-                    fi
-                    if [ -z "$release_ver" ]; then
-                        log_error "--flow remote requires a release version (e.g. --flow remote v0.1.0)"
-                        exit 1
-                    fi
-                    log_info "Executing flow: remote (lint -> test -> compile -> appimage -> deploy -> commit -> push -> release ${release_ver})..."
-                    do_lint
-                    do_test
-                    do_compile
-                    do_appimage
-                    do_deploy
-                    do_commit "Release ${release_ver}"
-                    do_push
-                    do_release "$release_ver"
-                    log_success "Remote flow completed successfully!"
-                    ;;
-                *)
-                    log_error "Unknown flow mode: $flow_mode. Available: check, local, remote"
-                    exit 1
-                    ;;
-            esac
             ;;
         --help|-h)
             show_help

@@ -14,10 +14,20 @@ use sipster_core::{Config, SipEngine};
 
 use crate::app::Message;
 
-/// Builds the engine and yields messages: first `EngineReady` (or `EngineFailed`),
-/// then one `Call(event)` per engine event for the lifetime of the app.
+/// Builds the engine and yields `Message`s for the Iced application loop.
+///
+/// This is a `fn()` pointer (no captures) so it satisfies `Subscription::run`.
+/// It reads the IPC receiver exactly once from the process-global [`crate::IPC_RX`];
+/// subsequent subscription calls (from Iced re-rendering) get `None`, which is
+/// fine because the stream keeps running inside the Iced executor.
 pub fn run() -> impl iced::futures::Stream<Item = Message> {
+    // Take the IPC receiver from the process-global OnceLock. Exactly one call wins;
+    // all subsequent calls get None, which is fine — the stream keeps running.
+    let ipc_rx = crate::take_ipc_rx();
+
     stream::channel(64, |mut output: mpsc::Sender<Message>| async move {
+        let mut ipc_rx = ipc_rx;
+
         // Boxed: building the whole rvoip endpoint makes this future large
         // enough that clippy (rightly) does not want it on the stack.
         let engine = match Box::pin(bootstrap()).await {
@@ -43,19 +53,37 @@ pub fn run() -> impl iced::futures::Stream<Item = Message> {
         }
 
         loop {
-            match events.recv().await {
-                Ok(event) => {
-                    if output.send(Message::Call(event)).await.is_err() {
-                        break;
+            tokio::select! {
+                event = events.recv() => {
+                    match event {
+                        Ok(event) => {
+                            if output.send(Message::Call(event)).await.is_err() {
+                                break;
+                            }
+                        }
+                        // Lagged: the UI fell behind; skip missed events and continue.
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                     }
                 }
-                // Lagged: the UI fell behind; skip missed events and continue.
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                cmd = async {
+                    if let Some(rx) = &mut ipc_rx {
+                        rx.recv().await
+                    } else {
+                        std::future::pending().await
+                    }
+                } => {
+                    if let Some(cmd) = cmd {
+                        if output.send(Message::Ipc(cmd)).await.is_err() {
+                            break;
+                        }
+                    }
+                }
             }
         }
     })
 }
+
 
 /// Loads config (env first, then `sipster.toml`) and connects the engine.
 async fn bootstrap() -> Result<SipEngine, String> {

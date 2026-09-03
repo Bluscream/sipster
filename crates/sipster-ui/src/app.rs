@@ -4,9 +4,11 @@
 //! what to display and turns button presses into engine calls.
 
 use iced::{Subscription, Task, Theme};
+use sipster_core::ipc::Command;
 use sipster_core::{CallEvent, CallId, CallState, RegistrationState};
 
 use crate::engine_bridge::{self, EngineHandle};
+use crate::tray;
 use crate::view;
 
 /// A call as the UI knows it — enough to render, nothing engine-internal.
@@ -31,6 +33,7 @@ pub struct SipsterApp {
     pub status: String,
     pub active: Option<ActiveCall>,
     pub incoming: Option<IncomingCall>,
+    tray: Option<tray::Handle>,
 }
 
 #[derive(Debug, Clone)]
@@ -39,6 +42,11 @@ pub enum Message {
     EngineReady(EngineHandle),
     EngineFailed(String),
     Call(CallEvent),
+    Ipc(Command),
+    // From the tray:
+    TrayRequest(tray::Request),
+    // Periodic tray poll tick:
+    TrayTick,
     // User intent:
     DialInputChanged(String),
     DialPad(char),
@@ -61,6 +69,7 @@ impl SipsterApp {
             status: "Starting…".into(),
             active: None,
             incoming: None,
+            tray: crate::take_tray(),
         };
         (app, Task::none())
     }
@@ -68,7 +77,14 @@ impl SipsterApp {
     // Signature is dictated by iced::application(..).subscription(..).
     #[allow(clippy::unused_self)]
     pub fn subscription(&self) -> Subscription<Message> {
-        Subscription::run(engine_bridge::run)
+        // engine_bridge::run is a fn()-pointer; it grabs the IPC receiver
+        // from the process-global OnceLock in main.rs exactly once.
+        // Subsequent subscription calls get None — the stream keeps running.
+        let engine_sub = Subscription::run(engine_bridge::run);
+        // Poll the tray channel every 100 ms.
+        let tray_sub = iced::time::every(std::time::Duration::from_millis(100))
+            .map(|_| Message::TrayTick);
+        Subscription::batch([engine_sub, tray_sub])
     }
 
     // Signature is dictated by iced::application(..).theme(..).
@@ -89,6 +105,15 @@ impl SipsterApp {
                 Task::none()
             }
             Message::Call(event) => self.on_call_event(event),
+            Message::Ipc(cmd) => self.handle_ipc(cmd),
+            Message::TrayTick => {
+                // Drain one pending tray request per tick (non-blocking).
+                if let Some(req) = self.tray.as_ref().and_then(|t| t.requests.try_recv().ok()) {
+                    return self.handle_tray(req);
+                }
+                Task::none()
+            }
+            Message::TrayRequest(req) => self.handle_tray(req),
             Message::DialInputChanged(v) => {
                 self.dial_number = v;
                 Task::none()
@@ -121,6 +146,40 @@ impl SipsterApp {
         view::root(self)
     }
 
+    fn handle_ipc(&mut self, cmd: Command) -> Task<Message> {
+        match cmd {
+            Command::Call { target } => {
+                self.dial_number = target;
+                self.dial()
+            }
+            Command::Answer => self.answer(),
+            Command::Hangup => {
+                if self.incoming.is_some() {
+                    self.decline()
+                } else {
+                    self.hangup()
+                }
+            }
+            Command::Show => Task::none(),
+            Command::Quit => iced::exit(),
+        }
+    }
+
+    fn handle_tray(&mut self, req: tray::Request) -> Task<Message> {
+        match req {
+            tray::Request::Show => Task::none(), // window focus handled by OS/compositor
+            tray::Request::Answer => self.answer(),
+            tray::Request::Hangup => {
+                if self.incoming.is_some() {
+                    self.decline()
+                } else {
+                    self.hangup()
+                }
+            }
+            tray::Request::Quit => iced::exit(),
+        }
+    }
+
     fn on_call_event(&mut self, event: CallEvent) -> Task<Message> {
         match event {
             CallEvent::Registration(state) => {
@@ -144,9 +203,20 @@ impl SipsterApp {
                 self.status = format!("Call ended: {reason}");
             }
         }
+        self.sync_tray_state();
         Task::none()
     }
-
+    fn sync_tray_state(&self) {
+        let Some(tray) = &self.tray else { return };
+        let state = if self.incoming.is_some() {
+            tray::CallState::Ringing
+        } else if self.active.is_some() {
+            tray::CallState::InCall
+        } else {
+            tray::CallState::Idle
+        };
+        tray.set_call_state(state);
+    }
     fn apply_state(&mut self, id: CallId, state: CallState) {
         let remote = self
             .active

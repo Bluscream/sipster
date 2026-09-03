@@ -1,9 +1,12 @@
+# NOTE: This repository does not support or use automated GitHub Actions for CI/CD builds.
+# This workflow file is kept strictly for manual dispatch / reference and push triggers are disabled.
+
 name: Release Multi-Arch
 
 on:
-  push:
-    tags:
-      - 'v*'
+  # push:
+  #   tags:
+  #     - 'v*'
   workflow_dispatch:
 
 permissions:

@@ -3,16 +3,20 @@
 # Sipster Build & Automation Script
 #
 # Flags supported:
-#   --lint        Run cargo clippy and enforce file length checks (<= 1000 lines)
-#   --compile     Compile the workspace in release mode
-#   --test        Run workspace tests including sipster-tests crate
-#   --appimage    Package sipster-ui into a standalone Linux AppImage
-#   --deploy      Deploy compiled binary and desktop entry to ~/.local
-#   --start       Launch sipster-ui
-#   --commit      Stage changes and commit with an optional message
-#   --push        Push committed changes to upstream git remote
-#   --release     Run full pipeline: lint -> test -> compile -> appimage
-#   --help, -h    Display this help text
+#   --lint            Run cargo clippy and enforce file length checks (<= 1000 lines)
+#   --compile         Compile the workspace in release mode
+#   --test            Run workspace tests including sipster-tests crate
+#   --appimage        Package sipster-ui into a standalone Linux AppImage
+#   --deploy          Deploy compiled binary and desktop entry to ~/.local
+#   --start           Launch sipster-ui
+#   --commit [MSG]    Stage changes and commit with an optional message
+#   --push            Push committed changes to upstream git remote
+#   --release <VER>   Create a GitHub release (via gh release create) with AppImage asset
+#   --flow <MODE>     Run bundled workflows:
+#                       check  -> lint + compile + test + start
+#                       local  -> lint + test + compile + appimage + deploy (no push/release)
+#                       remote -> lint + test + compile + appimage + deploy + commit + push + release <VER>
+#   --help, -h        Display this help text
 # ==============================================================================
 
 set -euo pipefail
@@ -54,17 +58,24 @@ ${BOLD}Sipster Build & Automation Tool${RESET}
 
 Usage: ./scripts/build.sh [OPTIONS]
 
-Options:
-  --lint         Run cargo clippy across workspace and check file length (<= 1000 lines)
-  --compile      Build workspace in release mode (--release)
-  --test         Run all tests (sipster-core, sipster-ui, sipster-tests)
-  --appimage     Create standalone AppImage bundle
-  --deploy       Install binary and desktop shortcut to ~/.local/bin and ~/.local/share/applications
-  --start        Run sipster-ui directly
-  --commit [MSG] Commit changes to git (auto-stages tracked/new non-ignored files)
-  --push         Push commits to git origin
-  --release      Execute full release flow: lint -> test -> compile -> appimage
-  --help, -h     Show this usage menu
+Individual Actions:
+  --lint             Run cargo clippy across workspace and check file length (<= 1000 lines)
+  --compile          Build workspace in release mode (--release)
+  --test             Run all tests (sipster-core, sipster-ui, sipster-tests)
+  --appimage         Create standalone AppImage bundle
+  --deploy           Install binary and desktop shortcut to ~/.local
+  --start            Run sipster-ui directly
+  --commit [MSG]     Commit changes to git (auto-stages tracked/new non-ignored files)
+  --push             Push commits to git origin
+  --release <VER>    Publish GitHub release for <VER> (attaching AppImage via gh CLI)
+
+Bundled Workflows:
+  --flow check       Runs: lint -> compile -> test -> start
+  --flow local       Runs: lint -> test -> compile -> appimage -> deploy (local only, no push/release)
+  --flow remote [V]  Runs: lint -> test -> compile -> appimage -> deploy -> commit -> push -> release [VER]
+
+General:
+  --help, -h         Show this usage menu
 EOF
 }
 
@@ -72,7 +83,6 @@ check_file_lengths() {
     log_info "Verifying file lengths (<= 1000 lines)..."
     local exceeded=0
     while IFS= read -r file; do
-        # Skip target, references, git
         [[ "$file" =~ ^(\./)?(target|\.references|\.git) ]] && continue
         if [[ -f "$file" && "$file" =~ \.(rs|toml|md|sh)$ ]]; then
             lines=$(wc -l < "$file")
@@ -121,7 +131,6 @@ do_appimage() {
 
     cp "${WORKSPACE_ROOT}/target/release/sipster-ui" "${APPDIR}/usr/bin/sipster"
 
-    # AppRun
     cat <<'EOF' > "${APPDIR}/AppRun"
 #!/bin/sh
 HERE="$(dirname "$(readlink -f "${0}")")"
@@ -129,7 +138,6 @@ exec "${HERE}/usr/bin/sipster" "$@"
 EOF
     chmod +x "${APPDIR}/AppRun"
 
-    # Desktop entry
     cat <<'EOF' > "${APPDIR}/sipster.desktop"
 [Desktop Entry]
 Name=Sipster
@@ -142,9 +150,7 @@ Terminal=false
 EOF
     cp "${APPDIR}/sipster.desktop" "${APPDIR}/usr/share/applications/"
 
-    # Minimal PNG icon placeholder if not existing
     if [ ! -f "${APPDIR}/sipster.png" ]; then
-        # Create 1x1 transparent/colored icon or touch
         echo "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==" | base64 -d > "${APPDIR}/sipster.png"
         cp "${APPDIR}/sipster.png" "${APPDIR}/usr/share/icons/hicolor/256x256/apps/sipster.png"
     fi
@@ -205,12 +211,28 @@ do_push() {
 }
 
 do_release() {
-    log_info "Executing full release workflow..."
-    do_lint
-    do_test
-    do_compile
-    do_appimage
-    log_success "Release build completed successfully!"
+    local version="$1"
+    if [ -z "$version" ]; then
+        log_error "Missing version argument for --release (e.g. --release v0.1.0)"
+        exit 1
+    fi
+
+    log_info "Creating GitHub release ${version}..."
+    local APPIMAGE="${WORKSPACE_ROOT}/target/Sipster-x86_64.AppImage"
+    if [ ! -f "$APPIMAGE" ]; then
+        log_info "AppImage not found, building now..."
+        do_appimage
+    fi
+
+    if ! command -v gh &>/dev/null; then
+        log_error "GitHub CLI ('gh') is not installed. Please install 'gh' to publish releases."
+        exit 1
+    fi
+
+    gh release create "${version}" "${APPIMAGE}" \
+        --title "Sipster ${version}" \
+        --generate-notes
+    log_success "GitHub release ${version} published successfully!"
 }
 
 # Parse command line flags
@@ -259,8 +281,67 @@ while [ $# -gt 0 ]; do
             shift
             ;;
         --release)
-            do_release
             shift
+            if [ $# -eq 0 ] || [[ "$1" =~ ^-- ]]; then
+                log_error "--release requires a version string (e.g. --release v0.1.0)"
+                exit 1
+            fi
+            version="$1"
+            shift
+            do_release "$version"
+            ;;
+        --flow)
+            shift
+            if [ $# -eq 0 ] || [[ "$1" =~ ^-- ]]; then
+                log_error "--flow requires a mode: 'check', 'local', or 'remote'"
+                exit 1
+            fi
+            flow_mode="$1"
+            shift
+
+            case "$flow_mode" in
+                check)
+                    log_info "Executing flow: check (lint -> compile -> test -> start)..."
+                    do_lint
+                    do_compile
+                    do_test
+                    do_start
+                    ;;
+                local)
+                    log_info "Executing flow: local (lint -> test -> compile -> appimage -> deploy)..."
+                    do_lint
+                    do_test
+                    do_compile
+                    do_appimage
+                    do_deploy
+                    log_success "Local flow completed successfully!"
+                    ;;
+                remote)
+                    release_ver=""
+                    if [ $# -gt 0 ] && [[ ! "$1" =~ ^-- ]]; then
+                        release_ver="$1"
+                        shift
+                    fi
+                    if [ -z "$release_ver" ]; then
+                        log_error "--flow remote requires a release version (e.g. --flow remote v0.1.0)"
+                        exit 1
+                    fi
+                    log_info "Executing flow: remote (lint -> test -> compile -> appimage -> deploy -> commit -> push -> release ${release_ver})..."
+                    do_lint
+                    do_test
+                    do_compile
+                    do_appimage
+                    do_deploy
+                    do_commit "Release ${release_ver}"
+                    do_push
+                    do_release "$release_ver"
+                    log_success "Remote flow completed successfully!"
+                    ;;
+                *)
+                    log_error "Unknown flow mode: $flow_mode. Available: check, local, remote"
+                    exit 1
+                    ;;
+            esac
             ;;
         --help|-h)
             show_help

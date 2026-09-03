@@ -7,6 +7,11 @@
 # executable documentation of the release process.
 #
 # All artifacts follow the project naming rule: sipster-{os}-{arch}.{ext}
+#
+# Coverage note: this workflow builds the subset GitHub has runners for
+# (linux x86_64 + aarch64, windows x86_64 + x86). The i686/armv7 Linux builds
+# and the aarch64 Windows build exist only in `scripts/build.sh`, which is why
+# a real release is cut locally from the build-box.
 
 name: Release
 
@@ -22,7 +27,26 @@ permissions:
   contents: write
 
 jobs:
+  # The same gate as `./scripts/build.sh check`. A tag that cannot pass it
+  # must not become a release.
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev cmake pkg-config
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
   linux-x86_64:
+    needs: check
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -55,6 +79,7 @@ jobs:
           if-no-files-found: error
 
   linux-aarch64:
+    needs: check
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -78,6 +103,7 @@ jobs:
           if-no-files-found: error
 
   windows:
+    needs: check
     runs-on: windows-latest
     strategy:
       matrix:
@@ -93,6 +119,9 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
+      - name: Install cmake
+        # libopus is built from source via cmake for the Opus codec.
+        uses: lukka/get-cmake@latest
       - name: Build release exe
         run: cargo build -p sipster-ui --target ${{ matrix.target }} --release
       - name: Stage artifact

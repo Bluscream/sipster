@@ -9,4 +9,4 @@ Terminal=false
 Categories=Network;Telephony;
 Keywords=SIP;VoIP;phone;softphone;telephony;FritzBox;
 MimeType=x-scheme-handler/tel;x-scheme-handler/sip;x-scheme-handler/callto;
-StartupWMClass=sipster-ui
+StartupWMClass=sipster

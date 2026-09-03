@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
 description = "Modern pure-Rust desktop GUI client for Sipster"
 
 [lints]
@@ -22,8 +24,7 @@ anyhow.workspace = true
 # Pure Rust GUI Framework (Iced)
 iced = { version = "0.14", features = ["tokio", "svg", "advanced"] }
 
-# System tray — StatusNotifierItem via ksni (works on KDE Plasma/Wayland
-# unlike libayatana-appindicator which silently fails there).
-ksni = { version = "0.3", default-features = false, features = ["tokio"] }
+# System tray — StatusNotifierItem via ksni (independent background thread via blocking/async-io)
+ksni = { version = "0.3", default-features = false, features = ["async-io", "blocking"] }
 # PNG decoding for tray icon pixmap conversion (RGBA → ARGB).
 image = { version = "0.25", default-features = false, features = ["png"] }

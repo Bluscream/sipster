@@ -1,22 +1,28 @@
 //! Single-instance enforcement and command IPC.
 //!
 //! A softphone must be single-instance: two processes cannot both hold SIP
-//! port 5060 or register the same account sensibly. The first process binds a
-//! Unix socket; later invocations find it already bound, forward their command
-//! to the running instance, and exit.
+//! port 5060 or register the same account sensibly. The first process takes a
+//! kernel file lock and opens a control channel; later invocations find the
+//! lock held, forward their command to the running instance, and exit.
 //!
 //! The same channel is the remote-control interface, so `sipster --call 611`,
 //! a `tel:` link from a browser, and a script all take one path.
+//!
+//! The channel is a Unix domain socket or a Windows named pipe depending on
+//! the platform; see [`transport`].
+
+mod transport;
 
 use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
-use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::{UnixListener, UnixStream};
-use tokio::sync::mpsc;
-use tracing::{debug, info, warn};
+use tracing::info;
 
-use crate::error::{Error, Result};
+use crate::cli;
+use crate::error::Result;
+use crate::instance::{self, Guard};
+
+pub use transport::{serve, Listener};
 
 /// A command sent to the running instance.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,7 +82,7 @@ impl Command {
     /// Supports:
     /// - `--call <TARGET>` or `-c <TARGET>`
     /// - `--answer` or `-a`
-    /// - `--hangup` or `-h`
+    /// - `--hangup`
     /// - `--show`
     /// - `--quit` or `-q`
     /// - A bare `tel:`, `sip:`, `sips:` or `callto:` URI
@@ -141,132 +147,114 @@ fn percent_decode(input: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-use crate::instance::{self, Guard};
-
-/// Path of the control socket for this user.
+/// Address of the control channel for this user.
 ///
-/// Lives in `XDG_RUNTIME_DIR`, which is per-user, `0700`, and cleared on
-/// logout — so a stale socket cannot outlive the session.
+/// On Unix a socket under `XDG_RUNTIME_DIR`, which is per-user, `0700` and
+/// cleared on logout, so a stale socket cannot outlive the session. On Windows
+/// a named pipe. See [`transport`] for the details.
 pub fn socket_path() -> PathBuf {
-    let dir = std::env::var("XDG_RUNTIME_DIR")
-        .map_or_else(|_| std::env::temp_dir(), PathBuf::from);
-    dir.join("sipster.sock")
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    socket_path_from(&args, |key| std::env::var(key).ok())
+}
+
+/// The testable core of [`socket_path`], with argv and the environment
+/// injected. Precedence is explicit flag, then environment, then the default.
+pub fn socket_path_from<S: AsRef<str>>(
+    args: &[S],
+    env: impl Fn(&str) -> Option<String>,
+) -> PathBuf {
+    const SOCKET_FLAGS: [&str; 3] = ["--socket", "--target-socket", "-s"];
+
+    if let Some(path) = cli::flag_value(args, &SOCKET_FLAGS) {
+        return PathBuf::from(path);
+    }
+    if let Some(path) = env("SIPSTER_IPC_SOCKET").or_else(|| env("SIP_IPC_SOCKET")) {
+        return PathBuf::from(path);
+    }
+    transport::default_path(env("XDG_RUNTIME_DIR"))
 }
 
 /// Outcome of trying to become the single running instance.
 pub enum Instance {
-    /// We are the first instance; owns the kernel file lock, bound listener and optional initial command.
+    /// We are the first instance; owns the kernel file lock, the bound control
+    /// channel and any command this invocation asked for.
     Primary {
         lock: Guard,
-        listener: std::os::unix::net::UnixListener,
+        listener: Listener,
         initial_command: Option<Command>,
     },
     /// Another instance is already running and has been sent the command.
     Forwarded,
 }
 
-/// Attempts to connect to an existing instance and forward the command.
+/// Attempts to hand `command` to an instance that is already accepting.
+///
+/// # Errors
+///
+/// Only if the command could not be encoded or the write failed midway; not
+/// finding anyone to talk to is `Ok(None)`.
 pub async fn try_forward(command: Option<Command>) -> Result<Option<Instance>> {
-    let path = socket_path();
-    if let Ok(mut stream) = UnixStream::connect(&path).await {
-        if let Some(command) = command {
-            let mut line = serde_json::to_string(&command)
-                .map_err(|e| Error::Config(format!("encode command: {e}")))?;
-            line.push('\n');
-            stream.write_all(line.as_bytes()).await?;
-            stream.flush().await?;
-        }
+    if transport::forward(&socket_path(), command.as_ref()).await? {
         info!("another instance is running; command forwarded");
         return Ok(Some(Instance::Forwarded));
     }
     Ok(None)
 }
 
-/// Removes any leftover socket file from an earlier crashed instance.
-fn remove_stale_socket(path: &std::path::Path) -> Result<()> {
-    match std::fs::remove_file(path) {
-        Ok(()) => debug!("removed stale control socket"),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => return Err(Error::Io(e)),
-    }
-    Ok(())
+/// Opens the control channel at the configured address without taking the
+/// single-instance lock.
+///
+/// Only for `--no-single-instance`; normal startup goes through [`acquire`].
+///
+/// # Errors
+///
+/// Fails when the address is already claimed or cannot be created.
+pub fn bind_control_channel() -> Result<Listener> {
+    transport::bind(&socket_path())
 }
 
 /// Becomes the primary instance, or forwards `command` to the one already
 /// running.
 ///
-/// Mutual exclusion is enforced by [`crate::instance::claim`], while command
-/// forwarding is handled over the Unix domain socket.
+/// Mutual exclusion is enforced by [`crate::instance::claim`]; command
+/// forwarding rides the platform control channel.
 pub async fn acquire(command: Option<Command>) -> Result<Instance> {
     let path = socket_path();
 
-    // 1. Check the kernel advisory lock from the dedicated instance module:
-    let lock_guard = match instance::claim()? {
-        Some(guard) => guard,
-        None => {
-            // Another instance holds the file lock. Forward the command.
-            if let Some(instance) = try_forward(command.clone()).await? {
-                return Ok(instance);
-            }
-            // If forward failed but lock is held, wait briefly and retry forward once.
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-            if let Some(instance) = try_forward(command).await? {
-                return Ok(instance);
-            }
-            info!("another instance holds lock; exiting");
-            return Ok(Instance::Forwarded);
-        }
+    // The kernel advisory lock is the source of truth for who is primary; the
+    // socket is only how commands reach them.
+    let Some(lock) = instance::claim()? else {
+        return forward_to_primary(command).await;
     };
 
-    // 2. We hold the lock! Clean up any stale socket from past unclean shutdowns.
-    remove_stale_socket(&path)?;
-
-    let std_listener = std::os::unix::net::UnixListener::bind(&path)?;
-    std_listener.set_nonblocking(true)?;
-    info!(socket = %path.display(), "listening for control commands");
-
     Ok(Instance::Primary {
-        lock: lock_guard,
-        listener: std_listener,
+        lock,
+        listener: transport::bind(&path)?,
         initial_command: command,
     })
 }
 
-/// Accepts control connections and forwards decoded commands to `tx`.
-pub async fn serve(std_listener: std::os::unix::net::UnixListener, tx: mpsc::UnboundedSender<Command>) {
-    let listener = match UnixListener::from_std(std_listener) {
-        Ok(l) => l,
-        Err(e) => {
-            warn!(error = %e, "failed to convert std UnixListener to tokio");
-            return;
-        }
-    };
-    loop {
-        let Ok((stream, _)) = listener.accept().await else {
-            warn!("control socket closed");
-            return;
-        };
-        let tx = tx.clone();
-        tokio::spawn(async move {
-            let mut lines = BufReader::new(stream).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                match serde_json::from_str::<Command>(&line) {
-                    Ok(command) => {
-                        info!(?command, "control command received");
-                        if tx.send(command).is_err() {
-                            return;
-                        }
-                    }
-                    Err(e) => warn!(error = %e, "ignoring malformed control command"),
-                }
-            }
-        });
+/// Hands `command` to the instance that holds the lock.
+///
+/// There is a window where the primary holds the lock but has not bound its
+/// socket yet, so a single failed connect is retried before giving up. Failing
+/// to deliver is still not an error for us: the other copy is running, which is
+/// the outcome single-instance mode exists to produce.
+async fn forward_to_primary(command: Option<Command>) -> Result<Instance> {
+    if let Some(instance) = try_forward(command.clone()).await? {
+        return Ok(instance);
     }
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    if let Some(instance) = try_forward(command).await? {
+        return Ok(instance);
+    }
+    info!("another instance holds the lock but is not accepting commands yet; exiting");
+    Ok(Instance::Forwarded)
 }
 
-/// Removes the control socket. Call on clean shutdown.
+/// Removes the control channel's filesystem entry. Call on clean shutdown.
 pub fn cleanup() {
-    let _ = std::fs::remove_file(socket_path());
+    transport::cleanup(&socket_path());
 }
 
 #[cfg(test)]
@@ -339,6 +327,47 @@ mod tests {
             let json = serde_json::to_string(&command).unwrap();
             assert_eq!(serde_json::from_str::<Command>(&json).unwrap(), command);
         }
+    }
+
+    #[test]
+    fn socket_flag_beats_environment_and_default() {
+        let env = |key: &str| match key {
+            "SIPSTER_IPC_SOCKET" => Some("/from/env.sock".to_string()),
+            "XDG_RUNTIME_DIR" => Some("/run/user/1000".to_string()),
+            _ => None,
+        };
+        assert_eq!(
+            socket_path_from(&["--socket", "/from/flag.sock"], env),
+            PathBuf::from("/from/flag.sock")
+        );
+    }
+
+    #[test]
+    fn environment_beats_the_runtime_directory_default() {
+        let env = |key: &str| match key {
+            "SIP_IPC_SOCKET" => Some("/from/env.sock".to_string()),
+            "XDG_RUNTIME_DIR" => Some("/run/user/1000".to_string()),
+            _ => None,
+        };
+        assert_eq!(socket_path_from::<&str>(&[], env), PathBuf::from("/from/env.sock"));
+    }
+
+    #[test]
+    fn defaults_into_the_runtime_directory() {
+        let env = |key: &str| (key == "XDG_RUNTIME_DIR").then(|| "/run/user/1000".to_string());
+        assert_eq!(
+            socket_path_from::<&str>(&[], env),
+            PathBuf::from("/run/user/1000/sipster.sock")
+        );
+    }
+
+    /// Without a runtime directory the path must still be absolute and usable,
+    /// not a bare relative filename in whatever the cwd happens to be.
+    #[test]
+    fn falls_back_to_a_temporary_directory() {
+        let path = socket_path_from::<&str>(&[], |_| None);
+        assert!(path.is_absolute(), "socket path must be absolute: {}", path.display());
+        assert_eq!(path.file_name().unwrap(), "sipster.sock");
     }
 
     #[test]

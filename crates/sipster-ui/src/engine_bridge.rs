@@ -17,12 +17,11 @@ use crate::app::Message;
 /// Builds the engine and yields `Message`s for the Iced application loop.
 ///
 /// This is a `fn()` pointer (no captures) so it satisfies `Subscription::run`.
-/// It reads the IPC receiver exactly once from the process-global [`crate::IPC_RX`];
-/// subsequent subscription calls (from Iced re-rendering) get `None`, which is
-/// fine because the stream keeps running inside the Iced executor.
+/// It takes the primary-instance state exactly once via
+/// [`crate::take_primary_state`]; subsequent subscription calls (from Iced
+/// re-rendering) get `None`, which is fine because the stream keeps running
+/// inside the Iced executor.
 pub fn run() -> impl iced::futures::Stream<Item = Message> {
-    // Take the primary state from the process-global OnceLock. Exactly one call wins;
-    // all subsequent calls get None, which is fine — the stream keeps running.
     let primary_state = crate::take_primary_state();
 
     stream::channel(64, |mut output: mpsc::Sender<Message>| async move {

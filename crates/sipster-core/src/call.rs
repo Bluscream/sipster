@@ -42,9 +42,7 @@ pub enum CallState {
     Ringing,
     /// `200 OK` exchanged and `ACK`ed; media is flowing.
     Active,
-    /// Locally put on hold (re-INVITE with sendonly/inactive).
-    Holding,
-    /// Terminated, with a human-readable reason.
+    /// Terminated. The reason travels with [`CallEvent::Terminated`].
     Terminated,
 }
 

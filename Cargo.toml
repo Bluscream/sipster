@@ -7,10 +7,17 @@ members = [
 resolver = "2"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 authors = ["Sipster Authors"]
 license = "Unlicense"
+repository = "https://github.com/Bluscream/sipster"
+homepage = "https://github.com/Bluscream/sipster"
+readme = "README.md"
+keywords = ["sip", "voip", "softphone", "telephony", "fritzbox"]
+categories = ["multimedia::audio", "network-programming"]
+# `File::try_lock` (single-instance guard) and let-chains in the 2021 edition.
+rust-version = "1.89"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

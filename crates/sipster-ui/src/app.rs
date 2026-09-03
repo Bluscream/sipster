@@ -8,6 +8,7 @@ use sipster_core::ipc::Command;
 use sipster_core::{CallEvent, CallId, CallState, RegistrationState};
 
 use crate::engine_bridge::{self, EngineHandle};
+use crate::sound;
 use crate::tray;
 use crate::view;
 
@@ -30,11 +31,14 @@ pub struct SipsterApp {
     engine: Option<EngineHandle>,
     pending_command: Option<Command>,
     pub registration: RegistrationState,
+    pub account_info: Option<String>,
     pub dial_number: String,
     pub status: String,
     pub active: Option<ActiveCall>,
     pub incoming: Option<IncomingCall>,
     tray: Option<tray::Handle>,
+    /// Live while an inbound call is ringing; dropping it silences the ring.
+    ringtone: Option<sound::Ringtone>,
 }
 
 #[derive(Debug, Clone)]
@@ -44,19 +48,19 @@ pub enum Message {
     EngineFailed(String),
     Call(CallEvent),
     Ipc(Command),
-    // From the tray (also dispatched from TrayTick via handle_tray):
-    #[allow(dead_code)]
-    TrayRequest(tray::Request),
-    // Periodic tray poll tick:
+    // Periodic tray poll tick; drains tray::Request into handle_tray.
     TrayTick,
     // User intent:
     DialInputChanged(String),
     DialPad(char),
     Backspace,
+    ClearInput,
     CallPressed,
     HangupPressed,
     AnswerPressed,
     DeclinePressed,
+    ContactsPressed,
+    CallListPressed,
     // Async results:
     Dialed(Result<CallId, String>),
     ActionDone(Result<(), String>),
@@ -68,11 +72,13 @@ impl SipsterApp {
             engine: None,
             pending_command: None,
             registration: RegistrationState::Unregistered,
+            account_info: None,
             dial_number: String::new(),
-            status: "Starting…".into(),
+            status: "Ready".into(),
             active: None,
             incoming: None,
             tray: crate::take_tray(),
+            ringtone: None,
         };
         (app, Task::none())
     }
@@ -99,8 +105,14 @@ impl SipsterApp {
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::EngineReady(engine) => {
+                let acc = engine.account();
+                self.account_info = Some(if acc.port == 5060 {
+                    format!("{} at {}", acc.username, acc.registrar)
+                } else {
+                    format!("{} at {}:{}", acc.username, acc.registrar, acc.port)
+                });
                 self.engine = Some(engine);
-                self.status = "Engine ready".into();
+                self.status = "Ready".into();
                 if let Some(cmd) = self.pending_command.take() {
                     return self.handle_ipc(cmd);
                 }
@@ -121,37 +133,54 @@ impl SipsterApp {
             }
             Message::TrayTick => {
                 // Drain one pending tray request per tick (non-blocking).
-                if let Some(req) = self.tray.as_mut().and_then(|t| t.requests.try_recv().ok()) {
+                if let Some(req) = self.tray.as_ref().and_then(crate::tray::Handle::poll) {
                     return self.handle_tray(req);
                 }
                 Task::none()
             }
-            Message::TrayRequest(req) => self.handle_tray(req),
             Message::DialInputChanged(v) => {
                 self.dial_number = v;
                 Task::none()
             }
             Message::DialPad(d) => {
                 self.dial_number.push(d);
+                sound::dtmf(d);
                 Task::none()
             }
             Message::Backspace => {
                 self.dial_number.pop();
                 Task::none()
             }
+            Message::ClearInput => {
+                self.dial_number.clear();
+                Task::none()
+            }
             Message::CallPressed => self.dial(),
             Message::HangupPressed => self.hangup(),
             Message::AnswerPressed => self.answer(),
             Message::DeclinePressed => self.decline(),
+            Message::ContactsPressed => {
+                self.status = "Contacts sync (TR-064 / KDE) planned".into();
+                Task::none()
+            }
+            Message::CallListPressed => {
+                self.status = "Call list sync planned".into();
+                Task::none()
+            }
             Message::Dialed(Err(e)) => {
                 self.status = format!("Call failed: {e}");
                 Task::none()
             }
             Message::ActionDone(Err(e)) => {
+                tracing::error!("Call action failed: {e}");
                 self.status = format!("Error: {e}");
                 Task::none()
             }
-            Message::Dialed(Ok(_)) | Message::ActionDone(Ok(())) => Task::none(),
+            Message::ActionDone(Ok(())) => {
+                tracing::info!("Call action succeeded");
+                Task::none()
+            }
+            Message::Dialed(Ok(_)) => Task::none(),
         }
     }
 
@@ -200,8 +229,12 @@ impl SipsterApp {
                 self.registration = state;
             }
             CallEvent::IncomingCall { id, remote_uri, .. } => {
-                self.incoming = Some(IncomingCall { id, remote: remote_uri.clone() });
-                self.status = format!("Incoming call from {remote_uri}");
+                sound::notify_incoming(&remote_uri);
+                // Assigning drops any previous ringtone, so a second inbound
+                // call cannot leave two rings overlapping.
+                self.ringtone = Some(sound::start_ringing());
+                self.incoming = Some(IncomingCall { id, remote: remote_uri });
+                self.status = "Incoming call…".into();
             }
             CallEvent::StateChanged { id, state } => {
                 self.apply_state(id, state);
@@ -209,9 +242,11 @@ impl SipsterApp {
             CallEvent::Terminated { id, reason } => {
                 if self.active.as_ref().is_some_and(|c| c.id == id) {
                     self.active = None;
+                    sound::call_ended();
                 }
                 if self.incoming.as_ref().is_some_and(|c| c.id == id) {
                     self.incoming = None;
+                    self.ringtone = None;
                 }
                 self.status = format!("Call ended: {reason}");
             }
@@ -246,6 +281,7 @@ impl SipsterApp {
         let (Some(engine), false) = (&self.engine, self.dial_number.is_empty()) else {
             return Task::none();
         };
+        sound::call_started();
         let engine = engine.clone();
         let target = self.dial_number.clone();
         self.status = format!("Dialing {target}…");
@@ -253,28 +289,39 @@ impl SipsterApp {
     }
 
     fn hangup(&mut self) -> Task<Message> {
-        let (Some(engine), Some(call)) = (&self.engine, &self.active) else {
+        let (Some(engine), Some(call)) = (&self.engine, self.active.take()) else {
             return Task::none();
         };
-        let (engine, id) = (engine.clone(), call.id);
+        sound::call_ended();
+        let engine = engine.clone();
+        let id = call.id;
+        self.status = "Hanging up…".into();
+        self.sync_tray_state();
         Task::future(async move { Message::ActionDone(engine.hangup(id).await.map_err(|e| e.to_string())) })
     }
 
     fn answer(&mut self) -> Task<Message> {
-        let (Some(engine), Some(call)) = (&self.engine, &self.incoming) else {
+        let (Some(engine), Some(call)) = (&self.engine, self.incoming.take()) else {
             return Task::none();
         };
+        self.ringtone = None;
         let (engine, id) = (engine.clone(), call.id);
-        self.incoming = None;
+        self.status = "Answering call…".into();
+        self.active = Some(ActiveCall {
+            id,
+            state: CallState::Active,
+            remote: call.remote,
+        });
         Task::future(async move { Message::ActionDone(engine.answer(id).await.map_err(|e| e.to_string())) })
     }
 
     fn decline(&mut self) -> Task<Message> {
-        let (Some(engine), Some(call)) = (&self.engine, &self.incoming) else {
+        let (Some(engine), Some(call)) = (&self.engine, self.incoming.take()) else {
             return Task::none();
         };
+        self.ringtone = None;
         let (engine, id) = (engine.clone(), call.id);
-        self.incoming = None;
+        self.status = "Call declined".into();
         Task::future(async move { Message::ActionDone(engine.hangup(id).await.map_err(|e| e.to_string())) })
     }
 }
@@ -293,7 +340,6 @@ fn call_status(state: CallState) -> String {
         CallState::Dialing => "Dialing…".into(),
         CallState::Ringing => "Ringing…".into(),
         CallState::Active => "In call".into(),
-        CallState::Holding => "On hold".into(),
         CallState::Terminated => "Call ended".into(),
     }
 }

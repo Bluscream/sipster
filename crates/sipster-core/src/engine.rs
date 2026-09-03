@@ -99,11 +99,7 @@ impl SipEngine {
     /// subscriber is listening, so no registration event is missed.
     pub async fn connect(account: SipAccount) -> Result<Self> {
         let endpoint = crate::build_endpoint(&account).await?;
-        let events = endpoint
-            .events()
-            .await
-            .map_err(|e| Error::Config(format!("event subscribe failed: {e}")))?;
-        let (control, _events_owned) = endpoint.split();
+        let (control, events) = endpoint.split();
 
         let (event_tx, _) = broadcast::channel(64);
         let registry = Arc::new(Mutex::new(Registry::default()));
@@ -275,7 +271,10 @@ fn spawn_pump(
     tokio::spawn(async move {
         loop {
             match events.next().await {
-                Ok(Some(event)) => translate(event, &registry, &tx, &devices).await,
+                Ok(Some(event)) => {
+                    debug!("received rvoip endpoint event");
+                    translate(event, &registry, &tx, &devices).await;
+                }
                 Ok(None) => {
                     debug!("rvoip event stream closed");
                     break;

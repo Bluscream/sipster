@@ -1,13 +1,13 @@
 //! System tray icon for Sipster.
 //!
-//! Uses `ksni` which speaks StatusNotifierItem directly — this is what KDE
+//! Uses `ksni` which speaks `StatusNotifierItem` directly — this is what KDE
 //! Plasma 6 under Wayland actually listens for. The `tray-icon` crate's
 //! libayatana-appindicator backend creates items on the bus that Plasma 6
 //! never shows; ksni avoids that whole detour.
 //!
 //! The tray lives as long as the process. Its icon and menu state are updated
-//! via a shared atomic; tray actions are forwarded into the Iced app as
-//! [`crate::app::Message::TrayRequest`].
+//! via a shared atomic; tray actions are polled by the Iced app each tick and
+//! dispatched through `SipsterApp::handle_tray`.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -46,10 +46,30 @@ pub enum Request {
 ///
 /// Drop this to remove the icon from the tray.
 pub struct Handle {
-    pub requests: tokio::sync::mpsc::UnboundedReceiver<Request>,
+    pub requests: std::sync::mpsc::Receiver<Request>,
     call_state: Arc<AtomicU8>,
-    /// Kept alive: dropping it removes the icon.
-    _service: ksni::Handle<Icon>,
+    /// Also kept alive deliberately: dropping it removes the icon.
+    service: ksni::blocking::Handle<Icon>,
+}
+
+impl Handle {
+    /// Check for requests from the tray menu/click without blocking.
+    pub fn poll(&self) -> Option<Request> {
+        self.requests.try_recv().ok()
+    }
+
+    /// Update the call state the tray reflects.
+    ///
+    /// The `update` call is not optional bookkeeping: `StatusNotifierItem` hosts
+    /// cache our properties and only re-read them when we signal a change.
+    /// Storing the atomic alone would leave Plasma showing the previous status
+    /// until something else happened to invalidate it.
+    pub fn set_call_state(&self, state: CallState) {
+        let previous = self.call_state.swap(state as u8, Ordering::Relaxed);
+        if previous != state as u8 {
+            self.service.update(|_| {});
+        }
+    }
 }
 
 impl std::fmt::Debug for Handle {
@@ -58,17 +78,10 @@ impl std::fmt::Debug for Handle {
     }
 }
 
-impl Handle {
-    /// Update the call-state reflected in the tray menu.
-    pub fn set_call_state(&self, state: CallState) {
-        self.call_state.store(state as u8, Ordering::Relaxed);
-    }
-}
-
 // ── icon implementation ──────────────────────────────────────────────────────
 
 struct Icon {
-    tx: tokio::sync::mpsc::UnboundedSender<Request>,
+    tx: std::sync::mpsc::Sender<Request>,
     call_state: Arc<AtomicU8>,
     pixmap: Vec<ksni::Icon>,
 }
@@ -80,6 +93,22 @@ impl ksni::Tray for Icon {
 
     fn title(&self) -> String {
         "Sipster".into()
+    }
+
+    /// A softphone belongs with the chat and mail clients, not under the
+    /// default `ApplicationStatus`. Plasma groups the tray by category.
+    fn category(&self) -> ksni::Category {
+        ksni::Category::Communications
+    }
+
+    /// `NeedsAttention` makes Plasma highlight the icon, which is the whole
+    /// point of having a tray entry for an inbound call you may have missed.
+    fn status(&self) -> ksni::Status {
+        if CallState::from_u8(self.call_state.load(Ordering::Relaxed)) == CallState::Ringing {
+            ksni::Status::NeedsAttention
+        } else {
+            ksni::Status::Active
+        }
     }
 
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
@@ -178,26 +207,25 @@ fn pixmaps() -> Vec<ksni::Icon> {
 
 /// Spawn the tray icon.
 ///
-/// Returns `None` if there is no StatusNotifierWatcher on the session bus —
+/// Returns `None` if there is no `StatusNotifierWatcher` on the session bus —
 /// that is not an error; desktops without a tray simply won't have one.
 #[must_use]
-pub async fn spawn() -> Option<Handle> {
-    let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+pub fn spawn() -> Option<Handle> {
+    let (tx, rx) = std::sync::mpsc::channel();
     let call_state = Arc::new(AtomicU8::new(CallState::Idle as u8));
     let icon = Icon {
         tx,
         call_state: Arc::clone(&call_state),
         pixmap: pixmaps(),
     };
-    let service = ksni::TrayMethods::spawn(icon)
-        .await
+    let service = ksni::blocking::TrayMethods::spawn(icon)
         .map_err(|e| tracing::warn!("no system tray available: {e}"))
         .ok()?;
     tracing::info!("tray icon registered");
     Some(Handle {
         requests: rx,
         call_state,
-        _service: service,
+        service,
     })
 }
 

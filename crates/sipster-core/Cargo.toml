@@ -4,6 +4,8 @@ version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
 description = "Reusable headless engine for Sipster: SIP account management, call orchestration, contacts and call list. UI-agnostic — any frontend skin sits on top of this."
 
 [lints]

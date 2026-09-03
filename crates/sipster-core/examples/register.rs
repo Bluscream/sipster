@@ -75,7 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::time::sleep(Duration::from_millis(500)).await;
     } else {
         println!("registered; idling 60s to observe refresh / inbound calls");
-        tokio::time::sleep(Duration::from_mins(1)).await;
+        tokio::time::sleep(Duration::from_secs(60)).await;
     }
 
     engine.unregister().await?;

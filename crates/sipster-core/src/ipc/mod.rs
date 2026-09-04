@@ -30,6 +30,8 @@ pub use transport::{serve, Listener};
 pub enum Command {
     /// Place a call to a number, extension or SIP URI.
     Call { target: String },
+    /// Fill in the dial box and focus the dialer window without calling immediately.
+    Dial { target: String },
     /// Answer the currently ringing inbound call.
     Answer,
     /// Hang up the active call, or decline a ringing one.
@@ -38,7 +40,7 @@ pub enum Command {
     Show,
     /// Open the Settings window.
     OpenSettings,
-    /// Open or navigate to Contacts.
+    /// Open the Contacts window.
     OpenContacts,
     /// Open or navigate to Call List / History.
     OpenCallList,
@@ -76,7 +78,7 @@ impl Command {
                 "answer" => Some(Self::Answer),
                 "show" | "focus" | "" => Some(Self::Show),
                 "quit" => Some(Self::Quit),
-                _ if action_lower.starts_with("dial/") || action_lower.starts_with("call/") => {
+                _ if action_lower.starts_with("call/") => {
                     let target = &action[5..];
                     let decoded_target = percent_decode(target);
                     if decoded_target.trim().is_empty() {
@@ -85,15 +87,24 @@ impl Command {
                         Some(Self::Call { target: decoded_target.trim().to_string() })
                     }
                 }
+                _ if action_lower.starts_with("dial/") => {
+                    let target = &action[5..];
+                    let decoded_target = percent_decode(target);
+                    if decoded_target.trim().is_empty() {
+                        Some(Self::Show)
+                    } else {
+                        Some(Self::Dial { target: decoded_target.trim().to_string() })
+                    }
+                }
                 _ => {
-                    // Fallback: if query has target= or action is a dialable number or SIP URI
+                    // Fallback: if action is a dialable number or SIP URI, fill the dial box
                     let candidate = if action.is_empty() { query } else { action };
                     let decoded = percent_decode(candidate);
                     let inner = decoded.trim();
                     if inner.is_empty() {
                         Some(Self::Show)
                     } else {
-                        Some(Self::Call { target: inner.to_string() })
+                        Some(Self::Dial { target: inner.to_string() })
                     }
                 }
             };
@@ -117,7 +128,8 @@ impl Command {
             digits
         };
 
-        (!target.is_empty()).then_some(Self::Call { target })
+        // Standard telephony / SIP URIs (tel:, sip:, callto:) fill the dial box without calling immediately
+        (!target.is_empty()).then_some(Self::Dial { target })
     }
 
     /// Parses command-line arguments into a [`Command`], if any was requested.
@@ -324,7 +336,7 @@ mod tests {
     fn parses_plain_tel_uri() {
         assert_eq!(
             Command::from_uri("tel:611"),
-            Some(Command::Call { target: "611".into() })
+            Some(Command::Dial { target: "611".into() })
         );
     }
 
@@ -333,7 +345,7 @@ mod tests {
         // Browsers and desktop handlers produce both of these shapes.
         assert_eq!(
             Command::from_uri("tel://611?call"),
-            Some(Command::Call { target: "611".into() })
+            Some(Command::Dial { target: "611".into() })
         );
     }
 
@@ -341,7 +353,7 @@ mod tests {
     fn strips_rfc3966_visual_separators() {
         assert_eq!(
             Command::from_uri("tel:+49-30-12 34"),
-            Some(Command::Call { target: "+493012 34".replace(' ', "") })
+            Some(Command::Dial { target: "+493012 34".replace(' ', "") })
         );
     }
 
@@ -350,7 +362,7 @@ mod tests {
         // %2B is '+', as delivered by some browsers.
         assert_eq!(
             Command::from_uri("tel:%2B4930123"),
-            Some(Command::Call { target: "+4930123".into() })
+            Some(Command::Dial { target: "+4930123".into() })
         );
     }
 
@@ -363,14 +375,16 @@ mod tests {
         assert_eq!(Command::from_uri("sipster://hangup"), Some(Command::Hangup));
         assert_eq!(Command::from_uri("sipster://answer"), Some(Command::Answer));
         assert_eq!(Command::from_uri("sipster://show"), Some(Command::Show));
-        assert_eq!(Command::from_uri("sipster://dial/611"), Some(Command::Call { target: "611".into() }));
+        assert_eq!(Command::from_uri("sipster://call/611"), Some(Command::Call { target: "611".into() }));
+        assert_eq!(Command::from_uri("sipster://dial/611"), Some(Command::Dial { target: "611".into() }));
+        assert_eq!(Command::from_uri("sipster:611"), Some(Command::Dial { target: "611".into() }));
     }
 
     #[test]
     fn keeps_sip_uris_intact() {
         assert_eq!(
             Command::from_uri("sip:bob@example.com"),
-            Some(Command::Call { target: "sip:bob@example.com".into() })
+            Some(Command::Dial { target: "sip:bob@example.com".into() })
         );
     }
 
@@ -390,6 +404,7 @@ mod tests {
     fn commands_round_trip_as_json() {
         for command in [
             Command::Call { target: "611".into() },
+            Command::Dial { target: "611".into() },
             Command::Answer,
             Command::Hangup,
             Command::Show,
@@ -448,7 +463,7 @@ mod tests {
         assert_eq!(Command::from_args(["--quit"]), Some(Command::Quit));
         assert_eq!(
             Command::from_args(["tel:611"]),
-            Some(Command::Call { target: "611".into() })
+            Some(Command::Dial { target: "611".into() })
         );
         assert_eq!(Command::from_args(["--unknown"]), None);
     }

@@ -541,6 +541,7 @@ impl SipsterApp {
         let needs_engine = !matches!(
             cmd,
             Command::Show
+                | Command::Dial { .. }
                 | Command::OpenSettings
                 | Command::OpenContacts
                 | Command::OpenCallList
@@ -562,6 +563,14 @@ impl SipsterApp {
                     Task::batch([window::gain_focus(id), dial_task])
                 } else {
                     dial_task
+                }
+            }
+            Command::Dial { target } => {
+                self.dial_number = target;
+                if let Some(id) = self.main_window {
+                    window::gain_focus(id)
+                } else {
+                    Task::none()
                 }
             }
             Command::Answer => self.answer(),

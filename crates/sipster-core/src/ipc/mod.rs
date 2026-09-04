@@ -42,7 +42,7 @@ pub enum Command {
     OpenSettings,
     /// Open the Contacts window.
     OpenContacts,
-    /// Open or navigate to Call List / History.
+    /// Open the Call List window.
     OpenCallList,
     /// Ask the running instance to quit.
     Quit,

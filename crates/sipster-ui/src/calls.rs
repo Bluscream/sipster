@@ -11,6 +11,15 @@ use sipster_integrations::{normalize_number, number_contains, CallRecord, CallTy
 
 use crate::ui;
 
+/// A name or number as it should appear, masked in streaming mode.
+fn show(value: &str, mask: bool) -> String {
+    if mask {
+        sipster_core::mask_identity(value)
+    } else {
+        value.to_string()
+    }
+}
+
 /// Which direction of call the list is showing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Filter {
@@ -19,10 +28,18 @@ pub enum Filter {
     Incoming,
     Outgoing,
     Missed,
+    /// Calls that were rejected because the caller is on the block list.
+    Blocked,
 }
 
 impl Filter {
-    pub const ALL: [Self; 4] = [Self::All, Self::Incoming, Self::Outgoing, Self::Missed];
+    pub const ALL: [Self; 5] = [
+        Self::All,
+        Self::Incoming,
+        Self::Outgoing,
+        Self::Missed,
+        Self::Blocked,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -30,6 +47,7 @@ impl Filter {
             Self::Incoming => "Incoming",
             Self::Outgoing => "Outgoing",
             Self::Missed => "Missed",
+            Self::Blocked => "Blocked",
         }
     }
 
@@ -38,9 +56,11 @@ impl Filter {
             Self::All => true,
             Self::Incoming => matches!(call.call_type, CallType::Incoming),
             Self::Outgoing => matches!(call.call_type, CallType::Outgoing),
-            // Rejected calls are ones that never got through either, so they
-            // belong with missed rather than in no filter at all.
-            Self::Missed => matches!(call.call_type, CallType::Missed | CallType::Rejected),
+            // Genuinely missed, i.e. rang and went unanswered. Rejected calls
+            // have their own filter now, so lumping them in here would double
+            // count them.
+            Self::Missed => matches!(call.call_type, CallType::Missed),
+            Self::Blocked => matches!(call.call_type, CallType::Rejected),
         }
     }
 }
@@ -50,7 +70,9 @@ pub enum Message {
     SearchChanged(String),
     FilterChanged(Filter),
     SyncPressed,
-    CallsLoaded(Vec<CallRecord>),
+    /// One batch from one source, appended as it arrives.
+    CallsBatch(Vec<CallRecord>),
+    SyncFinished,
     /// Selects a record, or clears the selection when it is already current.
     Select(String),
     DialNumber(String),
@@ -79,6 +101,19 @@ impl State {
         } else {
             self.selected = Some(id.to_string());
         }
+    }
+
+    /// Merges an incoming batch, keeping the list de-duplicated and newest
+    /// first so it stays coherent while sources are still arriving.
+    pub fn merge(&mut self, batch: Vec<CallRecord>) {
+        self.calls.extend(batch);
+        self.calls.sort_by(|a, b| {
+            sipster_integrations::timestamp_key(&b.timestamp)
+                .cmp(&sipster_integrations::timestamp_key(&a.timestamp))
+                .then_with(|| a.remote_number.cmp(&b.remote_number))
+        });
+        self.calls
+            .dedup_by(|a, b| a.timestamp == b.timestamp && a.remote_number == b.remote_number);
     }
 
     fn matching(&self) -> Vec<&CallRecord> {
@@ -113,7 +148,7 @@ impl State {
     }
 }
 
-pub fn view(state: &State) -> Element<'_, Message> {
+pub fn view(state: &State, mask: bool) -> Element<'_, Message> {
     if let Some((number, name)) = &state.block_prompt {
         return block_prompt(number, name.as_deref());
     }
@@ -171,7 +206,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
             if index > 0 {
                 list = list.push(ui::separator());
             }
-            list = list.push(call_row(call, state.selected.as_deref()));
+            list = list.push(call_row(call, state.selected.as_deref(), mask));
         }
         scrollable(list).height(Length::Fill).into()
     };
@@ -186,7 +221,11 @@ pub fn view(state: &State) -> Element<'_, Message> {
         .into()
 }
 
-fn call_row<'a>(call: &'a CallRecord, selected: Option<&str>) -> Element<'a, Message> {
+fn call_row<'a>(
+    call: &'a CallRecord,
+    selected: Option<&str>,
+    mask: bool,
+) -> Element<'a, Message> {
     let is_selected = selected == Some(call.id.as_str());
 
     // Typographic arrows rather than emoji, so weight and baseline match the
@@ -198,10 +237,10 @@ fn call_row<'a>(call: &'a CallRecord, selected: Option<&str>) -> Element<'a, Mes
         CallType::Rejected => ("⊘", iced::Color::from_rgb(0.75, 0.55, 0.3)),
     };
 
-    let title = call
-        .remote_name
-        .clone()
-        .unwrap_or_else(|| call.remote_number.clone());
+    let title = show(
+        call.remote_name.as_deref().unwrap_or(&call.remote_number),
+        mask,
+    );
 
     let mut detail = call.timestamp.clone();
     if call.duration_seconds > 0 {
@@ -210,7 +249,7 @@ fn call_row<'a>(call: &'a CallRecord, selected: Option<&str>) -> Element<'a, Mes
     }
     if call.remote_name.is_some() {
         detail.push_str("  ·  ");
-        detail.push_str(&call.remote_number);
+        detail.push_str(&show(&call.remote_number, mask));
     }
 
     let summary = row![
@@ -342,13 +381,32 @@ mod tests {
         assert_eq!(s.matching().len(), 1);
     }
 
-    /// A rejected call never connected either, so it belongs under Missed
-    /// rather than being reachable from no filter at all.
+    /// Missed means rang-and-unanswered. Blocked calls have their own filter,
+    /// so counting them here too would show each one twice.
     #[test]
-    fn missed_includes_rejected() {
+    fn missed_and_blocked_are_separate() {
         let mut s = state();
         s.filter = Filter::Missed;
-        assert_eq!(s.matching().len(), 2);
+        assert_eq!(s.matching().len(), 1, "only the genuinely missed call");
+
+        s.filter = Filter::Blocked;
+        assert_eq!(s.matching().len(), 1, "only the rejected call");
+    }
+
+    /// Every record must be reachable from some filter; a call that appears
+    /// under none is a call the user cannot find.
+    #[test]
+    fn every_record_is_reachable_from_some_filter() {
+        let s = state();
+        for call in &s.calls {
+            assert!(
+                Filter::ALL
+                    .iter()
+                    .any(|f| *f != Filter::All && f.accepts(call)),
+                "{:?} is not covered by any filter",
+                call.call_type
+            );
+        }
     }
 
     /// The badge counts genuinely missed calls, not rejected ones the user

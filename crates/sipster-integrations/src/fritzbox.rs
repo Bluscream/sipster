@@ -1,6 +1,8 @@
 //! FRITZ!Box TR-064 integration: phonebook and call list synchronization.
 
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
 use md5::{Digest, Md5};
 use tracing::warn;
 
@@ -62,11 +64,35 @@ impl Default for FritzConfig {
 #[derive(Debug, Clone)]
 pub struct FritzBoxClient {
     config: FritzConfig,
+    /// The digest challenge from the last 401, reused for later calls.
+    ///
+    /// TR-064 answers every unauthenticated request with a 401, so each SOAP
+    /// call cost two HTTP round-trips. The realm and nonce stay valid for a
+    /// while, so remembering them lets subsequent calls authenticate on the
+    /// first try; a stale nonce simply 401s again and refreshes this.
+    challenge: Arc<Mutex<Option<HashMap<String, String>>>>,
 }
 
 impl FritzBoxClient {
     pub fn new(config: FritzConfig) -> Self {
-        Self { config }
+        Self {
+            config,
+            challenge: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    fn cached_challenge(&self) -> Option<HashMap<String, String>> {
+        self.challenge
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    fn remember_challenge(&self, params: &HashMap<String, String>) {
+        *self
+            .challenge
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(params.clone());
     }
 
     /// Performs an authenticated TR-064 SOAP request.
@@ -99,18 +125,40 @@ impl FritzBoxClient {
 
         let soap_action = format!("{service_type}#{action}");
         let url = format!("http://{}:{}{control_url}", self.config.host, self.config.port);
+        let started = std::time::Instant::now();
 
         let agent = crate::http_agent();
-        let res = agent.post(&url)
+        let mut request = agent
+            .post(&url)
             .set("Content-Type", "text/xml; charset=\"utf-8\"")
-            .set("SOAPAction", &soap_action)
-            .send_string(&body);
+            .set("SOAPAction", &soap_action);
+
+        // Authenticate up front when we already hold a challenge, so only the
+        // first call of a session pays for the 401 round-trip.
+        let preauthorized = self.cached_challenge();
+        if let Some(params) = &preauthorized {
+            request = request.set(
+                "Authorization",
+                &build_digest_header(
+                    &self.config.username,
+                    &self.config.password,
+                    "POST",
+                    control_url,
+                    params,
+                ),
+            );
+        }
+        let res = request.send_string(&body);
 
         match res {
-            Ok(response) => Ok(response.into_string()?),
+            Ok(response) => {
+                tracing::debug!(action, elapsed_ms = started.elapsed().as_millis(), "SOAP (no auth)");
+                Ok(response.into_string()?)
+            }
             Err(ureq::Error::Status(401, response)) => {
                 let auth_header = response.header("WWW-Authenticate").unwrap_or_default();
                 let auth_params = parse_auth_header(auth_header);
+                self.remember_challenge(&auth_params);
                 let auth_val = build_digest_header(
                     &self.config.username,
                     &self.config.password,
@@ -126,7 +174,14 @@ impl FritzBoxClient {
                     .send_string(&body);
 
                 match authenticated_req {
-                    Ok(auth_ok) => Ok(auth_ok.into_string()?),
+                    Ok(auth_ok) => {
+                        tracing::debug!(
+                            action,
+                            elapsed_ms = started.elapsed().as_millis(),
+                            "SOAP (401 + digest retry)"
+                        );
+                        Ok(auth_ok.into_string()?)
+                    }
                     Err(ureq::Error::Status(401, err_resp)) => {
                         let text = err_resp.into_string().unwrap_or_default();
                         Err(FritzError::AuthFailed {
@@ -143,6 +198,38 @@ impl FritzBoxClient {
 
     /// Fetches all contacts across all phonebooks in the FRITZ!Box.
     pub fn fetch_contacts(&self) -> Result<Vec<Contact>, FritzError> {
+        let overall = std::time::Instant::now();
+        let targets = self.phonebook_targets()?;
+        let phonebook_count = targets.len();
+
+        // The downloads dominate: the router generates each phonebook on
+        // demand, and the largest took 8.5s while four others took under
+        // 100ms. Sequentially that is the sum; in parallel it is the slowest.
+        let all_contacts: Vec<Contact> = std::thread::scope(|scope| {
+            let handles: Vec<_> = targets
+                .iter()
+                .map(|(pbid, pb_name, pb_url)| {
+                    scope.spawn(move || download_phonebook(*pbid, pb_name, pb_url))
+                })
+                .collect();
+            handles
+                .into_iter()
+                .filter_map(|handle| handle.join().ok())
+                .flatten()
+                .collect()
+        });
+
+        tracing::info!(
+            phonebooks = phonebook_count,
+            contacts = all_contacts.len(),
+            elapsed_ms = overall.elapsed().as_millis(),
+            "FRITZ!Box phonebook sync finished"
+        );
+        Ok(all_contacts)
+    }
+
+    /// Resolves every phonebook's id, name and download URL.
+    fn phonebook_targets(&self) -> Result<Vec<(u32, String, String)>, FritzError> {
         let xml = self.soap_call(
             "/upnp/control/x_contact",
             "urn:dslforum-org:service:X_AVM-DE_OnTel:1",
@@ -150,17 +237,13 @@ impl FritzBoxClient {
             &[],
         )?;
 
-        let pblist_str = extract_xml_tag(&xml, "NewPhonebookList").unwrap_or_default();
-        let mut all_contacts = Vec::new();
+        let list = extract_xml_tag(&xml, "NewPhonebookList").unwrap_or_default();
+        let mut targets = Vec::new();
 
-        for id_str in pblist_str.split(',') {
+        for id_str in list.split(',') {
             let id_str = id_str.trim();
-            if id_str.is_empty() {
-                continue;
-            }
             let Ok(pbid) = id_str.parse::<u32>() else { continue };
 
-            // Query phonebook details
             let pb_res = self.soap_call(
                 "/upnp/control/x_contact",
                 "urn:dslforum-org:service:X_AVM-DE_OnTel:1",
@@ -168,25 +251,14 @@ impl FritzBoxClient {
                 &[("NewPhonebookID", id_str)],
             )?;
 
-            let pb_name = extract_xml_tag(&pb_res, "NewPhonebookName")
+            let name = extract_xml_tag(&pb_res, "NewPhonebookName")
                 .unwrap_or_else(|| format!("Phonebook {pbid}"));
-            let pb_url = extract_xml_tag(&pb_res, "NewPhonebookURL").unwrap_or_default();
-
-            if !pb_url.is_empty() {
-                match crate::http_agent().get(&pb_url).call() {
-                    Ok(resp) => {
-                        let xml_content = resp.into_string()?;
-                        let parsed = parse_phonebook_xml(&xml_content, pbid, &pb_name);
-                        all_contacts.extend(parsed);
-                    }
-                    Err(e) => {
-                        warn!(phonebook = %pb_name, error = %e, "could not download phonebook URL");
-                    }
-                }
+            let url = extract_xml_tag(&pb_res, "NewPhonebookURL").unwrap_or_default();
+            if !url.is_empty() {
+                targets.push((pbid, name, url));
             }
         }
-
-        Ok(all_contacts)
+        Ok(targets)
     }
 
     /// Fetches the recent call list from the FRITZ!Box.
@@ -207,6 +279,37 @@ impl FritzBoxClient {
 
         let cl_resp = crate::http_agent().get(&call_list_url).call()?.into_string()?;
         Ok(parse_call_list_xml(&cl_resp))
+    }
+}
+
+/// Downloads and parses one phonebook. Failures are reported and skipped so a
+/// single unavailable phonebook does not lose the others.
+fn download_phonebook(pbid: u32, pb_name: &str, pb_url: &str) -> Vec<Contact> {
+    let started = std::time::Instant::now();
+
+    let body = crate::http_agent()
+        .get(pb_url)
+        .call()
+        .map_err(|e| e.to_string())
+        .and_then(|resp| resp.into_string().map_err(|e| e.to_string()));
+
+    match body {
+        Ok(xml) => {
+            let bytes = xml.len();
+            let parsed = parse_phonebook_xml(&xml, pbid, pb_name);
+            tracing::debug!(
+                phonebook = %pb_name,
+                contacts = parsed.len(),
+                bytes,
+                elapsed_ms = started.elapsed().as_millis(),
+                "downloaded phonebook"
+            );
+            parsed
+        }
+        Err(e) => {
+            warn!(phonebook = %pb_name, error = %e, "could not download phonebook");
+            Vec::new()
+        }
     }
 }
 

@@ -39,6 +39,15 @@ pub fn root(app: &SipsterApp) -> Element<'_, Message> {
         .into()
 }
 
+/// A name or number as it should appear, masked in streaming mode.
+fn show(value: &str, mask: bool) -> String {
+    if mask {
+        sipster_core::mask_identity(value)
+    } else {
+        value.to_string()
+    }
+}
+
 fn statusbar(app: &SipsterApp) -> Element<'_, Message> {
     let (circle_char, circle_color, reg_text) = match &app.registration {
         RegistrationState::Registered => ("●", iced::Color::from_rgb(0.2, 0.85, 0.3), "Registered"),
@@ -47,9 +56,14 @@ fn statusbar(app: &SipsterApp) -> Element<'_, Message> {
         RegistrationState::Unregistered => ("○", iced::Color::from_rgb(0.6, 0.6, 0.6), "Offline"),
     };
 
+    // The account line carries the SIP username and registrar, both of which
+    // identify the user on a shared screen.
+    let mask = app.ui().streaming_mode;
     let msg = match (&app.account_info, &app.registration) {
-        (Some(info), RegistrationState::Registered) => format!("{reg_text} as {info}"),
-        (Some(info), _) => format!("{reg_text} ({info})"),
+        (Some(info), RegistrationState::Registered) => {
+            format!("{reg_text} as {}", show(info, mask))
+        }
+        (Some(info), _) => format!("{reg_text} ({})", show(info, mask)),
         (None, _) => reg_text.to_string(),
     };
 
@@ -69,13 +83,14 @@ fn statusbar(app: &SipsterApp) -> Element<'_, Message> {
 /// Shows the incoming-call prompt when ringing, otherwise the dialer.
 fn body(app: &SipsterApp) -> Element<'_, Message> {
     if let Some(incoming) = &app.incoming {
-        return incoming_prompt(&incoming.remote);
+        return incoming_prompt(&incoming.remote, app.ui().streaming_mode);
     }
     dialer(app)
 }
 
-fn incoming_prompt(remote: &str) -> Element<'_, Message> {
+fn incoming_prompt(remote: &str, mask: bool) -> Element<'_, Message> {
     let (display_name, sip_addr) = parse_caller_display(remote);
+    let (display_name, sip_addr) = (show(&display_name, mask), show(&sip_addr, mask));
 
     column![
         text("Incoming call").size(22),
@@ -168,7 +183,11 @@ fn banner_handle() -> Option<&'static image::Handle> {
 }
 
 fn dialer(app: &SipsterApp) -> Element<'_, Message> {
+    // The dial field is hidden with `secure`, not by rewriting its value:
+    // substituting a mask would feed the mask back through `on_input` and
+    // destroy what the user typed.
     let number_input = text_input("Number or extension…", &app.dial_number)
+        .secure(app.ui().streaming_mode)
         .on_input(Message::DialInputChanged)
         .on_submit(Message::CallPressed)
         .padding(10)
@@ -182,9 +201,13 @@ fn dialer(app: &SipsterApp) -> Element<'_, Message> {
 
     // While a call is up, show who we are talking to and its live state.
     let call_line: Element<'_, Message> = match &app.active {
-        Some(call) => text(format!("{} — {}", call.remote, state_label(call.state)))
-            .size(14)
-            .into(),
+        Some(call) => text(format!(
+            "{} — {}",
+            show(&call.remote, app.ui().streaming_mode),
+            state_label(call.state)
+        ))
+        .size(14)
+        .into(),
         None => Space::new().height(0).into(),
     };
 

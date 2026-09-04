@@ -31,6 +31,15 @@ pub use model::{
 /// blocking pool and every later sync would hang with no error anywhere.
 #[must_use]
 pub fn http_agent() -> ureq::Agent {
+    // One shared agent for the whole process. `ureq::Agent` is a cheap
+    // clonable handle around a connection pool, so building a new one per
+    // request — as every call site used to — threw the pool away and paid a
+    // fresh TCP handshake every time.
+    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
+    AGENT.get_or_init(build_agent).clone()
+}
+
+fn build_agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
         // Connect fast so an unreachable host fails quickly, but read
         // patiently: a FRITZ!Box generates calllist.lua on demand and can take
@@ -111,6 +120,106 @@ impl SyncManager {
         }
     }
 
+    /// Streams contacts as each provider returns, rather than after all of
+    /// them have.
+    ///
+    /// The local store answers immediately and the router can take ten
+    /// seconds, so waiting for everything meant staring at "Syncing…" while
+    /// results were already in hand. Each batch is sent as it lands; the
+    /// receiver merges and re-sorts.
+    pub fn sync_contacts_streaming(&self, tx: tokio::sync::mpsc::UnboundedSender<Vec<Contact>>) {
+        let local = self.local_store.clone();
+        let fritz = self.fritz_client.clone();
+        let google = self.google_clients.clone();
+        let carddav = self.carddav_clients.clone();
+        let cache = Arc::clone(&self.cached_contacts);
+
+        tokio::spawn(async move {
+            let mut everything = Vec::new();
+
+            // Local first: it is on disk and costs nothing, so the list is
+            // never empty while the network is still working.
+            match local.load_contacts() {
+                Ok(contacts) if !contacts.is_empty() => {
+                    everything.extend(contacts.clone());
+                    let _ = tx.send(contacts);
+                }
+                Ok(_) => {}
+                Err(e) => warn!(error = %e, "could not read local contacts"),
+            }
+
+            let mut tasks: Vec<
+                std::pin::Pin<Box<dyn std::future::Future<Output = Vec<Contact>> + Send>>,
+            > = Vec::new();
+            if let Some(client) = fritz {
+                tasks.push(Box::pin(run_provider_owned("FRITZ!Box".to_string(), move || {
+                    client.fetch_contacts()
+                })));
+            }
+            for client in google {
+                let label = format!("Google ({})", client.email);
+                tasks.push(Box::pin(run_provider_owned(label, move || {
+                    client.fetch_contacts()
+                })));
+            }
+            for client in carddav {
+                let label = format!("CardDAV ({})", client.config.url);
+                tasks.push(Box::pin(run_provider_owned(label, move || {
+                    client.fetch_contacts()
+                })));
+            }
+
+            // Emit each provider the moment it finishes, in completion order.
+            let mut pending: futures_util::stream::FuturesUnordered<_> =
+                tasks.into_iter().collect();
+            while let Some(batch) = futures_util::StreamExt::next(&mut pending).await {
+                if batch.is_empty() {
+                    continue;
+                }
+                everything.extend(batch.clone());
+                if tx.send(batch).is_err() {
+                    return; // window closed
+                }
+            }
+
+            *cache.write().await = everything;
+        });
+    }
+
+    /// Streams call records as each source returns. See
+    /// [`sync_contacts_streaming`](Self::sync_contacts_streaming).
+    pub fn sync_calls_streaming(&self, tx: tokio::sync::mpsc::UnboundedSender<Vec<CallRecord>>) {
+        let local = self.local_store.clone();
+        let fritz = self.fritz_client.clone();
+        let cache = Arc::clone(&self.cached_calls);
+
+        tokio::spawn(async move {
+            let mut everything = Vec::new();
+
+            match local.load_calls() {
+                Ok(calls) if !calls.is_empty() => {
+                    everything.extend(calls.clone());
+                    let _ = tx.send(calls);
+                }
+                Ok(_) => {}
+                Err(e) => warn!(error = %e, "could not read local call history"),
+            }
+
+            if let Some(client) = fritz {
+                let batch =
+                    run_provider("FRITZ!Box call list", move || client.fetch_calls()).await;
+                if !batch.is_empty() {
+                    everything.extend(batch.clone());
+                    if tx.send(batch).is_err() {
+                        return;
+                    }
+                }
+            }
+
+            *cache.write().await = everything;
+        });
+    }
+
     /// Refreshes contacts from all active providers and merges them.
     pub async fn sync_contacts(&self) -> Vec<Contact> {
         let mut merged = Vec::new();
@@ -135,27 +244,40 @@ impl SyncManager {
         merged
     }
 
+    /// Fetches from every configured provider at once.
+    ///
+    /// These were awaited one after another, so the total was the sum of every
+    /// provider's latency — a slow router delayed the Google and `CardDAV`
+    /// results behind it for no reason. They are independent, so the total is
+    /// now the slowest one rather than the sum.
     async fn fetch_remote_contacts(&self) -> Vec<Contact> {
-        let mut remote = Vec::new();
+        let mut tasks: Vec<std::pin::Pin<Box<dyn std::future::Future<Output = Vec<Contact>> + Send>>> =
+            Vec::new();
 
         if let Some(client) = self.fritz_client.clone() {
-            let fetched = run_provider("FRITZ!Box", move || client.fetch_contacts()).await;
-            remote.extend(fetched);
+            tasks.push(Box::pin(run_provider_owned(
+                "FRITZ!Box".to_string(),
+                move || client.fetch_contacts(),
+            )));
         }
-
         for client in self.google_clients.clone() {
             let label = format!("Google ({})", client.email);
-            let fetched = run_provider(&label, move || client.fetch_contacts()).await;
-            remote.extend(fetched);
+            tasks.push(Box::pin(run_provider_owned(label, move || {
+                client.fetch_contacts()
+            })));
         }
-
         for client in self.carddav_clients.clone() {
             let label = format!("CardDAV ({})", client.config.url);
-            let fetched = run_provider(&label, move || client.fetch_contacts()).await;
-            remote.extend(fetched);
+            tasks.push(Box::pin(run_provider_owned(label, move || {
+                client.fetch_contacts()
+            })));
         }
 
-        remote
+        futures_util::future::join_all(tasks)
+            .await
+            .into_iter()
+            .flatten()
+            .collect()
     }
 
     /// Refreshes call history from all active providers and merges them,
@@ -209,6 +331,17 @@ impl SyncManager {
 /// Every provider call used to be wrapped in `if let Ok(Ok(..))`, which
 /// discarded both the provider's error and a panic in the worker thread — a
 /// misconfigured account synced zero contacts and said nothing at all.
+/// [`run_provider`] with an owned label, so it can be held across an `await`
+/// in a joined set.
+async fn run_provider_owned<T, E, F>(label: String, fetch: F) -> Vec<T>
+where
+    F: FnOnce() -> Result<Vec<T>, E> + Send + 'static,
+    T: Send + 'static,
+    E: std::fmt::Display + Send + 'static,
+{
+    run_provider(&label, fetch).await
+}
+
 async fn run_provider<T, E, F>(label: &str, fetch: F) -> Vec<T>
 where
     F: FnOnce() -> Result<Vec<T>, E> + Send + 'static,

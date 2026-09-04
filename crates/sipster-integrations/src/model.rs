@@ -320,10 +320,14 @@ mod tests {
 /// 31.03 above 30.07 — every "31st" ahead of every "30th", regardless of month
 /// — so the list was not in date order at all.
 ///
-/// Returns `(year, month, day, hour, minute)`; unparseable input sorts oldest
-/// rather than jumping to the top.
+/// Returns `(year, month, day, hour, minute, second)`; unparseable input sorts
+/// oldest rather than jumping to the top.
+///
+/// Seconds matter: local records carry them and several calls commonly land in
+/// the same minute. Without them those rows tied and fell back to sorting by
+/// number, so a 07:17:00 call appeared above a 07:17:14 one.
 #[must_use]
-pub fn timestamp_key(raw: &str) -> (i32, u32, u32, u32, u32) {
+pub fn timestamp_key(raw: &str) -> (i32, u32, u32, u32, u32, u32) {
     let raw = raw.trim();
 
     // ISO-8601: 2026-09-04T10:00:00Z
@@ -333,8 +337,8 @@ pub fn timestamp_key(raw: &str) -> (i32, u32, u32, u32, u32) {
             if let (Ok(y), Ok(m), Ok(d)) =
                 (iso[0].parse::<i32>(), iso[1].parse::<u32>(), iso[2].parse::<u32>())
             {
-                let (hh, mm) = parse_hh_mm(time);
-                return (y, m, d, hh, mm);
+                let (hh, mm, ss) = parse_time(time);
+                return (y, m, d, hh, mm, ss);
             }
         }
 
@@ -346,20 +350,27 @@ pub fn timestamp_key(raw: &str) -> (i32, u32, u32, u32, u32) {
             {
                 // Two-digit years are this century; the router has no others.
                 let year = if y < 100 { 2000 + y } else { y };
-                let (hh, mm) = parse_hh_mm(time);
-                return (year, m, d, hh, mm);
+                let (hh, mm, ss) = parse_time(time);
+                return (year, m, d, hh, mm, ss);
             }
         }
     }
 
-    (0, 0, 0, 0, 0)
+    (0, 0, 0, 0, 0, 0)
 }
 
-fn parse_hh_mm(time: &str) -> (u32, u32) {
-    let mut parts = time.trim().split(':');
+/// `HH:MM` or `HH:MM:SS`, with any trailing zone marker ignored.
+fn parse_time(time: &str) -> (u32, u32, u32) {
+    let time = time.trim().trim_end_matches('Z');
+    let mut parts = time.split(':');
     let hh = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0);
     let mm = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0);
-    (hh, mm)
+    let ss = parts
+        .next()
+        .and_then(|v| v.split(['.', '+', '-']).next())
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    (hh, mm, ss)
 }
 
 #[cfg(test)]
@@ -368,8 +379,17 @@ mod timestamp_tests {
 
     #[test]
     fn parses_both_shapes_the_providers_produce() {
-        assert_eq!(timestamp_key("2026-09-04T10:30:00Z"), (2026, 9, 4, 10, 30));
-        assert_eq!(timestamp_key("31.07.26 16:06"), (2026, 7, 31, 16, 6));
+        assert_eq!(timestamp_key("2026-09-04T10:30:15Z"), (2026, 9, 4, 10, 30, 15));
+        assert_eq!(timestamp_key("31.07.26 16:06"), (2026, 7, 31, 16, 6, 0));
+    }
+
+    /// Several calls routinely land in the same minute; without seconds they
+    /// tied and fell back to sorting by phone number.
+    #[test]
+    fn seconds_break_ties_within_a_minute() {
+        let earlier = timestamp_key("2026-09-21T07:17:00Z");
+        let later = timestamp_key("2026-09-21T07:17:14Z");
+        assert!(later > earlier);
     }
 
     /// The bug this exists to prevent: sorting the raw strings put every 31st
@@ -393,8 +413,8 @@ mod timestamp_tests {
 
     #[test]
     fn unparseable_timestamps_sort_oldest() {
-        assert_eq!(timestamp_key("who knows"), (0, 0, 0, 0, 0));
-        assert_eq!(timestamp_key(""), (0, 0, 0, 0, 0));
+        assert_eq!(timestamp_key("who knows"), (0, 0, 0, 0, 0, 0));
+        assert_eq!(timestamp_key(""), (0, 0, 0, 0, 0, 0));
         assert!(timestamp_key("31.07.26 16:06") > timestamp_key("nonsense"));
     }
 }

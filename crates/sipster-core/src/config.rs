@@ -224,6 +224,9 @@ pub struct UiSettings {
     pub register_uri_schemes: bool,
     /// Keep running in the background when the dialer window is closed if a system tray icon is active.
     pub close_to_tray: bool,
+    /// Mask names and numbers everywhere they are displayed, leaving only the
+    /// first and last character. For screen sharing and recording.
+    pub streaming_mode: bool,
 }
 
 impl Default for UiSettings {
@@ -237,7 +240,31 @@ impl Default for UiSettings {
             show_banner: true,
             register_uri_schemes: false,
             close_to_tray: true,
+            streaming_mode: false,
         }
+    }
+}
+
+/// Masks a name or number for [`UiSettings::streaming_mode`].
+///
+/// Keeps the first and last character so entries stay tellable apart and the
+/// layout keeps its shape, and hides everything between:
+/// `Alice Smith` becomes `A…h`, `+49301234567` becomes `+…7`.
+///
+/// One- and two-character values are replaced outright rather than returned
+/// as-is, since `A…A` would leak the whole thing.
+#[must_use]
+pub fn mask_identity(value: &str) -> String {
+    let trimmed = value.trim();
+    let mut chars = trimmed.chars();
+    let Some(first) = chars.next() else {
+        return String::new();
+    };
+    match chars.next_back() {
+        // 3 or more characters: keep both ends.
+        Some(last) if trimmed.chars().count() > 2 => format!("{first}…{last}"),
+        // 1-2 characters: nothing can be safely revealed.
+        _ => "…".to_string(),
     }
 }
 
@@ -647,5 +674,37 @@ mod tests {
         assert_eq!(mode, 0o600, "config holds a password; mode was {mode:o}");
 
         std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod mask_tests {
+    use super::mask_identity;
+
+    #[test]
+    fn keeps_only_the_outer_characters() {
+        assert_eq!(mask_identity("Alice Smith"), "A…h");
+        assert_eq!(mask_identity("+49301234567"), "+…7");
+        assert_eq!(mask_identity("**610"), "*…0");
+    }
+
+    /// Short values cannot keep both ends without revealing everything.
+    #[test]
+    fn very_short_values_reveal_nothing() {
+        assert_eq!(mask_identity("ab"), "…");
+        assert_eq!(mask_identity("a"), "…");
+        assert_eq!(mask_identity(""), "");
+    }
+
+    /// Slicing by byte would panic or split a character in half.
+    #[test]
+    fn handles_multi_byte_characters() {
+        assert_eq!(mask_identity("Müller"), "M…r");
+        assert_eq!(mask_identity("日本語です"), "日…す");
+    }
+
+    #[test]
+    fn surrounding_whitespace_is_ignored() {
+        assert_eq!(mask_identity("  Alice  "), "A…e");
     }
 }

@@ -377,10 +377,11 @@ impl SipsterApp {
             .map(Message::Settings);
         }
         if Some(window) == self.contacts_window {
-            return contacts::view(&self.contacts).map(Message::Contacts);
+            return contacts::view(&self.contacts, self.config.ui.streaming_mode)
+                .map(Message::Contacts);
         }
         if Some(window) == self.calls_window {
-            return calls::view(&self.calls).map(Message::Calls);
+            return calls::view(&self.calls, self.config.ui.streaming_mode).map(Message::Calls);
         }
         view::root(self)
     }
@@ -491,14 +492,39 @@ impl SipsterApp {
         let (id, open) = window::open(crate::contacts_window_settings());
         self.contacts_window = Some(id);
 
-        let sync_mgr = self.sync_manager.clone();
-        let load_contacts = Task::future(async move {
-            let contacts = sync_mgr.sync_contacts().await;
-            Message::Contacts(contacts::Message::ContactsLoaded(contacts))
-        });
-
+        self.contacts.contacts.clear();
         self.contacts.loading = true;
-        Task::batch([open.map(Message::ContactsOpened), load_contacts])
+        Task::batch([open.map(Message::ContactsOpened), self.stream_contacts()])
+    }
+
+    /// Streams contact batches into the window as each provider answers.
+    ///
+    /// `Task::run` turns the channel into a stream of messages, so the list
+    /// fills in progressively instead of appearing all at once after the
+    /// slowest provider. A final `SyncFinished` clears the spinner.
+    fn stream_contacts(&self) -> Task<Message> {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        self.sync_manager.sync_contacts_streaming(tx);
+        Task::run(
+            tokio_stream::wrappers::UnboundedReceiverStream::new(rx),
+            |batch| Message::Contacts(contacts::Message::ContactsBatch(batch)),
+        )
+        .chain(Task::done(Message::Contacts(
+            contacts::Message::SyncFinished,
+        )))
+    }
+
+    /// Streams call batches into the history window. See [`stream_contacts`].
+    ///
+    /// [`stream_contacts`]: Self::stream_contacts
+    fn stream_calls(&self) -> Task<Message> {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        self.sync_manager.sync_calls_streaming(tx);
+        Task::run(
+            tokio_stream::wrappers::UnboundedReceiverStream::new(rx),
+            |batch| Message::Calls(calls::Message::CallsBatch(batch)),
+        )
+        .chain(Task::done(Message::Calls(calls::Message::SyncFinished)))
     }
 
     #[allow(clippy::too_many_lines)]
@@ -513,15 +539,15 @@ impl SipsterApp {
                 Task::none()
             }
             contacts::Message::SyncPressed => {
+                self.contacts.contacts.clear();
                 self.contacts.loading = true;
-                let sync_mgr = self.sync_manager.clone();
-                Task::future(async move {
-                    let contacts = sync_mgr.sync_contacts().await;
-                    Message::Contacts(contacts::Message::ContactsLoaded(contacts))
-                })
+                self.stream_contacts()
             }
-            contacts::Message::ContactsLoaded(contacts) => {
-                self.contacts.contacts = contacts;
+            contacts::Message::ContactsBatch(batch) => {
+                self.contacts.merge(batch);
+                Task::none()
+            }
+            contacts::Message::SyncFinished => {
                 self.contacts.loading = false;
                 Task::none()
             }
@@ -644,14 +670,9 @@ impl SipsterApp {
         let (id, open) = window::open(crate::calls_window_settings());
         self.calls_window = Some(id);
 
-        let sync_mgr = self.sync_manager.clone();
-        let load_calls = Task::future(async move {
-            let calls = sync_mgr.sync_calls().await;
-            Message::Calls(calls::Message::CallsLoaded(calls))
-        });
-
+        self.calls.calls.clear();
         self.calls.loading = true;
-        Task::batch([open.map(Message::CallsOpened), load_calls])
+        Task::batch([open.map(Message::CallsOpened), self.stream_calls()])
     }
 
     fn on_calls(&mut self, msg: calls::Message) -> Task<Message> {
@@ -661,15 +682,15 @@ impl SipsterApp {
                 Task::none()
             }
             calls::Message::SyncPressed => {
+                self.calls.calls.clear();
                 self.calls.loading = true;
-                let sync_mgr = self.sync_manager.clone();
-                Task::future(async move {
-                    let calls = sync_mgr.sync_calls().await;
-                    Message::Calls(calls::Message::CallsLoaded(calls))
-                })
+                self.stream_calls()
             }
-            calls::Message::CallsLoaded(calls) => {
-                self.calls.calls = calls;
+            calls::Message::CallsBatch(batch) => {
+                self.calls.merge(batch);
+                Task::none()
+            }
+            calls::Message::SyncFinished => {
                 self.calls.loading = false;
                 Task::none()
             }
@@ -801,6 +822,14 @@ impl SipsterApp {
             }
 
             // Google account OAuth flow:
+            S::StreamingMode(on) => {
+                self.config.ui.streaming_mode = on;
+                self.persist();
+            }
+            S::ImportGoogleClientJson(path) => {
+                self.settings.draft_google_json_path = path;
+                self.import_google_client_json();
+            }
             S::GoogleClientIdChanged(v) => self.settings.draft_google_client_id = v,
             S::GoogleClientSecretChanged(v) => self.settings.draft_google_client_secret = v,
             other => return self.on_carddav_settings(other),
@@ -902,6 +931,64 @@ impl SipsterApp {
             other => return self.on_google_settings(other),
         }
         Task::none()
+    }
+
+    /// Fills the Google client id/secret from the JSON Google hands out.
+    ///
+    /// The file is read from wherever the user downloaded it and only its two
+    /// fields are kept, in their own `0600` config. Nothing is copied into the
+    /// repository — a client secret in a public repo is a published secret,
+    /// which is why none ships with Sipster.
+    fn import_google_client_json(&mut self) {
+        let path = self.settings.draft_google_json_path.trim();
+        if path.is_empty() {
+            return;
+        }
+
+        let expanded = path.strip_prefix("~/").map_or_else(
+            || std::path::PathBuf::from(path),
+            |rest| {
+                std::env::var_os("HOME")
+                    .map_or_else(|| std::path::PathBuf::from(path), |home| {
+                        std::path::Path::new(&home).join(rest)
+                    })
+            },
+        );
+
+        let Ok(text) = std::fs::read_to_string(&expanded) else {
+            // Silent while the user is still typing the path; only a complete,
+            // readable file counts as an attempt.
+            return;
+        };
+
+        let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
+            self.settings.error = Some("that file is not valid JSON".into());
+            return;
+        };
+
+        // Google nests the credentials under "installed" for desktop clients
+        // and "web" for web ones; accept either, and a bare object too.
+        let creds = json
+            .get("installed")
+            .or_else(|| json.get("web"))
+            .unwrap_or(&json);
+
+        let id = creds.get("client_id").and_then(|v| v.as_str()).unwrap_or_default();
+        let secret = creds
+            .get("client_secret")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+
+        if id.is_empty() || secret.is_empty() {
+            self.settings.error =
+                Some("no client_id/client_secret in that file — is it the OAuth client JSON?".into());
+            return;
+        }
+
+        self.settings.draft_google_client_id = id.to_string();
+        self.settings.draft_google_client_secret = secret.to_string();
+        self.settings.error = None;
+        self.settings.notice = Some("Google client credentials loaded".into());
     }
 
     /// The Google account flow, which is long enough to stand on its own.

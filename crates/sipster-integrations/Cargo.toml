@@ -21,6 +21,7 @@ tokio = { workspace = true }
 uuid = { workspace = true }
 md-5 = "0.10"
 ureq = { version = "2.10", features = ["json"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 [lints]
 workspace = true

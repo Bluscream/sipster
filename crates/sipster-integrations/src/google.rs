@@ -277,7 +277,9 @@ impl GoogleContactsClient {
             return Err("enter your Google OAuth client id and secret first".into());
         }
 
-        let redirect_uri = format!("http://127.0.0.1:{port}");
+        // Google desktop clients register "http://localhost" and accept any
+        // port on it. Sending 127.0.0.1 instead risks redirect_uri_mismatch.
+        let redirect_uri = format!("http://localhost:{port}");
         let listener = TcpListener::bind(format!("127.0.0.1:{port}"))
             .map_err(|e| format!("could not listen on port {port}: {e}"))?;
 

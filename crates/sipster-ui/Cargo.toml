@@ -14,6 +14,7 @@ workspace = true
 [dependencies]
 sipster-core = { path = "../sipster-core" }
 sipster-integrations = { path = "../sipster-integrations" }
+tokio-stream = { version = "0.1", default-features = false }
 
 tokio.workspace = true
 tracing.workspace = true

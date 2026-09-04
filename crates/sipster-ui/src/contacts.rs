@@ -12,11 +12,22 @@ use sipster_integrations::{normalize_number, number_contains, Contact, RecordSou
 
 use crate::ui;
 
+/// A name, number or address as it should appear, masked in streaming mode.
+fn show(value: &str, mask: bool) -> String {
+    if mask {
+        sipster_core::mask_identity(value)
+    } else {
+        value.to_string()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Message {
     SearchChanged(String),
     SyncPressed,
-    ContactsLoaded(Vec<Contact>),
+    /// One batch from one provider, appended as it arrives.
+    ContactsBatch(Vec<Contact>),
+    SyncFinished,
     /// Selects a contact, or clears the selection when it is already current.
     Select(String),
     DialContact(String),
@@ -67,6 +78,16 @@ impl State {
         }
     }
 
+    /// Merges an incoming batch, keeping the list sorted and de-duplicated so
+    /// it stays coherent while providers are still arriving.
+    pub fn merge(&mut self, batch: Vec<Contact>) {
+        self.contacts.extend(batch);
+        self.contacts.sort_by_cached_key(|c| c.name.to_lowercase());
+        self.contacts.dedup_by(|a, b| {
+            a.name.eq_ignore_ascii_case(&b.name) && a.primary_number() == b.primary_number()
+        });
+    }
+
     /// Contacts matching the search box.
     ///
     /// Numbers are compared normalized, so "030 123" finds `+49301234` —
@@ -92,7 +113,7 @@ impl State {
     }
 }
 
-pub fn view(state: &State) -> Element<'_, Message> {
+pub fn view(state: &State, mask: bool) -> Element<'_, Message> {
     if let Some(draft) = &state.edit_draft {
         return edit_contact(draft);
     }
@@ -139,7 +160,7 @@ pub fn view(state: &State) -> Element<'_, Message> {
             if index > 0 {
                 list = list.push(ui::separator());
             }
-            list = list.push(contact_row(contact, state.selected.as_deref()));
+            list = list.push(contact_row(contact, state.selected.as_deref(), mask));
         }
         scrollable(list).height(Length::Fill).into()
     };
@@ -162,7 +183,11 @@ pub fn view(state: &State) -> Element<'_, Message> {
 
 /// One contact. Collapsed it is a name and a one-line number summary; expanded
 /// it lists each number with its own actions.
-fn contact_row<'a>(contact: &'a Contact, selected: Option<&str>) -> Element<'a, Message> {
+fn contact_row<'a>(
+    contact: &'a Contact,
+    selected: Option<&str>,
+    mask: bool,
+) -> Element<'a, Message> {
     let is_selected = selected == Some(contact.id.as_str());
 
     let summary_line = if contact.numbers.is_empty() {
@@ -171,7 +196,7 @@ fn contact_row<'a>(contact: &'a Contact, selected: Option<&str>) -> Element<'a, 
         contact
             .numbers
             .iter()
-            .map(|n| n.number.as_str())
+            .map(|n| show(&n.number, mask))
             .collect::<Vec<_>>()
             .join("  ·  ")
     };
@@ -179,8 +204,9 @@ fn contact_row<'a>(contact: &'a Contact, selected: Option<&str>) -> Element<'a, 
     // Router phonebooks frequently store a bare number as the name. Printing
     // it again underneath is pure noise, so the second line is dropped when it
     // says nothing new.
-    let mut heading = column![text(&contact.name).size(15)].spacing(1);
-    if normalize_number(&summary_line) != normalize_number(&contact.name)
+    let mut heading = column![text(show(&contact.name, mask)).size(15)].spacing(1);
+    if mask
+        || normalize_number(&summary_line) != normalize_number(&contact.name)
         || contact.numbers.len() > 1
     {
         heading = heading.push(ui::caption(summary_line));
@@ -196,7 +222,7 @@ fn contact_row<'a>(contact: &'a Contact, selected: Option<&str>) -> Element<'a, 
     .spacing(10)
     .into();
 
-    let expanded = is_selected.then(|| contact_detail(contact));
+    let expanded = is_selected.then(|| contact_detail(contact, mask));
 
     ui::list_row(
         summary,
@@ -206,14 +232,14 @@ fn contact_row<'a>(contact: &'a Contact, selected: Option<&str>) -> Element<'a, 
     )
 }
 
-fn contact_detail(contact: &Contact) -> Element<'_, Message> {
+fn contact_detail(contact: &Contact, mask: bool) -> Element<'_, Message> {
     let mut detail = column![].spacing(5).padding(Padding::from([4, 0]));
 
     for number in &contact.numbers {
         detail = detail.push(
             row![
                 text(format!("{}", number.number_type)).size(12).width(Length::Fixed(64.0)),
-                text(&number.number).size(13),
+                text(show(&number.number, mask)).size(13),
                 Space::new().width(Length::Fill),
                 ui::row_action("Call", Message::DialContact(number.number.clone())),
                 ui::row_action_danger(
@@ -230,7 +256,8 @@ fn contact_detail(contact: &Contact) -> Element<'_, Message> {
     }
 
     if !contact.emails.is_empty() {
-        detail = detail.push(ui::caption(contact.emails.join("  ·  ")));
+        let emails: Vec<String> = contact.emails.iter().map(|e| show(e, mask)).collect();
+        detail = detail.push(ui::caption(emails.join("  ·  ")));
     }
 
     // Only local contacts are editable; the rest are owned by their provider,

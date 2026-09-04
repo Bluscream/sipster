@@ -88,6 +88,8 @@ pub enum Message {
     ShowBanner(bool),
     RegisterUriSchemes(bool),
     CloseToTray(bool),
+    StreamingMode(bool),
+    ImportGoogleClientJson(String),
 
     // Integrations. Contact and history providers are account configuration,
     // so they belong here rather than inside the windows that display their
@@ -148,6 +150,8 @@ pub struct State {
     /// Google OAuth client credentials, which the user registers themselves.
     pub draft_google_client_id: String,
     pub draft_google_client_secret: String,
+    /// Path typed into the `client_secret` JSON import box.
+    pub draft_google_json_path: String,
 
     /// Set when the last apply failed, cleared on the next successful one.
     pub error: Option<String>,
@@ -227,7 +231,7 @@ pub fn view<'a>(
     integration: &'a IntegrationSettings,
 ) -> Element<'a, Message> {
     let body = column![
-        account_section(state, account, first_run),
+        account_section(state, account, first_run, ui.streaming_mode),
         audio_section(state, devices),
         appearance_section(ui),
         sounds_section(ui),
@@ -320,6 +324,7 @@ fn account_section<'a>(
     state: &'a State,
     account: Option<&'a SipAccount>,
     first_run: bool,
+    mask: bool,
 ) -> Element<'a, Message> {
     let password = {
         let mut widget = text_input("", &state.password)
@@ -347,20 +352,32 @@ fn account_section<'a>(
         revert = revert.on_press(Message::RevertAccount);
     }
 
+    // Identifying fields are hidden with `secure` rather than by substituting
+    // a mask: these are editable, and feeding a mask back through `on_input`
+    // would overwrite the real value.
+    let hidden = |placeholder: &'static str, value: &'a str, on_change: fn(String) -> Message| {
+        text_input(placeholder, value)
+            .on_input(on_change)
+            .secure(mask)
+            .padding(7)
+            .size(14)
+            .into()
+    };
+
     let content = column![
-        field("Label", input("Fritz!Box", &state.label, Message::Label)),
+        field("Label", hidden("Fritz!Box", &state.label, Message::Label)),
         field(
             "Registrar",
-            input("fritz.box", &state.registrar, Message::Registrar)
+            hidden("fritz.box", &state.registrar, Message::Registrar)
         ),
         field("Registrar port", input("5060", &state.port, Message::Port)),
         field(
             "Username",
-            input("Benutzername", &state.username, Message::Username)
+            hidden("Benutzername", &state.username, Message::Username)
         ),
         field(
             "Auth user",
-            input("same as username", &state.auth_user, Message::AuthUser)
+            hidden("same as username", &state.auth_user, Message::AuthUser)
         ),
         field("Password", password.into()),
         field(
@@ -502,6 +519,13 @@ fn sounds_section(ui: &UiSettings) -> Element<'_, Message> {
 }
 
 fn integration_section(ui: &UiSettings) -> Element<'_, Message> {
+    let streaming_cb: Element<'_, Message> = checkbox(ui.streaming_mode)
+        .label("Streaming mode — hide all names and numbers")
+        .on_toggle(Message::StreamingMode)
+        .size(15)
+        .text_size(13)
+        .into();
+
     let uri_cb: Element<'_, Message> = checkbox(ui.register_uri_schemes)
         .label("Set Sipster as default handler for telephony & SIP links")
         .on_toggle(Message::RegisterUriSchemes)
@@ -519,9 +543,19 @@ fn integration_section(ui: &UiSettings) -> Element<'_, Message> {
     section(
         "Desktop Integration",
         Some("Handles background tray operation and tel:, sip:, sips:, callto: links."),
-        column![tray_cb, uri_cb]
-            .spacing(9)
-            .into(),
+        column![
+            tray_cb,
+            uri_cb,
+            streaming_cb,
+            text(
+                "Streaming mode masks every name, number and address to its first \
+                 and last character across all windows, for screen sharing."
+            )
+            .size(11)
+            .color(iced::Color::from_rgb(0.62, 0.62, 0.66)),
+        ]
+        .spacing(9)
+        .into(),
     )
 }
 
@@ -651,6 +685,17 @@ fn google_panel<'a>(
         && !state.draft_google_client_secret.trim().is_empty();
 
     content
+        .push(field(
+            "client_secret JSON",
+            text_input(
+                "path to client_secret_….json downloaded from Google",
+                &state.draft_google_json_path,
+            )
+            .on_input(Message::ImportGoogleClientJson)
+            .padding(7)
+            .size(14)
+            .into(),
+        ))
         .push(field(
             "Client ID",
             input(

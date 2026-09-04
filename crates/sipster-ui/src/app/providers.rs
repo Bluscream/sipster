@@ -180,6 +180,12 @@ impl SipsterApp {
     fn on_vdir_settings(&mut self, msg: settings::Message) -> Task<Message> {
         use settings::Message as S;
         match msg {
+            S::ToggleEds(enabled) => {
+                self.config.integration.eds_enabled = enabled;
+                self.sync_manager.set_eds(enabled);
+                self.persist();
+                return Task::done(Message::Contacts(contacts::Message::SyncPressed));
+            }
             S::ToggleVdir(enabled) => {
                 self.config.integration.vdir_enabled = enabled;
                 self.apply_vdir();
@@ -207,10 +213,11 @@ impl SipsterApp {
                 .integration
                 .vdir_path
                 .clone()
-                .map(sipster_integrations::VdirStore::new)
-                .or_else(sipster_integrations::VdirStore::discover)
+                .map_or_else(sipster_integrations::VdirStore::discover, |path| {
+                    vec![sipster_integrations::VdirStore::new(path)]
+                })
         } else {
-            None
+            Vec::new()
         };
         self.sync_manager.set_vdir(store);
     }

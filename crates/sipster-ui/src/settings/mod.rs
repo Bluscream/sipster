@@ -108,6 +108,7 @@ pub enum Message {
     // three windows.
     ToggleProvidersModal,
     ToggleLocalHistory(bool),
+    ToggleEds(bool),
     ToggleVdir(bool),
     VdirPathChanged(String),
     DefaultBlockActionChanged(BlockAction),

@@ -170,62 +170,7 @@ impl SipsterApp {
             calls_at: pane::Placement::default(),
             main_width: pane::DIALER_WIDTH,
             calls: calls::State::default(),
-            sync_manager: {
-                let mut sm = SyncManager::new();
-                let fb = &config.integration.fritzbox;
-                if fb.enabled {
-                    sm.set_fritzbox(Some(FritzConfig {
-                        host: fb.host.clone(),
-                        port: fb.port,
-                        username: fb.username.clone(),
-                        password: fb.password.clone(),
-                    }));
-                }
-                let g_clients = config
-                    .integration
-                    .google_accounts
-                    .iter()
-                    .filter(|a| a.enabled)
-                    .map(|a| {
-                        GoogleContactsClient::new(
-                            a.id.clone(),
-                            a.email.clone(),
-                            a.refresh_token.clone(),
-                            a.client_id.clone(),
-                            a.client_secret.clone(),
-                        )
-                    })
-                    .collect();
-                sm.set_google_accounts(g_clients);
-
-                let c_clients = config
-                    .integration
-                    .carddav_accounts
-                    .iter()
-                    .filter(|a| a.enabled)
-                    .map(|a| {
-                        CardDavClient::new(CardDavConfig {
-                            url: a.url.clone(),
-                            username: a.username.clone(),
-                            password: a.password.clone(),
-                        })
-                    })
-                    .collect();
-                sm.set_carddav_accounts(c_clients);
-
-                // The local vCard folder, configured or auto-detected.
-                if config.integration.vdir_enabled {
-                    sm.set_vdir(
-                        config
-                            .integration
-                            .vdir_path
-                            .clone()
-                            .map(sipster_integrations::VdirStore::new)
-                            .or_else(sipster_integrations::VdirStore::discover),
-                    );
-                }
-                sm
-            },
+            sync_manager: build_sync_manager(&config),
             devices: DeviceSelection {
                 input: config.audio.input.clone(),
                 output: config.audio.output.clone(),
@@ -797,4 +742,65 @@ fn chrono_now_iso() -> String {
     let month = (day_of_year / 30) + 1;
     let day = (day_of_year % 30) + 1;
     format!("{year:04}-{month:02}-{day:02} {h:02}:{m:02}:{s:02}")
+}
+
+/// Builds the sync manager from a config: every provider the user has
+/// configured, wired up before the first sync starts.
+fn build_sync_manager(config: &Config) -> SyncManager {
+            let mut sm = SyncManager::new();
+            let fb = &config.integration.fritzbox;
+            if fb.enabled {
+                sm.set_fritzbox(Some(FritzConfig {
+                    host: fb.host.clone(),
+                    port: fb.port,
+                    username: fb.username.clone(),
+                    password: fb.password.clone(),
+                }));
+            }
+            let g_clients = config
+                .integration
+                .google_accounts
+                .iter()
+                .filter(|a| a.enabled)
+                .map(|a| {
+                    GoogleContactsClient::new(
+                        a.id.clone(),
+                        a.email.clone(),
+                        a.refresh_token.clone(),
+                        a.client_id.clone(),
+                        a.client_secret.clone(),
+                    )
+                })
+                .collect();
+            sm.set_google_accounts(g_clients);
+
+            let c_clients = config
+                .integration
+                .carddav_accounts
+                .iter()
+                .filter(|a| a.enabled)
+                .map(|a| {
+                    CardDavClient::new(CardDavConfig {
+                        url: a.url.clone(),
+                        username: a.username.clone(),
+                        password: a.password.clone(),
+                    })
+                })
+                .collect();
+            sm.set_carddav_accounts(c_clients);
+
+            sm.set_eds(config.integration.eds_enabled);
+            // The local vCard folder, configured or auto-detected.
+            if config.integration.vdir_enabled {
+                sm.set_vdir(
+                    config
+                        .integration
+                        .vdir_path
+                        .clone()
+                        .map_or_else(sipster_integrations::VdirStore::discover, |path| {
+                            vec![sipster_integrations::VdirStore::new(path)]
+                        }),
+                );
+            }
+            sm
 }

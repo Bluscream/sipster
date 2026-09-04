@@ -34,15 +34,29 @@ impl VdirStore {
         Self { root }
     }
 
-    /// The first default directory that exists, if any.
+    /// Every vCard directory on this machine worth reading.
+    ///
+    /// The conventional locations, plus each directory Akonadi is configured
+    /// with — a KDE user's address books are ordinary vCard directories and
+    /// need nothing Akonadi-specific to read. See [`crate::akonadi`].
     #[must_use]
-    pub fn discover() -> Option<Self> {
-        let home = std::env::var_os("HOME")?;
-        DEFAULT_DIRS
-            .iter()
-            .map(|relative| Path::new(&home).join(relative))
-            .find(|path| path.is_dir())
-            .map(Self::new)
+    pub fn discover() -> Vec<Self> {
+        let mut roots: Vec<PathBuf> = std::env::var_os("HOME")
+            .map(|home| {
+                DEFAULT_DIRS
+                    .iter()
+                    .map(|relative| Path::new(&home).join(relative))
+                    .filter(|path| path.is_dir())
+                    .collect()
+            })
+            .unwrap_or_default();
+        roots.extend(crate::akonadi::contact_directories());
+
+        // Akonadi's default resource points at `~/.local/share/contacts`, so
+        // without this the conventional directory is read twice.
+        roots.sort();
+        roots.dedup();
+        roots.into_iter().map(Self::new).collect()
     }
 
     pub fn root(&self) -> &Path {

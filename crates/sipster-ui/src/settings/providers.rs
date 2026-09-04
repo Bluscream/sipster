@@ -249,10 +249,44 @@ fn vdir_panel<'a>(
     state: &'a State,
     integration: &'a IntegrationSettings,
 ) -> Element<'a, Message> {
-    let discovered = sipster_integrations::VdirStore::discover()
-        .map_or_else(|| "none found".to_string(), |s| s.root().display().to_string());
+    // Several can be found at once: the conventional directory plus each
+    // address book Akonadi is configured with.
+    let found = sipster_integrations::VdirStore::discover();
+    let discovered = if found.is_empty() {
+        "none found".to_string()
+    } else {
+        found
+            .iter()
+            .map(|store| store.root().display().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    // Evolution is listed with the folder because they are the two providers
+    // that need no account: both read what the desktop already has.
+    let eds_available = sipster_integrations::eds::available();
+    let eds_note = if eds_available {
+        "Found on this desktop.".to_string()
+    } else {
+        "Not running on this desktop; the setting has no effect here.".to_string()
+    };
 
     column![
+        text("Evolution / GNOME Contacts").size(14),
+        text(
+            "The GNOME desktop's own address book, including any Google or \
+             CardDAV account already added there."
+        )
+        .size(12),
+        checkbox(integration.eds_enabled)
+            .label("Read contacts from Evolution Data Server")
+            .on_toggle(Message::ToggleEds)
+            .size(15)
+            .text_size(13),
+        text(eds_note)
+            .size(11)
+            .color(iced::Color::from_rgb(0.62, 0.62, 0.66)),
+        rule::horizontal(1),
         text("Local vCard folder").size(14),
         text(
             "A directory of .vcf files — what vdirsyncer, khard, Radicale and KDE's \

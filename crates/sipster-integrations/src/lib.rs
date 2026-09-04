@@ -9,6 +9,9 @@ pub mod google;
 pub mod local;
 pub mod model;
 pub mod vcard;
+pub mod akonadi;
+#[cfg(target_os = "linux")]
+pub mod eds;
 pub mod vdir;
 
 use std::sync::Arc;
@@ -61,7 +64,8 @@ pub struct SyncManager {
     fritz_client: Option<FritzBoxClient>,
     google_clients: Vec<GoogleContactsClient>,
     carddav_clients: Vec<CardDavClient>,
-    vdir_store: Option<VdirStore>,
+    vdir_stores: Vec<VdirStore>,
+    eds_enabled: bool,
     cached_contacts: Arc<RwLock<Vec<Contact>>>,
     cached_calls: Arc<RwLock<Vec<CallRecord>>>,
 }
@@ -92,7 +96,8 @@ impl SyncManager {
             fritz_client: None,
             google_clients: Vec::new(),
             carddav_clients: Vec::new(),
-            vdir_store: None,
+            vdir_stores: Vec::new(),
+            eds_enabled: false,
             cached_contacts: Arc::new(RwLock::new(Vec::new())),
             cached_calls: Arc::new(RwLock::new(Vec::new())),
         }
@@ -113,9 +118,17 @@ impl SyncManager {
         self.carddav_clients = clients;
     }
 
-    /// Sets the local vCard directory, or clears it with `None`.
-    pub fn set_vdir(&mut self, store: Option<VdirStore>) {
-        self.vdir_store = store;
+    /// Turns the Evolution Data Server provider on or off.
+    pub fn set_eds(&mut self, enabled: bool) {
+        self.eds_enabled = enabled;
+    }
+
+    /// Sets the local vCard directories, replacing any previous ones.
+    ///
+    /// Plural because a machine can have several: the user's own directory
+    /// plus each address book Akonadi is configured with.
+    pub fn set_vdir(&mut self, stores: Vec<VdirStore>) {
+        self.vdir_stores = stores;
     }
 
     /// Access to the underlying local storage engine.
@@ -142,7 +155,8 @@ impl SyncManager {
         let fritz = self.fritz_client.clone();
         let google = self.google_clients.clone();
         let carddav = self.carddav_clients.clone();
-        let vdir = self.vdir_store.clone();
+        let vdir = self.vdir_stores.clone();
+        let eds = self.eds_enabled;
         let cache = Arc::clone(&self.cached_contacts);
 
         tokio::spawn(async move {
@@ -179,9 +193,12 @@ impl SyncManager {
                     client.fetch_contacts()
                 })));
             }
-            if let Some(store) = vdir {
+            for store in vdir {
                 let label = format!("vCards ({})", store.root().display());
                 tasks.push(Box::pin(run_provider_owned(label, move || store.load())));
+            }
+            if eds {
+                tasks.push(Box::pin(run_provider_owned("Evolution".to_string(), eds_contacts)));
             }
 
             // Emit each provider the moment it finishes, in completion order.
@@ -287,9 +304,12 @@ impl SyncManager {
                 client.fetch_contacts()
             })));
         }
-        if let Some(store) = self.vdir_store.clone() {
+        for store in self.vdir_stores.clone() {
             let label = format!("vCards ({})", store.root().display());
             tasks.push(Box::pin(run_provider_owned(label, move || store.load())));
+        }
+        if self.eds_enabled {
+            tasks.push(Box::pin(run_provider_owned("Evolution".to_string(), eds_contacts)));
         }
 
         futures_util::future::join_all(tasks)
@@ -390,4 +410,18 @@ impl Default for SyncManager {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// The Evolution Data Server provider, as the sync tasks want it.
+///
+/// EDS is a GNOME component; everywhere else this is simply an empty address
+/// book rather than a missing feature.
+#[cfg(target_os = "linux")]
+fn eds_contacts() -> Result<Vec<Contact>, String> {
+    eds::fetch_contacts().map_err(|e| e.to_string())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn eds_contacts() -> Result<Vec<Contact>, String> {
+    Ok(Vec::new())
 }

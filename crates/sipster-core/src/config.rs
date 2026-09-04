@@ -415,6 +415,7 @@ impl std::fmt::Debug for IntegrationSettings {
             .field("fritzbox", &self.fritzbox)
             .field("google_accounts", &self.google_accounts)
             .field("carddav_accounts", &self.carddav_accounts)
+            .field("eds_enabled", &self.eds_enabled)
             .field("vdir_enabled", &self.vdir_enabled)
             .field("vdir_path", &self.vdir_path)
             .field("blocked_numbers", &self.blocked_numbers.len())
@@ -433,6 +434,12 @@ fn redacted(secret: &str) -> &'static str {
     }
 }
 
+/// A `serde` default for settings that should stay on for configs written
+/// before the field existed.
+fn enabled() -> bool {
+    true
+}
+
 /// Comprehensive settings for contact and call history providers, local storage, and call blocking.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -445,6 +452,11 @@ pub struct IntegrationSettings {
     pub google_accounts: Vec<GoogleAccountConfig>,
     /// `CardDAV` / vCard servers.
     pub carddav_accounts: Vec<CardDavAccountConfig>,
+    /// Read contacts from Evolution Data Server, the GNOME desktop's own
+    /// address book — and so from any account the user added there. Linux
+    /// only, and ignored where EDS is not on the session bus.
+    #[serde(default = "enabled")]
+    pub eds_enabled: bool,
     /// Read contacts from a local directory of `.vcf` files.
     ///
     /// The nearest thing Linux has to a shared contact store: the convention
@@ -465,6 +477,7 @@ impl Default for IntegrationSettings {
             fritzbox: FritzBoxSettings::default(),
             google_accounts: Vec::new(),
             carddav_accounts: Vec::new(),
+            eds_enabled: true,
             vdir_enabled: true,
             vdir_path: None,
             blocked_numbers: Vec::new(),

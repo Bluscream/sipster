@@ -78,6 +78,10 @@ pub struct SipAccount {
     pub password: String,
     #[serde(default)]
     pub transport: Transport,
+    /// Whether to register this account at all. Lets an account be kept in
+    /// the config without being used.
+    #[serde(default = "enabled")]
+    pub enabled: bool,
     /// Re-registration interval requested from the registrar, in seconds.
     #[serde(default = "default_expires")]
     pub expires: u32,
@@ -109,6 +113,7 @@ impl Default for SipAccount {
             auth_user: String::new(),
             password: String::new(),
             transport: Transport::default(),
+            enabled: true,
             expires: default_expires(),
             local_port: default_port(),
         }
@@ -127,6 +132,7 @@ impl std::fmt::Debug for SipAccount {
             .field("auth_user", &self.auth_user)
             .field("password", &"<redacted>")
             .field("transport", &self.transport)
+            .field("enabled", &self.enabled)
             .field("expires", &self.expires)
             .field("local_port", &self.local_port)
             .finish()

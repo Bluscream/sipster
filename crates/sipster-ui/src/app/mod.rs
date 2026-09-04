@@ -16,7 +16,7 @@ use iced::{Subscription, Task, Theme};
 use sipster_core::audio::DeviceSelection;
 use sipster_core::ipc::Command;
 use sipster_core::{
-    BlockAction, BlockedNumber, CallEvent, CallId, CallState, Config, RegistrationState, SipAccount,
+    BlockAction, BlockedNumber, CallEvent, CallId, CallState, Config, RegistrationState,
     ThemeChoice,
 };
 
@@ -38,6 +38,9 @@ use crate::view;
 /// A call as the UI knows it — enough to render, nothing engine-internal.
 #[derive(Debug, Clone)]
 pub struct ActiveCall {
+    /// Which account the call is on, so it is answered, held and hung up on
+    /// the engine it actually belongs to.
+    pub account: usize,
     pub id: CallId,
     pub state: CallState,
     pub remote: String,
@@ -49,15 +52,21 @@ pub struct ActiveCall {
 /// A ringing inbound call awaiting the user's decision.
 #[derive(Debug, Clone)]
 pub struct IncomingCall {
+    pub account: usize,
     pub id: CallId,
     pub remote: String,
 }
 
 pub struct SipsterApp {
-    engine: Option<EngineHandle>,
+    /// One engine per enabled account, in config order — the same order the
+    /// bridge tags its events with.
+    engines: Vec<EngineHandle>,
+    /// Which account outgoing calls use.
+    active_account: usize,
     pending_command: Option<Command>,
-    pub registration: RegistrationState,
-    pub account_info: Option<String>,
+    /// Registration state per account, parallel to `engines`.
+    pub registration: Vec<RegistrationState>,
+    pub account_info: Vec<String>,
     pub dial_number: String,
     pub status: String,
     pub active: Option<ActiveCall>,
@@ -104,9 +113,9 @@ pub struct SipsterApp {
 #[derive(Debug, Clone)]
 pub enum Message {
     // From the engine bridge:
-    EngineReady(EngineHandle),
+    EngineReady(usize, EngineHandle),
     EngineFailed(String),
-    Call(CallEvent),
+    Call(usize, CallEvent),
     Ipc(Command),
     // Periodic tray poll tick; drains tray::Request into handle_tray.
     TrayTick,
@@ -166,10 +175,11 @@ impl SipsterApp {
         let (main_id, open) = window::open(crate::main_window_settings());
 
         let app = Self {
-            engine: None,
+            engines: Vec::new(),
+            active_account: 0,
             pending_command: None,
-            registration: RegistrationState::Unregistered,
-            account_info: None,
+            registration: Vec::new(),
+            account_info: Vec::new(),
             dial_number: String::new(),
             status: if first_run {
                 "Welcome — fill in your SIP account to get started".into()
@@ -182,7 +192,7 @@ impl SipsterApp {
             ringtone: None,
             main_window: Some(main_id),
             settings_window: None,
-            settings: settings::State::default(),
+            settings: settings::State::new(),
             contacts_window: None,
             contacts_at: pane::Placement::default(),
             contacts: contacts::State::default(),
@@ -319,26 +329,12 @@ impl SipsterApp {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::EngineReady(engine) => {
-                let acc = engine.account();
-                self.account_info = Some(if acc.port == 5060 {
-                    format!("{} at {}", acc.username, acc.registrar)
-                } else {
-                    format!("{} at {}:{}", acc.username, acc.registrar, acc.port)
-                });
-                self.settings.load_account(self.engine_account_of(&engine));
-                self.engine = Some(engine);
-                self.status = "Ready".into();
-                if let Some(cmd) = self.pending_command.take() {
-                    return self.handle_ipc(cmd);
-                }
-                Task::none()
-            }
+            Message::EngineReady(index, engine) => self.on_engine_ready(index, engine),
             Message::EngineFailed(err) => {
                 self.status = format!("Engine error: {err}");
                 Task::none()
             }
-            Message::Call(event) => self.on_call_event(event),
+            Message::Call(index, event) => self.on_call_event(index, event),
             Message::Ipc(cmd) => self.on_ipc(cmd),
             Message::TrayTick => {
                 self.on_tray_tick()
@@ -420,6 +416,67 @@ impl SipsterApp {
         self.calls_at
     }
 
+    /// The account picker's contents: one label per configured account.
+    ///
+    /// Falls back to the username, then to a numbered placeholder, so an
+    /// account with no label is still distinguishable from its neighbours.
+    fn account_choices(&self) -> settings::AccountContext<'_> {
+        settings::AccountContext {
+            labels: self
+                .config
+                .accounts
+                .iter()
+                .enumerate()
+                .map(|(i, account)| {
+                    let name = account.label.trim();
+                    let name = if name.is_empty() { account.username.trim() } else { name };
+                    if name.is_empty() {
+                        format!("Account {}", i + 1)
+                    } else {
+                        name.to_string()
+                    }
+                })
+                .collect(),
+            selected: self.active_account,
+            current: self.engine().map(|e| e.account()),
+            first_run: self.config.needs_setup(),
+        }
+    }
+
+    /// The engine outgoing calls use.
+    pub fn engine(&self) -> Option<&EngineHandle> {
+        self.engines.get(self.active_account)
+    }
+
+    /// The engine for `account`, for acting on a call that arrived on it
+    /// rather than on whichever account is currently selected.
+    pub fn engine_for(&self, account: usize) -> Option<&EngineHandle> {
+        self.engines.get(account)
+    }
+
+    /// How the active account is described in the status bar.
+    pub fn active_account_info(&self) -> Option<&str> {
+        self.account_info.get(self.active_account).map(String::as_str)
+    }
+
+    /// The active account's registration state.
+    pub fn active_registration(&self) -> RegistrationState {
+        self.registration
+            .get(self.active_account)
+            .cloned()
+            .unwrap_or(RegistrationState::Unregistered)
+    }
+
+    /// How many accounts are registered, and how many there are.
+    pub fn registered_count(&self) -> (usize, usize) {
+        let registered = self
+            .registration
+            .iter()
+            .filter(|state| matches!(state, RegistrationState::Registered))
+            .count();
+        (registered, self.registration.len())
+    }
+
     /// Which dialpad keys are currently lit.
     pub fn glow(&self) -> &Glow {
         &self.glow
@@ -446,15 +503,13 @@ impl SipsterApp {
 
     pub fn view(&self, window: window::Id) -> iced::Element<'_, Message> {
         if Some(window) == self.settings_window {
-            let account = self.engine.as_ref().map(|e| e.account());
             return settings::view(
                 &self.settings,
                 &self.config.ui,
                 &self.devices,
-                account,
-                self.config.needs_setup(),
                 &self.config.integration,
                 &self.config_path,
+                &self.account_choices(),
             )
             .map(Message::Settings);
         }
@@ -563,10 +618,6 @@ impl SipsterApp {
         }
     }
 
-    #[allow(clippy::unused_self)]
-    pub(super) fn engine_account_of<'a>(&self, engine: &'a EngineHandle) -> &'a SipAccount {
-        engine.account()
-    }
 
     /// Opens the settings window, or focuses it if it is already open.
     pub(super) fn open_settings(&mut self) -> Task<Message> {
@@ -578,7 +629,7 @@ impl SipsterApp {
         // to the config, so a failed start still opens an editable form rather
         // than a blank one the user cannot fix.
         let account = self
-            .engine
+            .engine()
             .as_ref()
             .map(|engine| engine.account().clone())
             .or_else(|| self.config.accounts.first().cloned())
@@ -633,6 +684,10 @@ impl SipsterApp {
             S::Password(v) => self.settings.password = v,
             S::Expires(v) => self.settings.expires = v,
             S::LocalPort(v) => self.settings.local_port = v,
+            S::AccountEnabled(v) => self.settings.account_enabled = v,
+            S::SelectAccount(index) => return self.select_account(index),
+            S::AddAccount => return self.add_account(),
+            S::RemoveAccount => return self.remove_account(),
             S::TransportChanged(t) => {
                 self.settings.transport = t;
                 // Moving between UDP/TCP (5060) and TLS (5061) changes the
@@ -652,7 +707,7 @@ impl SipsterApp {
 
             S::RevertAccount => {
                 let account = self
-                    .engine
+                    .engine()
                     .as_ref()
                     .map(|engine| engine.account().clone())
                     .or_else(|| self.config.accounts.first().cloned())
@@ -738,13 +793,17 @@ impl SipsterApp {
         self.status = "Applying account settings…".into();
 
         // Persist first: if the reconnect fails the user still has the values
-        // they typed, and can fix them without retyping everything.
-        self.config.accounts = vec![account.clone()];
+        // they typed, and can fix them without retyping everything. Only the
+        // selected account is replaced; the others are left as they are.
+        if self.config.accounts.len() <= self.active_account {
+            self.config.accounts.resize(self.active_account + 1, account.clone());
+        }
+        self.config.accounts[self.active_account] = account;
         self.persist();
 
         // The bridge owns engine lifetime, so ask it to rebuild rather than
-        // swapping the handle from under the running event loop.
-        engine_bridge::reconfigure(account);
+        // swapping the handles from under the running event loop.
+        engine_bridge::reconfigure(self.config.accounts.clone());
         Task::none()
     }
 
@@ -754,12 +813,18 @@ impl SipsterApp {
         self.config.audio.output = self.devices.output.clone();
         self.persist();
 
-        let Some(engine) = self.engine.clone() else {
-            return Task::none();
-        };
+        // Every account shares the one microphone and speaker, so the change
+        // goes to all of them rather than only the selected one.
+        let engines = self.engines.clone();
         let selection = self.devices.clone();
         Task::future(async move {
-            Message::ActionDone(engine.set_devices(selection).await.map_err(|e| e.to_string()))
+            let mut failed = None;
+            for engine in engines {
+                if let Err(e) = engine.set_devices(selection.clone()).await {
+                    failed = Some(e.to_string());
+                }
+            }
+            Message::ActionDone(failed.map_or(Ok(()), Err))
         })
     }
 
@@ -913,4 +978,110 @@ fn build_sync_manager(config: &Config) -> SyncManager {
 /// the field is addressed by the id it was built with.
 fn focus_dial_input() -> Task<Message> {
     iced::widget::operation::focus(view::dial_input_id())
+}
+
+impl SipsterApp {
+    /// Records an engine that finished connecting.
+    ///
+    /// Engines arrive one at a time as each account registers, so the vectors
+    /// are grown to fit rather than assumed to be the right length.
+    fn on_engine_ready(&mut self, index: usize, engine: EngineHandle) -> Task<Message> {
+        let account = engine.account();
+        let info = if account.port == 5060 {
+            format!("{} at {}", account.username, account.registrar)
+        } else {
+            format!("{} at {}:{}", account.username, account.registrar, account.port)
+        };
+
+        if self.account_info.len() <= index {
+            self.account_info.resize(index + 1, String::new());
+        }
+        self.account_info[index] = info;
+        if self.registration.len() <= index {
+            self.registration
+                .resize(index + 1, RegistrationState::Unregistered);
+        }
+        if self.engines.len() <= index {
+            self.engines.resize(index + 1, engine.clone());
+        }
+        self.engines[index] = engine;
+
+        // The settings form edits whichever account is selected.
+        if index == self.active_account {
+            let account = self.engines[index].account().clone();
+            self.settings.load_account(&account);
+        }
+        self.status = "Ready".into();
+
+        if let Some(cmd) = self.pending_command.take() {
+            return self.handle_ipc(cmd);
+        }
+        Task::none()
+    }
+}
+
+impl SipsterApp {
+    /// Switches which account the Account page edits and outgoing calls use.
+    ///
+    /// The draft is saved back first, so switching away from a half-typed
+    /// account does not throw the edits away.
+    fn select_account(&mut self, index: usize) -> Task<Message> {
+        if index >= self.config.accounts.len() || index == self.active_account {
+            return Task::none();
+        }
+        self.stash_draft();
+        self.active_account = index;
+        let account = self.config.accounts[index].clone();
+        self.settings.load_account(&account);
+        self.settings.notice = None;
+        self.settings.error = None;
+        Task::none()
+    }
+
+    /// Adds a blank account and switches to it.
+    fn add_account(&mut self) -> Task<Message> {
+        self.stash_draft();
+        self.config.accounts.push(sipster_core::SipAccount {
+            label: format!("Account {}", self.config.accounts.len() + 1),
+            ..sipster_core::SipAccount::default()
+        });
+        self.active_account = self.config.accounts.len() - 1;
+        let account = self.config.accounts[self.active_account].clone();
+        self.settings.load_account(&account);
+        self.persist();
+        self.settings.notice = Some("Account added — fill it in and apply".into());
+        Task::none()
+    }
+
+    /// Removes the selected account.
+    ///
+    /// The last one is kept: with none at all the app has nothing to register
+    /// and no form to fix it in.
+    fn remove_account(&mut self) -> Task<Message> {
+        if self.config.accounts.len() <= 1 {
+            self.settings.error = Some("The last account cannot be removed".into());
+            return Task::none();
+        }
+        self.config.accounts.remove(self.active_account);
+        self.active_account = self.active_account.min(self.config.accounts.len() - 1);
+        let account = self.config.accounts[self.active_account].clone();
+        self.settings.load_account(&account);
+        self.persist();
+        self.settings.notice = Some("Account removed".into());
+        engine_bridge::reconfigure(self.config.accounts.clone());
+        Task::none()
+    }
+
+    /// Writes the form back into the selected account without reconnecting.
+    ///
+    /// Switching accounts would otherwise discard anything typed but not yet
+    /// applied.
+    fn stash_draft(&mut self) {
+        let Ok(account) = self.settings.to_account(self.settings.transport) else {
+            return;
+        };
+        if let Some(slot) = self.config.accounts.get_mut(self.active_account) {
+            *slot = account;
+        }
+    }
 }

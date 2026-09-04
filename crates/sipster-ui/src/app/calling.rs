@@ -1,6 +1,7 @@
 //! Telephony: control commands, tray requests, call events, and the four
 //! things a user can do to a call.
 
+use sipster_core::RegistrationState;
 use super::{
     call_status, chrono_now_iso, dialable, display_name, registration_status, ActiveCall,
     BlockAction, CallEvent, CallId, CallRecord, CallState, CallType, Command, IncomingCall,
@@ -26,7 +27,7 @@ impl SipsterApp {
                 | Command::OpenCallList
                 | Command::Quit
         );
-        if needs_engine && self.engine.is_none() {
+        if needs_engine && self.engine().is_none() {
             self.pending_command = Some(cmd);
             return Task::none();
         }
@@ -157,11 +158,18 @@ impl SipsterApp {
     }
 
     #[allow(clippy::cognitive_complexity, clippy::too_many_lines)]
-    pub(super) fn on_call_event(&mut self, event: CallEvent) -> Task<Message> {
+    pub(super) fn on_call_event(&mut self, account: usize, event: CallEvent) -> Task<Message> {
         match event {
             CallEvent::Registration(state) => {
-                self.status = registration_status(&state);
-                self.registration = state;
+                // Only the account the user is looking at should narrate its
+                // registration in the status line; the rest register quietly.
+                if account == self.active_account {
+                    self.status = registration_status(&state);
+                }
+                if self.registration.len() <= account {
+                    self.registration.resize(account + 1, RegistrationState::Unregistered);
+                }
+                self.registration[account] = state;
             }
             CallEvent::IncomingCall { id, remote_uri, .. } => {
                 // Check if the remote party is blocked
@@ -179,7 +187,7 @@ impl SipsterApp {
                     match blocked.action {
                         BlockAction::Reject => {
                             tracing::info!(remote = %remote_uri, "rejecting call from blocked number");
-                            let engine = self.engine.clone();
+                            let engine = self.engine().cloned();
                             self.status = format!("Rejected blocked call from {remote_uri}");
                             if self.config.integration.local_history_enabled {
                                 self.sync_manager.record_local_call(CallRecord {
@@ -187,7 +195,7 @@ impl SipsterApp {
                                     call_type: CallType::Rejected,
                                     remote_number: dialable(&remote_uri),
                                     remote_name: blocked.name.clone(),
-                                    local_party: self.account_info.clone(),
+                                    local_party: self.active_account_info().map(str::to_owned),
                                     timestamp: chrono_now_iso(),
                                     duration_seconds: 0,
                                     source: RecordSource::Local,
@@ -211,13 +219,13 @@ impl SipsterApp {
                                     call_type: CallType::Incoming,
                                     remote_number: dialable(&remote_uri),
                                     remote_name: blocked.name.clone(),
-                                    local_party: self.account_info.clone(),
+                                    local_party: self.active_account_info().map(str::to_owned),
                                     timestamp: chrono_now_iso(),
                                     duration_seconds: 0,
                                     source: RecordSource::Local,
                                 });
                             }
-                            self.incoming = Some(IncomingCall { id, remote: remote_uri });
+                            self.incoming = Some(IncomingCall { account, id, remote: remote_uri });
                             self.status = "Incoming call (muted)…".into();
                             return Task::none();
                         }
@@ -234,7 +242,7 @@ impl SipsterApp {
                         call_type: CallType::Incoming,
                         remote_number: dialable(&remote_uri),
                         remote_name: display_name(&remote_uri),
-                        local_party: self.account_info.clone(),
+                        local_party: self.account_info.get(account).cloned(),
                         timestamp: chrono_now_iso(),
                         duration_seconds: 0,
                         source: RecordSource::Local,
@@ -244,11 +252,11 @@ impl SipsterApp {
                 // Assigning drops any previous ringtone, so a second inbound
                 // call cannot leave two rings overlapping.
                 self.ringtone = self.config.ui.ringtone.then(sound::start_ringing);
-                self.incoming = Some(IncomingCall { id, remote: remote_uri });
+                self.incoming = Some(IncomingCall { account, id, remote: remote_uri });
                 self.status = "Incoming call…".into();
             }
             CallEvent::StateChanged { id, state } => {
-                self.apply_state(id, state);
+                self.apply_state(account, id, state);
             }
             CallEvent::Terminated { id, reason } => {
                 if let Some(active) = self.active.take().filter(|c| c.id == id) {
@@ -259,7 +267,7 @@ impl SipsterApp {
                             call_type: CallType::Outgoing,
                             remote_number: dialable(&active.remote),
                             remote_name: None,
-                            local_party: self.account_info.clone(),
+                            local_party: self.account_info.get(account).cloned(),
                             timestamp: chrono_now_iso(),
                             duration_seconds: 0,
                             source: RecordSource::Local,
@@ -274,7 +282,7 @@ impl SipsterApp {
                             call_type: CallType::Missed,
                             remote_number: dialable(&incoming.remote),
                             remote_name: None,
-                            local_party: self.account_info.clone(),
+                            local_party: self.account_info.get(account).cloned(),
                             timestamp: chrono_now_iso(),
                             duration_seconds: 0,
                             source: RecordSource::Local,
@@ -305,7 +313,7 @@ impl SipsterApp {
         };
         tray.set_call_state(state);
     }
-    pub(super) fn apply_state(&mut self, id: CallId, state: CallState) {
+    pub(super) fn apply_state(&mut self, account: usize, id: CallId, state: CallState) {
         let remote = self
             .active
             .as_ref()
@@ -314,12 +322,12 @@ impl SipsterApp {
             .or_else(|| self.incoming.as_ref().filter(|c| c.id == id).map(|c| c.remote.clone()))
             .unwrap_or_else(|| self.dial_number.clone());
         let on_hold = self.active.as_ref().is_some_and(|c| c.id == id && c.on_hold);
-        self.active = Some(ActiveCall { id, state, remote, on_hold });
+        self.active = Some(ActiveCall { account, id, state, remote, on_hold });
         self.status = call_status(state);
     }
 
     pub(super) fn dial(&mut self) -> Task<Message> {
-        let (Some(engine), false) = (&self.engine, self.dial_number.is_empty()) else {
+        let (Some(engine), false) = (self.engine(), self.dial_number.is_empty()) else {
             return Task::none();
         };
         self.chime(sound::call_started);
@@ -332,7 +340,7 @@ impl SipsterApp {
                 call_type: CallType::Outgoing,
                 remote_number: target.clone(),
                 remote_name: None,
-                local_party: self.account_info.clone(),
+                local_party: self.active_account_info().map(str::to_owned),
                 timestamp: chrono_now_iso(),
                 duration_seconds: 0,
                 source: RecordSource::Local,
@@ -344,11 +352,15 @@ impl SipsterApp {
     }
 
     pub(super) fn hangup(&mut self) -> Task<Message> {
-        let (Some(engine), Some(call)) = (&self.engine, self.active.take()) else {
+        // The call's own account, not the selected one — they differ as soon
+        // as a second line rings while the first is picked.
+        let Some(call) = self.active.take() else {
+            return Task::none();
+        };
+        let Some(engine) = self.engine_for(call.account).cloned() else {
             return Task::none();
         };
         self.chime(sound::call_ended);
-        let engine = engine.clone();
         let id = call.id;
         self.status = "Hanging up…".into();
         self.sync_tray_state();
@@ -356,13 +368,17 @@ impl SipsterApp {
     }
 
     pub(super) fn answer(&mut self) -> Task<Message> {
-        let (Some(engine), Some(call)) = (&self.engine, self.incoming.take()) else {
+        let Some(call) = self.incoming.take() else {
+            return Task::none();
+        };
+        let Some(engine) = self.engine_for(call.account).cloned() else {
             return Task::none();
         };
         self.ringtone = None;
-        let (engine, id) = (engine.clone(), call.id);
+        let id = call.id;
         self.status = "Answering call…".into();
         self.active = Some(ActiveCall {
+            account: call.account,
             id,
             state: CallState::Active,
             remote: call.remote,
@@ -372,11 +388,14 @@ impl SipsterApp {
     }
 
     pub(super) fn decline(&mut self) -> Task<Message> {
-        let (Some(engine), Some(call)) = (&self.engine, self.incoming.take()) else {
+        let Some(call) = self.incoming.take() else {
+            return Task::none();
+        };
+        let Some(engine) = self.engine_for(call.account).cloned() else {
             return Task::none();
         };
         self.ringtone = None;
-        let (engine, id) = (engine.clone(), call.id);
+        let id = call.id;
         self.status = "Call declined".into();
         Task::future(async move { Message::ActionDone(engine.hangup(id).await.map_err(|e| e.to_string())) })
     }
@@ -395,7 +414,10 @@ impl SipsterApp {
     /// The flag is only flipped once the far end accepts, so the button never
     /// claims a hold that did not happen.
     pub(super) fn toggle_hold(&mut self) -> Task<Message> {
-        let (Some(call), Some(engine)) = (self.active.as_ref(), self.engine.clone()) else {
+        let Some(call) = self.active.as_ref() else {
+            return Task::none();
+        };
+        let Some(engine) = self.engine_for(call.account).cloned() else {
             return Task::none();
         };
         let (id, hold) = (call.id, !call.on_hold);
@@ -411,7 +433,10 @@ impl SipsterApp {
     /// Hands the call to whatever is in the dial field and drops out of it.
     pub(super) fn transfer(&mut self) -> Task<Message> {
         let target = self.dial_number.trim().to_string();
-        let (Some(call), Some(engine)) = (self.active.as_ref(), self.engine.clone()) else {
+        let Some(call) = self.active.as_ref() else {
+            return Task::none();
+        };
+        let Some(engine) = self.engine_for(call.account).cloned() else {
             return Task::none();
         };
         if target.is_empty() {
@@ -439,7 +464,7 @@ impl SipsterApp {
         if !sipster_core::engine::is_dtmf_digit(digit) {
             return None;
         }
-        let engine = self.engine.clone()?;
+        let engine = self.engine_for(call.account)?.clone();
         let id = call.id;
         Some(Task::future(async move {
             Message::ActionDone(engine.send_dtmf(id, digit).await.map_err(|e| e.to_string()))

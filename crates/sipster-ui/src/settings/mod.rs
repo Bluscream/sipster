@@ -82,6 +82,10 @@ pub enum Message {
     Expires(String),
     LocalPort(String),
     TransportChanged(sipster_core::Transport),
+    AccountEnabled(bool),
+    SelectAccount(usize),
+    AddAccount,
+    RemoveAccount,
     RevealPassword(bool),
     RevealFritzPassword(bool),
     RevealCardDavPassword(bool),
@@ -176,6 +180,12 @@ pub struct State {
     pub draft_fritz_port: String,
     /// The account's SIP transport, edited alongside the rest of the form.
     pub transport: sipster_core::Transport,
+    /// Whether the account being edited is registered at all.
+    ///
+    /// Not part of `Default` in spirit — a blank draft is a new account, and a
+    /// new account should register — so [`State::new`] flips it on and
+    /// `load_account` overwrites it from the stored account.
+    pub account_enabled: bool,
     /// Google OAuth client credentials, which the user registers themselves.
     pub draft_google_client_id: String,
     pub draft_google_client_secret: String,
@@ -192,6 +202,15 @@ pub struct State {
 
 impl State {
     /// Fills the account draft from the account the engine is actually using.
+    /// A blank draft for a new account, which should register once saved.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            account_enabled: true,
+            ..Self::default()
+        }
+    }
+
     pub fn load_account(&mut self, account: &SipAccount) {
         self.label.clone_from(&account.label);
         self.registrar.clone_from(&account.registrar);
@@ -202,6 +221,7 @@ impl State {
         self.expires = account.expires.to_string();
         self.local_port = account.local_port.to_string();
         self.transport = account.transport;
+        self.account_enabled = account.enabled;
         self.error = None;
     }
 
@@ -236,6 +256,7 @@ impl State {
             auth_user: self.auth_user.trim().to_string(),
             password: self.password.clone(),
             transport,
+            enabled: self.account_enabled,
             expires,
             local_port,
         };
@@ -273,14 +294,13 @@ pub fn view<'a>(
     state: &'a State,
     ui: &'a UiSettings,
     devices: &'a DeviceSelection,
-    account: Option<&'a SipAccount>,
-    first_run: bool,
     integration: &'a IntegrationSettings,
     config_path: &'a str,
+    accounts: &AccountContext<'a>,
 ) -> Element<'a, Message> {
     let selected = state.section.min(SECTIONS.len() - 1);
     let panel = match selected {
-        0 => account_section(state, account, first_run, ui.streaming_mode),
+        0 => account_section(state, ui.streaming_mode, accounts),
         1 => audio_section(state, devices),
         2 => appearance_section(ui),
         3 => sounds_section(ui),
@@ -462,12 +482,25 @@ pub(super) fn input<'a>(
         .into()
 }
 
+/// Everything the Account page needs beyond the draft itself.
+///
+/// Bundled because the labels live in the config rather than the draft, which
+/// only ever holds the one account being edited.
+pub struct AccountContext<'a> {
+    /// One label per account, in config order.
+    pub labels: Vec<String>,
+    pub selected: usize,
+    /// The account the engine is actually running, if any.
+    pub current: Option<&'a SipAccount>,
+    pub first_run: bool,
+}
+
 fn account_section<'a>(
     state: &'a State,
-    account: Option<&'a SipAccount>,
-    first_run: bool,
     mask: bool,
+    accounts: &AccountContext<'a>,
 ) -> Element<'a, Message> {
+    let (account, first_run) = (accounts.current, accounts.first_run);
     // `account` is the one the engine is actually running. When there is none
     // — first run, or a failed connect — nothing has been applied yet, so
     // whatever is in the form is worth applying and Apply must be live.
@@ -495,7 +528,42 @@ fn account_section<'a>(
             .into()
     };
 
+    // Only worth showing once there is more than one to switch between; a
+    // single-account setup should not have to think about accounts at all.
+    let switcher: Element<'a, Message> = if accounts.labels.len() > 1 {
+        let choices: Vec<AccountChoice> = accounts
+            .labels
+            .iter()
+            .enumerate()
+            .map(|(index, label)| AccountChoice { index, label: label.clone() })
+            .collect();
+        let current = choices.get(accounts.selected).cloned();
+        row![
+            pick_list(choices, current, |choice| Message::SelectAccount(choice.index))
+                .text_size(13)
+                .width(Length::Fill),
+            button(text("Add").size(13)).on_press(Message::AddAccount).padding([5, 11]),
+            button(text("Remove").size(13)).on_press(Message::RemoveAccount).padding([5, 11]),
+        ]
+        .spacing(6)
+        .align_y(Alignment::Center)
+        .into()
+    } else {
+        row![
+            Space::new().width(Length::Fill),
+            button(text("Add account").size(13)).on_press(Message::AddAccount).padding([5, 11]),
+        ]
+        .align_y(Alignment::Center)
+        .into()
+    };
+
     let content = column![
+        switcher,
+        checkbox(state.account_enabled)
+            .label("Register this account")
+            .on_toggle(Message::AccountEnabled)
+            .size(15)
+            .text_size(13),
         field("Label", hidden("Fritz!Box", &state.label, Message::Label)),
         field(
             "Registrar",
@@ -705,7 +773,7 @@ mod tests {
     use sipster_core::{SipAccount, Transport};
 
     fn draft() -> State {
-        let mut state = State::default();
+        let mut state = State::new();
         state.load_account(&SipAccount {
             registrar: "fritz.box".into(),
             username: "bob".into(),
@@ -726,8 +794,9 @@ mod tests {
             expires: 300,
             local_port: 5062,
             transport: Transport::Udp,
+            enabled: true,
         };
-        let mut state = State::default();
+        let mut state = State::new();
         state.load_account(&account);
         let back = state.to_account(Transport::Udp).expect("valid draft");
         assert_eq!(back.registrar, account.registrar);
@@ -746,7 +815,7 @@ mod tests {
             username: "bob".into(),
             ..SipAccount::default()
         };
-        let mut state = State::default();
+        let mut state = State::new();
         state.load_account(&account);
         assert!(!state.account_is_dirty(&account));
 
@@ -811,5 +880,21 @@ mod tests {
         let list = DeviceChoice::list(&devices, Some(&saved));
         assert!(list.iter().any(|c| c.id.as_deref() == Some("usb-headset")));
         assert!(list.iter().any(|c| c.name.contains("not connected")));
+    }
+}
+
+/// One entry in the account picker.
+///
+/// Carries its index so selecting it says which account to switch to, and
+/// renders as its label.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountChoice {
+    pub index: usize,
+    pub label: String,
+}
+
+impl std::fmt::Display for AccountChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.label)
     }
 }

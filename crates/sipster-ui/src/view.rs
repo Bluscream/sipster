@@ -95,7 +95,8 @@ fn show(value: &str, mask: bool) -> String {
 }
 
 fn statusbar(app: &SipsterApp) -> Element<'_, Message> {
-    let (circle_char, circle_color, reg_text) = match &app.registration {
+    let registration = app.active_registration();
+    let (circle_char, circle_color, reg_text) = match &registration {
         RegistrationState::Registered => ("●", iced::Color::from_rgb(0.2, 0.85, 0.3), "Registered"),
         RegistrationState::Registering => ("●", iced::Color::from_rgb(0.95, 0.8, 0.2), "Registering…"),
         RegistrationState::Failed(err) => ("●", iced::Color::from_rgb(0.9, 0.25, 0.25), err.as_str()),
@@ -105,13 +106,21 @@ fn statusbar(app: &SipsterApp) -> Element<'_, Message> {
     // The account line carries the SIP username and registrar, both of which
     // identify the user on a shared screen.
     let mask = app.ui().streaming_mode;
-    let msg = match (&app.account_info, &app.registration) {
+    let mut msg = match (app.active_account_info(), &registration) {
         (Some(info), RegistrationState::Registered) => {
             format!("{reg_text} as {}", show(info, mask))
         }
         (Some(info), _) => format!("{reg_text} ({})", show(info, mask)),
         (None, _) => reg_text.to_string(),
     };
+
+    // With more than one account configured, say how many of them are up —
+    // otherwise a second line failing to register is invisible.
+    let (registered, total) = app.registered_count();
+    if total > 1 {
+        use std::fmt::Write as _;
+        let _ = write!(msg, " · {registered}/{total} accounts");
+    }
 
     let status_bar_content = row![
         text(circle_char).size(14).color(circle_color),

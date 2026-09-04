@@ -57,14 +57,83 @@ pub struct DeviceSelection {
 /// A selectable audio device: `(id, human readable name)`.
 pub type Device = (String, String);
 
-/// Lists available capture devices.
+/// Lists available capture devices, filtered and named for humans.
 pub fn input_devices() -> Vec<Device> {
-    rvoip_audio_device::list_devices(AudioDirection::Input)
+    usable_devices(rvoip_audio_device::list_devices(AudioDirection::Input))
 }
 
-/// Lists available playback devices.
+/// Lists available playback devices, filtered and named for humans.
 pub fn output_devices() -> Vec<Device> {
-    rvoip_audio_device::list_devices(AudioDirection::Output)
+    usable_devices(rvoip_audio_device::list_devices(AudioDirection::Output))
+}
+
+/// Reduces raw ALSA enumeration to devices worth offering, and gives them
+/// readable names.
+///
+/// cpal enumerates every ALSA plugin permutation, which on a normal desktop is
+/// dozens of entries like `surround71:CARD=PCH,DEV=0` and `dmix:CARD=HDMI,DEV=9`
+/// — and, worse, `hw:` entries that take exclusive access to the card. On a
+/// `PipeWire` or `PulseAudio` system the sound server already holds the hardware,
+/// so picking one of those fails with "device busy". Offering them is offering
+/// a broken choice.
+///
+/// What survives: the sound server's own device, the ALSA default, and the
+/// format-converting `plughw:` wrappers, which are the ones that actually work.
+fn usable_devices(raw: Vec<Device>) -> Vec<Device> {
+    let mut devices: Vec<Device> = raw
+        .into_iter()
+        .filter(|(id, _)| is_usable(id))
+        .map(|(id, _)| {
+            let label = friendly_name(&id);
+            (id, label)
+        })
+        .collect();
+
+    // Stable, useful order: the sound server first, then the rest by name.
+    devices.sort_by(|a, b| {
+        let rank = |id: &str| u8::from(!is_sound_server(id));
+        rank(&a.0).cmp(&rank(&b.0)).then_with(|| a.1.cmp(&b.1))
+    });
+    devices.dedup_by(|a, b| a.1 == b.1);
+    devices
+}
+
+/// Whether this id routes through a sound server rather than the raw card.
+fn is_sound_server(id: &str) -> bool {
+    let id = id.to_ascii_lowercase();
+    id.starts_with("pipewire") || id.starts_with("pulse") || id == "default"
+}
+
+fn is_usable(id: &str) -> bool {
+    if is_sound_server(id) {
+        return true;
+    }
+    // `plughw:` converts sample formats and can share a card; `hw:` cannot.
+    // Everything else is an ALSA routing plugin the user has no reason to pick.
+    id.starts_with("plughw:") || id.starts_with("sysdefault:")
+}
+
+/// Turns `plughw:CARD=PCH,DEV=0` into `PCH (device 0)`.
+fn friendly_name(id: &str) -> String {
+    if is_sound_server(id) {
+        return match id.split(':').next().unwrap_or(id) {
+            "pipewire" => "PipeWire".to_string(),
+            "pulse" => "PulseAudio".to_string(),
+            _ => "ALSA default".to_string(),
+        };
+    }
+
+    let card = id
+        .split("CARD=")
+        .nth(1)
+        .and_then(|rest| rest.split(',').next())
+        .unwrap_or(id);
+    let device = id.split("DEV=").nth(1).and_then(|d| d.parse::<u32>().ok());
+
+    match device {
+        Some(0) | None => card.to_string(),
+        Some(n) => format!("{card} (device {n})"),
+    }
 }
 
 /// Logs a warning when audio could not be attached, without failing the call —
@@ -76,5 +145,71 @@ pub(crate) fn warn_on_failure(result: Result<CallAudio>) -> Option<CallAudio> {
             warn!(error = %e, "call established but audio devices unavailable");
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{friendly_name, usable_devices};
+
+    fn raw(ids: &[&str]) -> Vec<super::Device> {
+        ids.iter().map(|id| ((*id).to_string(), (*id).to_string())).collect()
+    }
+
+    /// The real enumeration from a desktop running `PipeWire`: mostly ALSA
+    /// plugin permutations that nobody would choose on purpose.
+    #[test]
+    fn drops_the_alsa_plugin_noise() {
+        let devices = usable_devices(raw(&[
+            "hw:CARD=PCH,DEV=0",
+            "plughw:CARD=PCH,DEV=0",
+            "surround71:CARD=PCH,DEV=0",
+            "dmix:CARD=HDMI,DEV=9",
+            "dsnoop:CARD=PCH,DEV=2",
+            "hdmi:CARD=HDMI,DEV=1",
+            "front:CARD=PCH,DEV=0",
+        ]));
+        let ids: Vec<&str> = devices.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(ids, vec!["plughw:CARD=PCH,DEV=0"]);
+    }
+
+    /// `hw:` takes exclusive access to the card, which fails whenever a sound
+    /// server holds it — which is always, on a normal desktop.
+    #[test]
+    fn exclusive_hw_devices_are_not_offered() {
+        let devices = usable_devices(raw(&["hw:CARD=PCH,DEV=0"]));
+        assert!(devices.is_empty());
+    }
+
+    #[test]
+    fn the_sound_server_comes_first() {
+        let devices = usable_devices(raw(&[
+            "plughw:CARD=PCH,DEV=0",
+            "pipewire",
+            "plughw:CARD=HDMI,DEV=3",
+        ]));
+        assert_eq!(devices[0].1, "PipeWire");
+    }
+
+    #[test]
+    fn names_are_readable() {
+        assert_eq!(friendly_name("plughw:CARD=PCH,DEV=0"), "PCH");
+        assert_eq!(friendly_name("plughw:CARD=HDMI,DEV=3"), "HDMI (device 3)");
+        assert_eq!(friendly_name("pipewire"), "PipeWire");
+        assert_eq!(friendly_name("pulse"), "PulseAudio");
+        assert_eq!(friendly_name("default"), "ALSA default");
+    }
+
+    /// Two ids that render to the same label would look like duplicates.
+    #[test]
+    fn duplicate_labels_are_collapsed() {
+        let devices = usable_devices(raw(&["plughw:CARD=PCH,DEV=0", "sysdefault:CARD=PCH"]));
+        let labels: Vec<&str> = devices.iter().map(|(_, n)| n.as_str()).collect();
+        assert_eq!(labels, vec!["PCH"], "same card should appear once");
+    }
+
+    #[test]
+    fn an_empty_enumeration_is_not_an_error() {
+        assert!(usable_devices(Vec::new()).is_empty());
     }
 }

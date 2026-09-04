@@ -204,6 +204,15 @@ impl SipsterApp {
         let mut startup = open.map(Message::SettingsOpened);
         if first_run {
             startup = startup.chain(Task::done(Message::OpenSettings));
+        } else {
+            // Warm the caches immediately rather than when a window is first
+            // opened. The router can take seconds to answer, and that time is
+            // free while the user is still looking at the dialer. Skipped on
+            // first run, where there is nothing configured to sync from.
+            startup = startup.chain(Task::batch([
+                Task::done(Message::Contacts(contacts::Message::SyncPressed)),
+                Task::done(Message::Calls(calls::Message::SyncPressed)),
+            ]));
         }
         (app, startup)
     }
@@ -216,7 +225,9 @@ impl SipsterApp {
         } else if Some(window) == self.calls_window {
             "Sipster — Call History".into()
         } else {
-            "Sipster".into()
+            // The version lived in the settings About section, which is gone;
+            // the title bar is where a version belongs anyway.
+            concat!("Sipster ", env!("CARGO_PKG_VERSION")).into()
         }
     }
 
@@ -370,9 +381,9 @@ impl SipsterApp {
                 &self.config.ui,
                 &self.devices,
                 account,
-                &self.config_path,
                 self.config.needs_setup(),
                 &self.config.integration,
+                &self.config_path,
             )
             .map(Message::Settings);
         }
@@ -492,9 +503,13 @@ impl SipsterApp {
         let (id, open) = window::open(crate::contacts_window_settings());
         self.contacts_window = Some(id);
 
-        self.contacts.contacts.clear();
-        self.contacts.loading = true;
-        Task::batch([open.map(Message::ContactsOpened), self.stream_contacts()])
+        // Reuse whatever the startup prefetch already has; only sync when
+        // there is nothing to show, so opening the window is instant.
+        if self.contacts.contacts.is_empty() && !self.contacts.loading {
+            self.contacts.loading = true;
+            return Task::batch([open.map(Message::ContactsOpened), self.stream_contacts()]);
+        }
+        open.map(Message::ContactsOpened)
     }
 
     /// Streams contact batches into the window as each provider answers.
@@ -670,9 +685,11 @@ impl SipsterApp {
         let (id, open) = window::open(crate::calls_window_settings());
         self.calls_window = Some(id);
 
-        self.calls.calls.clear();
-        self.calls.loading = true;
-        Task::batch([open.map(Message::CallsOpened), self.stream_calls()])
+        if self.calls.calls.is_empty() && !self.calls.loading {
+            self.calls.loading = true;
+            return Task::batch([open.map(Message::CallsOpened), self.stream_calls()]);
+        }
+        open.map(Message::CallsOpened)
     }
 
     fn on_calls(&mut self, msg: calls::Message) -> Task<Message> {
@@ -1109,6 +1126,9 @@ impl SipsterApp {
             S::Expires(v) => self.settings.expires = v,
             S::LocalPort(v) => self.settings.local_port = v,
             S::RevealPassword(v) => self.settings.reveal_password = v,
+            S::RevealFritzPassword(v) => self.settings.reveal_fritz_password = v,
+            S::RevealCardDavPassword(v) => self.settings.reveal_carddav_password = v,
+            S::RevealGoogleSecret(v) => self.settings.reveal_google_secret = v,
 
             S::RevertAccount => {
                 let account = self
@@ -1172,6 +1192,7 @@ impl SipsterApp {
                 self.persist();
             }
 
+            S::JumpTo(index) => self.settings.section = index,
             S::Close => {
                 if let Some(id) = self.settings_window.take() {
                     return window::close(id);

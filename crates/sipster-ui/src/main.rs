@@ -200,8 +200,9 @@ pub(crate) fn main_window_settings() -> iced::window::Settings {
 /// different application.
 pub(crate) fn settings_window_settings() -> iced::window::Settings {
     iced::window::Settings {
-        size: iced::Size::new(600.0, 700.0),
-        min_size: Some(iced::Size::new(420.0, 360.0)),
+        // Wide enough for the category index beside the panel.
+        size: iced::Size::new(860.0, 700.0),
+        min_size: Some(iced::Size::new(620.0, 400.0)),
         ..main_window_settings()
     }
 }

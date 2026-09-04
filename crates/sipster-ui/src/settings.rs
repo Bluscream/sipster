@@ -15,7 +15,8 @@
 //! silently reset.
 
 use iced::widget::{
-    button, checkbox, column, container, pick_list, row, rule, scrollable, text, text_input, Space,
+    button, checkbox, column, container, pick_list, row, rule, scrollable, stack, text, text_input,
+    Space,
 };
 use iced::{Alignment, Element, Length};
 use sipster_core::audio::{Device, DeviceSelection};
@@ -74,6 +75,9 @@ pub enum Message {
     Expires(String),
     LocalPort(String),
     RevealPassword(bool),
+    RevealFritzPassword(bool),
+    RevealCardDavPassword(bool),
+    RevealGoogleSecret(bool),
     ApplyAccount,
     RevertAccount,
 
@@ -118,10 +122,19 @@ pub enum Message {
     AddCardDavAccount,
     RemoveCardDavAccount(String),
 
+    /// Show the category at this index.
+    JumpTo(usize),
+
     Close,
 }
 
 /// Editable state for the settings window.
+///
+/// The bool count trips `struct_excessive_bools`, whose usual remedy does not
+/// apply: these are independent per-field reveal toggles plus one load flag,
+/// and folding them into an enum would mean only one secret could be revealed
+/// at a time — which is worse, not better.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Default)]
 pub struct State {
     pub label: String,
@@ -133,11 +146,16 @@ pub struct State {
     pub expires: String,
     pub local_port: String,
     pub reveal_password: bool,
+    pub reveal_fritz_password: bool,
+    pub reveal_carddav_password: bool,
+    pub reveal_google_secret: bool,
 
     pub inputs: Vec<Device>,
     pub outputs: Vec<Device>,
     pub devices_loaded: bool,
 
+    /// Which category the index has selected.
+    pub section: usize,
     /// Whether the provider panel is expanded.
     pub show_providers: bool,
     pub draft_carddav_url: String,
@@ -220,36 +238,95 @@ fn parse_field<T: std::str::FromStr>(name: &str, raw: &str) -> Result<T, String>
 
 // ── rendering ────────────────────────────────────────────────────────────────
 
+/// The categories in the index, in order.
+///
+/// The index selects rather than scrolls: iced has no scroll-to-anchor, only
+/// proportional snapping, which would land near a section rather than on it.
+/// Showing one category at a time is exact, and is what desktop settings
+/// windows do anyway.
+pub const SECTIONS: [&str; 7] = [
+    "Account",
+    "Audio",
+    "Appearance",
+    "Sounds",
+    "Desktop",
+    "Integrations",
+    "Call blocking",
+];
+
 /// Renders the whole settings window.
 pub fn view<'a>(
     state: &'a State,
     ui: &'a UiSettings,
     devices: &'a DeviceSelection,
     account: Option<&'a SipAccount>,
-    config_path: &'a str,
     first_run: bool,
     integration: &'a IntegrationSettings,
+    config_path: &'a str,
 ) -> Element<'a, Message> {
-    let body = column![
-        account_section(state, account, first_run, ui.streaming_mode),
-        audio_section(state, devices),
-        appearance_section(ui),
-        sounds_section(ui),
-        integration_section(ui),
-        providers_section(state, integration),
-        blocking_section(integration),
-        about_section(config_path),
-    ]
-    .spacing(26)
-    .padding(24)
-    .max_width(560);
+    let selected = state.section.min(SECTIONS.len() - 1);
+    let panel = match selected {
+        0 => account_section(state, account, first_run, ui.streaming_mode),
+        1 => audio_section(state, devices),
+        2 => appearance_section(ui),
+        3 => sounds_section(ui),
+        4 => integration_section(ui),
+        5 => providers_section(state, integration, config_path),
+        _ => blocking_section(integration),
+    };
 
+    let body = column![panel].spacing(26).padding(24).max_width(620);
     let scroller = scrollable(body).height(Length::Fill).width(Length::Fill);
 
-    column![scroller, footer(state)]
-        .width(Length::Fill)
+    // A persistent index rather than scrolling to find a section. The window is
+    // wide enough for it now, and the settings list has outgrown one screen.
+    let mut index = column![].spacing(2);
+    for (i, name) in SECTIONS.iter().enumerate() {
+        let is_current = i == selected;
+        index = index.push(
+            button(text(*name).size(13))
+                .on_press(Message::JumpTo(i))
+                .padding([6, 9])
+                .width(Length::Fill)
+                .style(move |theme: &iced::Theme, status| {
+                    let palette = theme.extended_palette();
+                    let background = if is_current {
+                        Some(palette.primary.base.color.into())
+                    } else if matches!(status, button::Status::Hovered) {
+                        Some(palette.background.weak.color.into())
+                    } else {
+                        None
+                    };
+                    button::Style {
+                        background,
+                        text_color: if is_current {
+                            palette.primary.base.text
+                        } else {
+                            palette.background.base.text
+                        },
+                        border: iced::border::rounded(4),
+                        ..button::Style::default()
+                    }
+                }),
+        );
+    }
+
+    let sidebar = container(index)
+        .width(Length::Fixed(180.0))
         .height(Length::Fill)
-        .into()
+        .padding(14)
+        .style(|theme: &iced::Theme| container::Style {
+            background: Some(theme.extended_palette().background.weakest.color.into()),
+            ..container::Style::default()
+        });
+
+    column![
+        row![sidebar, scroller].height(Length::Fill),
+        footer(state)
+    ]
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .into()
 }
 
 fn footer(state: &State) -> Element<'_, Message> {
@@ -308,6 +385,57 @@ fn field<'a>(label: &'a str, control: Element<'a, Message>) -> Element<'a, Messa
     .into()
 }
 
+/// A password field with a reveal toggle inside it.
+///
+/// The eye sits on top of the input via `stack`, with right padding on the
+/// text so a long value scrolls behind rather than under the button. This
+/// replaces a separate "Show password" checkbox, which took a whole row per
+/// secret and left three of the four secret fields with no reveal at all.
+fn secret_input<'a>(
+    placeholder: &'a str,
+    value: &'a str,
+    revealed: bool,
+    on_change: impl Fn(String) -> Message + 'a,
+    on_reveal: impl Fn(bool) -> Message + 'a,
+) -> Element<'a, Message> {
+    let field = text_input(placeholder, value)
+        .on_input(on_change)
+        .secure(!revealed)
+        .padding(iced::Padding::from(7).right(30))
+        .size(14);
+
+    // A geometric glyph, not an emoji: the default font has no 👁, so the
+    // button rendered as nothing at all and the toggle looked missing.
+    // Filled means visible, hollow means hidden.
+    let eye = button(text(if revealed { "◉" } else { "○" }).size(14))
+        .on_press(on_reveal(!revealed))
+        .padding([2, 6])
+        .style(move |theme: &iced::Theme, status| {
+            let palette = theme.extended_palette();
+            button::Style {
+                background: None,
+                // Dim while hidden, full strength while revealed, so the
+                // current state is readable from the icon alone.
+                text_color: if revealed || matches!(status, button::Status::Hovered) {
+                    palette.background.base.text
+                } else {
+                    palette.background.strong.color
+                },
+                ..button::Style::default()
+            }
+        });
+
+    stack![
+        field,
+        container(eye)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(iced::alignment::Horizontal::Right)
+            .align_y(iced::alignment::Vertical::Center),
+    ]
+    .into()
+}
+
 fn input<'a>(
     placeholder: &'a str,
     value: &'a str,
@@ -326,17 +454,6 @@ fn account_section<'a>(
     first_run: bool,
     mask: bool,
 ) -> Element<'a, Message> {
-    let password = {
-        let mut widget = text_input("", &state.password)
-            .on_input(Message::Password)
-            .padding(7)
-            .size(14);
-        if !state.reveal_password {
-            widget = widget.secure(true);
-        }
-        widget
-    };
-
     // `account` is the one the engine is actually running. When there is none
     // — first run, or a failed connect — nothing has been applied yet, so
     // whatever is in the form is worth applying and Apply must be live.
@@ -379,15 +496,15 @@ fn account_section<'a>(
             "Auth user",
             hidden("same as username", &state.auth_user, Message::AuthUser)
         ),
-        field("Password", password.into()),
         field(
-            "",
-            checkbox(state.reveal_password)
-                .label("Show password")
-                .on_toggle(Message::RevealPassword)
-                .size(15)
-                .text_size(13)
-                .into()
+            "Password",
+            secret_input(
+                "",
+                &state.password,
+                state.reveal_password,
+                Message::Password,
+                Message::RevealPassword,
+            )
         ),
         field(
             "Re-register every",
@@ -565,6 +682,7 @@ fn integration_section(ui: &UiSettings) -> Element<'_, Message> {
 fn providers_section<'a>(
     state: &'a State,
     integration: &'a IntegrationSettings,
+    config_path: &'a str,
 ) -> Element<'a, Message> {
     let summary = format!(
         "{} FRITZ!Box · {} Google · {} CardDAV",
@@ -602,6 +720,14 @@ fn providers_section<'a>(
             .text_size(13),
     );
 
+    // The config path lived in an About section that was otherwise just a
+    // version number; it belongs where credentials are entered.
+    content = content.push(
+        text(format!("Stored in {config_path}"))
+            .size(11)
+            .color(iced::Color::from_rgb(0.62, 0.62, 0.66)),
+    );
+
     section(
         "Integrations",
         Some("Where contacts and call history come from."),
@@ -628,12 +754,13 @@ fn fritzbox_panel<'a>(
         field("Username", input("", &fb.username, Message::FritzUserChanged)),
         field(
             "Password",
-            text_input("", &fb.password)
-                .on_input(Message::FritzPassChanged)
-                .secure(true)
-                .padding(7)
-                .size(14)
-                .into()
+            secret_input(
+                "",
+                &fb.password,
+                state.reveal_fritz_password,
+                Message::FritzPassChanged,
+                Message::RevealFritzPassword,
+            )
         ),
     ]
     .spacing(8)
@@ -706,12 +833,13 @@ fn google_panel<'a>(
         ))
         .push(field(
             "Client secret",
-            text_input("", &state.draft_google_client_secret)
-                .on_input(Message::GoogleClientSecretChanged)
-                .secure(true)
-                .padding(7)
-                .size(14)
-                .into(),
+            secret_input(
+                "",
+                &state.draft_google_client_secret,
+                state.reveal_google_secret,
+                Message::GoogleClientSecretChanged,
+                Message::RevealGoogleSecret,
+            ),
         ))
         .push(
             button(text("Connect a Google account").size(13))
@@ -765,12 +893,13 @@ fn carddav_panel<'a>(
         ))
         .push(field(
             "Password",
-            text_input("", &state.draft_carddav_pass)
-                .on_input(Message::CardDavPassChanged)
-                .secure(true)
-                .padding(7)
-                .size(14)
-                .into(),
+            secret_input(
+                "",
+                &state.draft_carddav_pass,
+                state.reveal_carddav_password,
+                Message::CardDavPassChanged,
+                Message::RevealCardDavPassword,
+            ),
         ))
         .push(
             button(text("Add address book").size(13))
@@ -829,36 +958,6 @@ fn blocking_section(integration: &IntegrationSettings) -> Element<'_, Message> {
         "Call blocking",
         Some("Applies to incoming calls, matched on the caller's number."),
         content.into(),
-    )
-}
-
-fn about_section(config_path: &str) -> Element<'_, Message> {
-    let dim = iced::Color::from_rgb(0.62, 0.62, 0.66);
-    let line = |label: &'static str, value: String| -> Element<'_, Message> {
-        row![
-            text(label).size(12).width(Length::Fixed(132.0)).color(dim),
-            text(value).size(12).color(dim),
-        ]
-        .spacing(10)
-        .into()
-    };
-
-    let socket = sipster_core::ipc::socket_path();
-
-    section(
-        "About",
-        Some("Set at startup; not editable here."),
-        column![
-            line("Version", format!("Sipster {}", env!("CARGO_PKG_VERSION"))),
-            line("Config file", config_path.to_string()),
-            line("Control socket", socket.display().to_string()),
-            line(
-                "Log level",
-                std::env::var("RUST_LOG").unwrap_or_else(|_| "default (RUST_LOG unset)".into())
-            ),
-        ]
-        .spacing(5)
-        .into(),
     )
 }
 

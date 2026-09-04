@@ -236,7 +236,7 @@ impl SipsterApp {
                 Task::none()
             }
             Message::DialInputChanged(v) => {
-                self.dial_number = v;
+                self.on_dial_input_changed(v);
                 Task::none()
             }
             Message::DialPad(d) => {
@@ -706,6 +706,15 @@ impl SipsterApp {
         let (engine, id) = (engine.clone(), call.id);
         self.status = "Call declined".into();
         Task::future(async move { Message::ActionDone(engine.hangup(id).await.map_err(|e| e.to_string())) })
+    }
+
+    fn on_dial_input_changed(&mut self, input: String) {
+        if self.config.ui.dtmf_feedback && input.len() > self.dial_number.len() {
+            if let Some(ch) = input.chars().last() {
+                sound::dtmf(ch);
+            }
+        }
+        self.dial_number = input;
     }
 }
 

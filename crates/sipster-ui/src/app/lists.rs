@@ -129,6 +129,22 @@ impl SipsterApp {
         )))
     }
 
+    /// Marks every missed call currently listed as seen.
+    ///
+    /// Recorded against the newest one rather than a flag, so a call that
+    /// arrives afterwards still shows up as unseen.
+    fn acknowledge_missed(&mut self) {
+        let Some(newest) = self.calls.newest_missed().map(str::to_owned) else {
+            return;
+        };
+        if self.config.ui.missed_seen_until.as_deref() == Some(newest.as_str()) {
+            return;
+        }
+        self.calls.missed_seen_until = Some(newest.clone());
+        self.config.ui.missed_seen_until = Some(newest);
+        self.persist();
+    }
+
     /// Streams call batches into the history window. See [`stream_contacts`].
     ///
     /// [`stream_contacts`]: Self::stream_contacts
@@ -328,6 +344,11 @@ impl SipsterApp {
             }
             calls::Message::FilterChanged(filter) => {
                 self.calls.filter = filter;
+                // Opening the Missed filter is the user seeing them, so the
+                // badge clears here rather than counting for ever.
+                if filter == calls::Filter::Missed {
+                    self.acknowledge_missed();
+                }
                 Task::none()
             }
             calls::Message::AddContact(number, name) => {

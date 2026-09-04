@@ -227,6 +227,14 @@ pub struct UiSettings {
     /// Mask names and numbers everywhere they are displayed, leaving only the
     /// first and last character. For screen sharing and recording.
     pub streaming_mode: bool,
+    /// Timestamp of the newest missed call the user has already looked at.
+    ///
+    /// The badge on the History window's Missed filter counts only what is
+    /// newer than this, so it reads as an unread marker rather than a running
+    /// total. Persisted, because a badge that came back on every restart
+    /// would be exactly the nag it is meant not to be.
+    #[serde(default)]
+    pub missed_seen_until: Option<String>,
 }
 
 impl Default for UiSettings {
@@ -241,6 +249,7 @@ impl Default for UiSettings {
             register_uri_schemes: false,
             close_to_tray: true,
             streaming_mode: false,
+            missed_seen_until: None,
         }
     }
 }

@@ -12,7 +12,10 @@ use super::{field, input, secret_input, section, Message, State};
 
 /// Contact and history providers.
 ///
-/// Collapsed by default: most people configure this once, and it is long.
+/// Every panel is shown inline. They used to be hidden behind a "Configure"
+/// button because Settings was one long scrolling page and this section is
+/// longer than all the others put together; now that each category has a page
+/// of its own, the button only added a click.
 pub(super) fn providers_section<'a>(
     state: &'a State,
     integration: &'a IntegrationSettings,
@@ -25,29 +28,14 @@ pub(super) fn providers_section<'a>(
         integration.carddav_accounts.iter().filter(|a| a.enabled).count(),
     );
 
-    let toggle = button(
-        text(if state.show_providers { "Hide" } else { "Configure" }).size(13),
-    )
-    .on_press(Message::ToggleProvidersModal)
-    .padding([5, 11]);
+    let mut content = column![text(summary).size(13)].spacing(10);
 
-    let header = row![
-        text(summary).size(13),
-        Space::new().width(Length::Fill),
-        toggle,
-    ]
-    .align_y(Alignment::Center);
+    content = content.push(rule::horizontal(1)).push(fritzbox_panel(state, integration));
+    content = content.push(rule::horizontal(1)).push(google_panel(state, integration));
+    content = content.push(rule::horizontal(1)).push(carddav_panel(state, integration));
+    content = content.push(rule::horizontal(1)).push(vdir_panel(state, integration));
 
-    let mut content = column![header].spacing(10);
-
-    if state.show_providers {
-        content = content.push(rule::horizontal(1)).push(fritzbox_panel(state, integration));
-        content = content.push(rule::horizontal(1)).push(google_panel(state, integration));
-        content = content.push(rule::horizontal(1)).push(carddav_panel(state, integration));
-        content = content.push(rule::horizontal(1)).push(vdir_panel(state, integration));
-    }
-
-    content = content.push(
+    content = content.push(rule::horizontal(1)).push(
         checkbox(integration.local_history_enabled)
             .label("Record placed and received calls to local history")
             .on_toggle(Message::ToggleLocalHistory)

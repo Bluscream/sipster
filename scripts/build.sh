@@ -43,6 +43,47 @@ fi
 
 export PKG_CONFIG_ALLOW_CROSS=1
 
+# ── being a good neighbour to games ──────────────────────────────────────────
+# A release build saturates every core, which is fine on an idle desktop and
+# very much not fine while a game is running: the frame times go with it. When
+# one is detected the build takes half the cores and runs at a lower priority,
+# trading a slower compile for a playable machine.
+#
+# Detection is deliberately broad rather than a list of titles — anything under
+# Proton/Wine, anything Steam launched, and gamescope all count. VRChat is
+# named explicitly because it is the one that prompted this and it does not
+# always sit under a steamapps path.
+#
+# Deliberately not matching `.exe`: the Windows cross build has that in its own
+# command line, so the build would throttle itself.
+#
+# This runs inside the build container, which shares the host PID namespace, so
+# host games are visible from here.
+GAME_MARKERS='VRChat|gamescope|steamapps/common|wine64-preloader|wineserver'
+
+game_running() {
+    [[ -n "${SIPSTER_IGNORE_GAMES:-}" ]] && return 1
+    pgrep -f "${GAME_MARKERS}" >/dev/null 2>&1
+}
+
+# Cargo's -j and a nice level, empty when the machine is idle.
+CARGO_JOBS=()
+NICE=()
+if game_running; then
+    half=$(( $(nproc) / 2 ))
+    (( half < 1 )) && half=1
+    CARGO_JOBS=(-j "${half}")
+    NICE=(nice -n 10)
+fi
+
+# Announces the throttle once, after the output helpers are defined.
+announce_throttle() {
+    if (( ${#CARGO_JOBS[@]} )); then
+        step "game detected — building on ${CARGO_JOBS[1]}/$(nproc) cores at nice 10"
+        echo "  (set SIPSTER_IGNORE_GAMES=1 to use the whole machine anyway)"
+    fi
+}
+
 # ── output helpers ───────────────────────────────────────────────────────────
 # Colours only when stdout is a terminal, so CI logs stay clean.
 if [[ -t 1 ]]; then
@@ -92,13 +133,13 @@ build_target() {
             PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig \
             PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig \
             CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
-            cargo build --release -p sipster-ui --target "${target}"
+            "${NICE[@]}" cargo build --release -p sipster-ui "${CARGO_JOBS[@]}" --target "${target}"
             ;;
         i686-unknown-linux-gnu)
             PKG_CONFIG_PATH=/usr/lib/i386-linux-gnu/pkgconfig \
             PKG_CONFIG_LIBDIR=/usr/lib/i386-linux-gnu/pkgconfig \
             CARGO_TARGET_I686_UNKNOWN_LINUX_GNU_LINKER=i686-linux-gnu-gcc \
-            cargo build --release -p sipster-ui --target "${target}"
+            "${NICE[@]}" cargo build --release -p sipster-ui "${CARGO_JOBS[@]}" --target "${target}"
             ;;
         armv7-unknown-linux-gnueabihf)
             # libopus compiles its ARM NEON intrinsics unconditionally, but the
@@ -111,13 +152,13 @@ build_target() {
             PKG_CONFIG_PATH=/usr/lib/arm-linux-gnueabihf/pkgconfig \
             PKG_CONFIG_LIBDIR=/usr/lib/arm-linux-gnueabihf/pkgconfig \
             CARGO_TARGET_ARMV7_UNKNOWN_LINUX_GNUEABIHF_LINKER=arm-linux-gnueabihf-gcc \
-            cargo build --release -p sipster-ui --target "${target}"
+            "${NICE[@]}" cargo build --release -p sipster-ui "${CARGO_JOBS[@]}" --target "${target}"
             ;;
         aarch64-pc-windows-msvc)
-            cargo xwin build --release -p sipster-ui --target "${target}"
+            "${NICE[@]}" cargo xwin build --release -p sipster-ui "${CARGO_JOBS[@]}" --target "${target}"
             ;;
         *)
-            cargo build --release -p sipster-ui --target "${target}"
+            "${NICE[@]}" cargo build --release -p sipster-ui "${CARGO_JOBS[@]}" --target "${target}"
             ;;
     esac
 
@@ -141,7 +182,7 @@ build_appimage() {
         $'appimagetool not found in PATH\n  get it from https://github.com/AppImage/appimagetool/releases'
 
     step "Building AppImage"
-    cargo build --release -p sipster-ui --target "${target}"
+    "${NICE[@]}" cargo build --release -p sipster-ui "${CARGO_JOBS[@]}" --target "${target}"
 
     local staging appdir
     staging="$(mktemp -d)"
@@ -263,11 +304,13 @@ run_appimage() {
 # rather than merely intended.
 run_check() {
     step "cargo clippy (warnings denied)"
-    cargo clippy --workspace --all-targets -- -D warnings
+    "${NICE[@]}" cargo clippy --workspace --all-targets "${CARGO_JOBS[@]}" -- -D warnings
     step "cargo test"
-    cargo test --workspace
+    "${NICE[@]}" cargo test --workspace "${CARGO_JOBS[@]}"
     ok "workspace is clean"
 }
+
+announce_throttle
 
 # TARGET was parsed near the top, before the distrobox re-exec.
 case "${TARGET}" in

@@ -106,7 +106,6 @@ pub enum Message {
     // so they belong here rather than inside the windows that display their
     // data — which is where they used to live, splitting account setup across
     // three windows.
-    ToggleProvidersModal,
     ToggleLocalHistory(bool),
     ToggleEds(bool),
     ToggleVdir(bool),
@@ -167,7 +166,6 @@ pub struct State {
     /// Which category the index has selected.
     pub section: usize,
     /// Whether the provider panel is expanded.
-    pub show_providers: bool,
     pub draft_carddav_url: String,
     pub draft_carddav_user: String,
     pub draft_carddav_pass: String,

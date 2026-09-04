@@ -28,6 +28,7 @@ use sipster_integrations::{
 use crate::calls;
 use crate::contacts;
 use crate::engine_bridge::{self, EngineHandle};
+use crate::glow::Glow;
 use crate::pane;
 use crate::settings;
 use crate::sound;
@@ -78,6 +79,8 @@ pub struct SipsterApp {
     /// Whether the dialer currently has focus. Tracked because Wayland offers
     /// no way to ask whether a window is minimized.
     main_focused: bool,
+    /// Dialpad keys lit by recent input. See [`crate::glow`].
+    glow: Glow,
     /// Set while a minimized dialer is being replaced. See
     /// [`SipsterApp::on_show_fallback`].
     reopening_main: bool,
@@ -104,6 +107,8 @@ pub enum Message {
     Ipc(Command),
     // Periodic tray poll tick; drains tray::Request into handle_tray.
     TrayTick,
+    /// One animation frame, while a dialpad key is still glowing.
+    GlowTick,
     // User intent:
     DialInputChanged(String),
     DialPad(char),
@@ -178,8 +183,14 @@ impl SipsterApp {
             calls_at: pane::Placement::default(),
             main_width: pane::DIALER_WIDTH,
             main_focused: true,
+            glow: Glow::default(),
             reopening_main: false,
-            calls: calls::State::default(),
+            calls: calls::State {
+                // The badge has to survive a restart, or it would nag again
+                // every launch.
+                missed_seen_until: config.ui.missed_seen_until.clone(),
+                ..calls::State::default()
+            },
             sync_manager: build_sync_manager(&config),
             devices: DeviceSelection {
                 input: config.audio.input.clone(),
@@ -220,7 +231,6 @@ impl SipsterApp {
     }
 
     // Signature is dictated by iced::daemon(..).subscription(..).
-    #[allow(clippy::unused_self)]
     pub fn subscription(&self) -> Subscription<Message> {
         // engine_bridge::run is a fn()-pointer; it grabs the IPC receiver
         // from the process-global OnceLock in main.rs exactly once.
@@ -250,10 +260,19 @@ impl SipsterApp {
                 None
             }
         });
+        // Frames only while a key is still fading; an idle dialer must not be
+        // woken sixty times a second for an animation that is not running.
+        let glow_sub = if self.glow.is_active() {
+            iced::window::frames().map(|_| Message::GlowTick)
+        } else {
+            Subscription::none()
+        };
+
         Subscription::batch([
             engine_sub,
             tray_sub,
             key_sub,
+            glow_sub,
             window::close_events().map(Message::WindowClosed),
             window::resize_events().map(|(id, size)| Message::WindowResized(id, size)),
             window::events().filter_map(|(id, event)| match event {
@@ -322,6 +341,7 @@ impl SipsterApp {
                 Task::none()
             }
             Message::DialPad(d) => {
+                self.glow.strike(d);
                 self.dial_number.push(d);
                 if self.config.ui.dtmf_feedback {
                     sound::dtmf(d);
@@ -351,6 +371,7 @@ impl SipsterApp {
             | Message::Calls(_)
             | Message::WindowClosed(_)
             | Message::WindowResized(..)
+            | Message::GlowTick
             | Message::MainFocusChanged(..)
             | Message::ShowFallback(_)
             | Message::Settings(_) => self.on_window_message(message),
@@ -370,7 +391,8 @@ impl SipsterApp {
             Message::Dialed(Ok(_)) => Task::none(),
             Message::MainOpened(id) => {
                 self.main_window = Some(id);
-                Task::none()
+                // Focus the dial field so digits can be typed straight away.
+                focus_dial_input()
             }
         }
     }
@@ -383,6 +405,11 @@ impl SipsterApp {
     /// Where the history list currently is.
     pub fn calls_at(&self) -> pane::Placement {
         self.calls_at
+    }
+
+    /// Which dialpad keys are currently lit.
+    pub fn glow(&self) -> &Glow {
+        &self.glow
     }
 
     /// The dialer window's current width.
@@ -439,6 +466,7 @@ impl SipsterApp {
                 // only adopt one if we are not already tracking a main window.
                 if self.main_window.is_none() {
                     self.main_window = Some(id);
+                    return focus_dial_input();
                 }
                 Task::none()
             }
@@ -465,6 +493,10 @@ impl SipsterApp {
                 Task::none()
             }
             Message::ShowFallback(id) => self.on_show_fallback(id),
+            Message::GlowTick => {
+                self.glow.tick();
+                Task::none()
+            }
             Message::WindowResized(id, size) => {
                 if Some(id) == self.main_window {
                     self.main_width = size.width;
@@ -539,6 +571,16 @@ impl SipsterApp {
             .or_else(|| self.config.accounts.first().cloned())
             .unwrap_or_default();
         self.settings.load_account(&account);
+        // The provider panels are always on screen now, so their text drafts
+        // are seeded when the window opens rather than when a panel expands.
+        self.settings.draft_fritz_port = self.config.integration.fritzbox.port.to_string();
+        self.settings.draft_vdir_path = self
+            .config
+            .integration
+            .vdir_path
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_default();
         self.settings.notice = None;
         self.settings.error = None;
 
@@ -843,4 +885,12 @@ fn build_sync_manager(config: &Config) -> SyncManager {
                 );
             }
             sm
+}
+
+/// Puts the keyboard caret in the dial field.
+///
+/// iced 0.14 keeps this on `widget::operation` rather than on `text_input`;
+/// the field is addressed by the id it was built with.
+fn focus_dial_input() -> Task<Message> {
+    iced::widget::operation::focus(view::dial_input_id())
 }

@@ -92,6 +92,10 @@ pub struct State {
     pub loading: bool,
     pub selected: Option<String>,
     pub block_prompt: Option<(String, Option<String>)>,
+    /// Newest missed call the user has already looked at; anything newer is
+    /// what the Missed badge counts. Mirrored from the config so `view` can
+    /// read it without reaching for the whole configuration.
+    pub missed_seen_until: Option<String>,
 }
 
 impl State {
@@ -139,12 +143,39 @@ impl State {
             .collect()
     }
 
-    /// Missed calls, for the badge on the Missed chip.
+    /// Unseen missed calls, for the badge on the Missed chip.
+    ///
+    /// Only what arrived after the user last opened the Missed filter, so the
+    /// badge clears when it is acted on and comes back when something new
+    /// lands. Comparison goes through `timestamp_key` because the sources
+    /// disagree on format — the router sends `DD.MM.YY`, local records are
+    /// ISO-8601, and comparing those as plain strings orders them wrongly.
     fn missed_count(&self) -> usize {
+        let seen = self
+            .missed_seen_until
+            .as_deref()
+            .map(sipster_integrations::timestamp_key);
         self.calls
             .iter()
             .filter(|c| matches!(c.call_type, CallType::Missed))
+            .filter(|c| {
+                seen.as_ref().is_none_or(|seen| {
+                    &sipster_integrations::timestamp_key(&c.timestamp) > seen
+                })
+            })
             .count()
+    }
+
+    /// The newest missed call in the list, whether or not it has been seen.
+    ///
+    /// Acknowledging the badge records this, so calls that arrive later still
+    /// count as unseen.
+    pub fn newest_missed(&self) -> Option<&str> {
+        self.calls
+            .iter()
+            .filter(|c| matches!(c.call_type, CallType::Missed))
+            .max_by_key(|c| sipster_integrations::timestamp_key(&c.timestamp))
+            .map(|c| c.timestamp.as_str())
     }
 }
 
@@ -448,5 +479,70 @@ mod tests {
         assert_eq!(s.selected.as_deref(), Some("1"));
         s.toggle("1");
         assert_eq!(s.selected, None);
+    }
+
+    /// A record at a chosen time, so the seen-marker comparison has something
+    /// to order.
+    fn missed_at(id: &str, timestamp: &str) -> CallRecord {
+        CallRecord {
+            timestamp: timestamp.into(),
+            ..record(id, CallType::Missed, "+49309999999", None)
+        }
+    }
+
+    #[test]
+    fn every_missed_call_counts_until_one_is_acknowledged() {
+        let mut s = State {
+            calls: vec![
+                missed_at("a", "2026-09-01T08:00:00Z"),
+                missed_at("b", "2026-09-02T09:00:00Z"),
+            ],
+            ..State::default()
+        };
+        assert_eq!(s.missed_count(), 2);
+
+        // What clicking the Missed filter records.
+        s.missed_seen_until = s.newest_missed().map(str::to_owned);
+        assert_eq!(s.missed_count(), 0, "the badge clears once they are seen");
+    }
+
+    /// The point of the marker: a call arriving after the click is unread
+    /// again, rather than staying hidden behind an already-cleared badge.
+    #[test]
+    fn a_call_arriving_after_the_click_is_unseen_again() {
+        let mut s = State {
+            calls: vec![missed_at("a", "2026-09-01T08:00:00Z")],
+            ..State::default()
+        };
+        s.missed_seen_until = s.newest_missed().map(str::to_owned);
+        assert_eq!(s.missed_count(), 0);
+
+        s.merge(vec![missed_at("b", "2026-09-03T12:00:00Z")]);
+        assert_eq!(s.missed_count(), 1);
+    }
+
+    /// The router sends `DD.MM.YY` and local records are ISO-8601. Compared as
+    /// plain strings, "05.09.26" sorts below any ISO timestamp, so an older
+    /// router call would look newer than the marker and never clear.
+    #[test]
+    fn the_two_timestamp_formats_are_compared_by_instant_not_by_text() {
+        let mut s = State {
+            calls: vec![
+                missed_at("router", "01.09.26 08:00"),
+                missed_at("local", "2026-09-02T09:00:00Z"),
+            ],
+            ..State::default()
+        };
+        assert_eq!(s.missed_count(), 2);
+        s.missed_seen_until = s.newest_missed().map(str::to_owned);
+        assert_eq!(s.missed_count(), 0, "both formats must land before the marker");
+    }
+
+    /// Clicking Missed with nothing missed must not invent a marker.
+    #[test]
+    fn an_empty_history_has_nothing_to_acknowledge() {
+        let s = State::default();
+        assert_eq!(s.newest_missed(), None);
+        assert_eq!(s.missed_count(), 0);
     }
 }

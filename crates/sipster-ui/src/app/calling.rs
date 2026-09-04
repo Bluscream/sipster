@@ -380,10 +380,18 @@ impl SipsterApp {
     }
 
     pub(super) fn on_dial_input_changed(&mut self, input: String) {
-        if self.config.ui.dtmf_feedback && input.len() > self.dial_number.len() {
+        // Typed rather than clicked: light the matching pad key so the two
+        // halves of the dialer read as one control. A shortened field is a
+        // backspace, which lights the ⌫ key instead.
+        if input.len() > self.dial_number.len() {
             if let Some(ch) = input.chars().last() {
-                sound::dtmf(ch);
+                if self.config.ui.dtmf_feedback {
+                    sound::dtmf(ch);
+                }
+                self.glow.strike(ch);
             }
+        } else if input.len() < self.dial_number.len() {
+            self.glow.strike('⌫');
         }
         self.dial_number = input;
     }

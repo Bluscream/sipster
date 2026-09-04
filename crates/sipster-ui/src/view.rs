@@ -6,6 +6,13 @@ use sipster_core::{CallState, RegistrationState};
 
 use crate::app::{Message, SipsterApp};
 
+/// The dial field, so it can be focused when the window opens — otherwise
+/// typing goes nowhere until the user clicks it, and the dialpad is the one
+/// control people expect to drive from the keyboard.
+pub fn dial_input_id() -> iced::advanced::widget::Id {
+    iced::advanced::widget::Id::new("dial-number")
+}
+
 pub fn root(app: &SipsterApp) -> Element<'_, Message> {
     let Some(pane) = app.docked_pane() else {
         return column![dialer_column(app, false), statusbar(app)]
@@ -226,6 +233,7 @@ fn dialer(app: &SipsterApp, compact: bool) -> Element<'_, Message> {
     // substituting a mask would feed the mask back through `on_input` and
     // destroy what the user typed.
     let number_input = text_input("Number or extension…", &app.dial_number)
+        .id(dial_input_id())
         .secure(app.ui().streaming_mode)
         .on_input(Message::DialInputChanged)
         .on_submit(Message::CallPressed)
@@ -274,7 +282,7 @@ fn dialer(app: &SipsterApp, compact: bool) -> Element<'_, Message> {
     // The dialpad is what a docked pane displaces in a narrow window; the
     // number field and the call row stay, so a call can still be placed.
     if !compact {
-        layout = layout.push(dialpad()).push(Space::new().height(10));
+        layout = layout.push(dialpad(app)).push(Space::new().height(10));
     }
 
     layout.push(action_row).into()
@@ -290,7 +298,9 @@ fn state_label(state: CallState) -> &'static str {
 }
 
 /// One key of the dialpad. All keys share a size so the grid stays square.
-fn pad_key(label: &str, size: f32, msg: Message) -> Element<'static, Message> {
+///
+/// `glow` is how recently the key was struck, 1.0 to 0.0; see [`crate::glow`].
+fn pad_key(label: &str, size: f32, msg: Message, glow: f32) -> Element<'static, Message> {
     button(
         container(text(label.to_owned()).size(size))
             .center_x(Length::Fill)
@@ -299,11 +309,38 @@ fn pad_key(label: &str, size: f32, msg: Message) -> Element<'static, Message> {
     .width(Length::Fixed(72.0))
     .height(Length::Fixed(46.0))
     .on_press(msg)
+    .style(move |theme, status| {
+        let mut style = button::primary(theme, status);
+        if glow <= 0.0 {
+            return style;
+        }
+        // Lift the key towards white rather than swapping in a second colour,
+        // so it reads as the same key lit up and still works on every theme.
+        if let Some(iced::Background::Color(base)) = style.background {
+            style.background = Some(iced::Background::Color(lighten(base, glow * 0.55)));
+        }
+        style.border.color = lighten(style.border.color, glow);
+        style.border.width = style.border.width.max(1.0);
+        style
+    })
     .into()
 }
 
-fn dialpad() -> Element<'static, Message> {
-    let digit = |d: char| pad_key(&d.to_string(), 26.0, Message::DialPad(d));
+/// Mixes `color` towards white by `amount` (0.0 to 1.0).
+fn lighten(color: iced::Color, amount: f32) -> iced::Color {
+    let mix = amount.clamp(0.0, 1.0);
+    iced::Color {
+        r: color.r + (1.0 - color.r) * mix,
+        g: color.g + (1.0 - color.g) * mix,
+        b: color.b + (1.0 - color.b) * mix,
+        a: color.a,
+    }
+}
+
+fn dialpad(app: &SipsterApp) -> Element<'static, Message> {
+    let glow = app.glow();
+    let digit =
+        |d: char| pad_key(&d.to_string(), 26.0, Message::DialPad(d), glow.amount(d));
 
     column![
         row![digit('1'), digit('2'), digit('3')].spacing(10),
@@ -312,8 +349,8 @@ fn dialpad() -> Element<'static, Message> {
         row![digit('*'), digit('0'), digit('#')].spacing(10),
         row![
             digit('+'),
-            pad_key("C", 22.0, Message::ClearInput),
-            pad_key("⌫", 24.0, Message::Backspace),
+            pad_key("C", 22.0, Message::ClearInput, glow.amount('C')),
+            pad_key("⌫", 24.0, Message::Backspace, glow.amount('⌫')),
         ]
         .spacing(10),
     ]

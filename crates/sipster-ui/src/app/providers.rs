@@ -17,15 +17,6 @@ impl SipsterApp {
     pub(super) fn on_provider_settings(&mut self, msg: settings::Message) -> Task<Message> {
         use settings::Message as S;
         match msg {
-            S::ToggleProvidersModal => {
-                self.settings.show_providers = !self.settings.show_providers;
-                if self.settings.show_providers {
-                    // Seed the text drafts from the stored config each time the
-                    // panel opens, so it always shows what is actually saved.
-                    self.settings.draft_fritz_port =
-                        self.config.integration.fritzbox.port.to_string();
-                }
-            }
             S::FritzHostChanged(v) => {
                 self.config.integration.fritzbox.host = v;
                 self.persist();

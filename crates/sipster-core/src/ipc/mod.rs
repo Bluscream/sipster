@@ -462,6 +462,43 @@ mod tests {
         assert_eq!(path.file_name().unwrap(), "sipster.sock");
     }
 
+    /// Binding must not unlink a socket something is listening on.
+    ///
+    /// `--no-single-instance` used to do exactly that: the second copy stole
+    /// the primary's socket, so commands went to the wrong process, and when
+    /// that copy exited the primary was left unreachable while still holding
+    /// the single-instance lock.
+    #[cfg(unix)]
+    #[test]
+    fn binding_refuses_to_steal_a_live_socket() {
+        let dir = std::env::temp_dir().join(format!("sipster-bind-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("live.sock");
+
+        let _primary = transport::bind(&path).expect("first bind succeeds");
+        let second = transport::bind(&path);
+        assert!(second.is_err(), "a live socket must not be taken over");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A socket left behind by a crash has nobody listening, so replacing it
+    /// is the whole point of the stale cleanup.
+    #[cfg(unix)]
+    #[test]
+    fn binding_replaces_a_dead_socket() {
+        let dir = std::env::temp_dir().join(format!("sipster-stale-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("stale.sock");
+
+        // Bind and drop: the file survives, but nothing is accepting on it.
+        drop(transport::bind(&path).expect("first bind"));
+        assert!(path.exists(), "the socket file outlives its listener");
+
+        assert!(transport::bind(&path).is_ok(), "a dead socket must be replaceable");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     #[test]
     fn parses_cli_arguments() {
         assert_eq!(

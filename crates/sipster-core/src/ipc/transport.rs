@@ -50,18 +50,46 @@ mod imp {
 
     impl Listener {
         pub(super) fn bind_impl(path: &Path) -> Result<Self> {
-            // Any socket file here is left over from an unclean shutdown: we
-            // only get this far while holding the single-instance lock, so
-            // nothing can be listening on it.
-            match std::fs::remove_file(path) {
-                Ok(()) => tracing::debug!("removed stale control socket"),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => return Err(crate::error::Error::Io(e)),
+            // Only unlink a socket that nothing is listening on.
+            //
+            // This used to remove it unconditionally, on the assumption that
+            // the caller holds the single-instance lock. `--no-single-instance`
+            // breaks that assumption: a second copy would unlink the running
+            // instance's socket and bind its own, so `--quit` and every other
+            // command silently went to the wrong process — and once the second
+            // copy exited, the real instance was left holding the lock with a
+            // socket nobody was listening on, unreachable for the rest of its
+            // life. That is not theoretical; it is how an instance got stuck
+            // and had to be killed.
+            if let Some(live) = socket_is_live(path) {
+                if live {
+                    return Err(crate::error::Error::Config(format!(
+                        "{} is already served by a running instance",
+                        path.display()
+                    )));
+                }
+                match std::fs::remove_file(path) {
+                    Ok(()) => tracing::debug!("removed stale control socket"),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(crate::error::Error::Io(e)),
+                }
             }
+
             let listener = std::os::unix::net::UnixListener::bind(path)?;
             listener.set_nonblocking(true)?;
             Ok(Self(listener))
         }
+    }
+
+    /// Whether something is accepting on `path`.
+    ///
+    /// `None` when there is no socket file at all. A connect that is refused
+    /// means the file is left over from a crash and is safe to replace.
+    fn socket_is_live(path: &Path) -> Option<bool> {
+        if !path.exists() {
+            return None;
+        }
+        Some(std::os::unix::net::UnixStream::connect(path).is_ok())
     }
 
     pub(super) async fn connect(path: &Path) -> Option<tokio::net::UnixStream> {

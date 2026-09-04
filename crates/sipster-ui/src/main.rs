@@ -240,7 +240,9 @@ fn claim_instance(args: &[String]) -> Option<iced::Result> {
                 listener,
                 initial_command: Command::from_args(args),
             }),
-            Err(e) => eprintln!("sipster: no control channel in this instance: {e}"),
+            // Expected when a real instance already owns the socket: this
+            // copy simply runs without remote control rather than stealing it.
+            Err(e) => eprintln!("sipster: running without a control channel ({e})"),
         }
         return None;
     }

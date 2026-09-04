@@ -49,8 +49,18 @@ pub(crate) async fn build_endpoint(account: &SipAccount) -> Result<rvoip_sip::En
             .registrar(account.registrar_uri())
             .expires(account.expires)
             .bind_addr(bind)
+            .transport(endpoint_transport(account.transport))
             .build(),
     )
     .await
     .map_err(|e| Error::Config(format!("endpoint build failed: {e}")))
+}
+
+/// Maps our transport setting onto rvoip's.
+fn endpoint_transport(transport: Transport) -> rvoip_sip::EndpointTransport {
+    match transport {
+        Transport::Udp => rvoip_sip::EndpointTransport::Udp,
+        Transport::Tcp => rvoip_sip::EndpointTransport::Tcp,
+        Transport::Tls => rvoip_sip::EndpointTransport::Tls,
+    }
 }

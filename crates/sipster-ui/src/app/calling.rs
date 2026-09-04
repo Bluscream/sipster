@@ -313,7 +313,8 @@ impl SipsterApp {
             .map(|c| c.remote.clone())
             .or_else(|| self.incoming.as_ref().filter(|c| c.id == id).map(|c| c.remote.clone()))
             .unwrap_or_else(|| self.dial_number.clone());
-        self.active = Some(ActiveCall { id, state, remote });
+        let on_hold = self.active.as_ref().is_some_and(|c| c.id == id && c.on_hold);
+        self.active = Some(ActiveCall { id, state, remote, on_hold });
         self.status = call_status(state);
     }
 
@@ -365,6 +366,7 @@ impl SipsterApp {
             id,
             state: CallState::Active,
             remote: call.remote,
+            on_hold: false,
         });
         Task::future(async move { Message::ActionDone(engine.answer(id).await.map_err(|e| e.to_string())) })
     }
@@ -379,7 +381,72 @@ impl SipsterApp {
         Task::future(async move { Message::ActionDone(engine.hangup(id).await.map_err(|e| e.to_string())) })
     }
 
-    pub(super) fn on_dial_input_changed(&mut self, input: String) {
+    /// Records a hold or resume the far end accepted.
+    pub(super) fn on_hold_changed(&mut self, on_hold: bool) -> Task<Message> {
+        if let Some(call) = self.active.as_mut() {
+            call.on_hold = on_hold;
+        }
+        self.status = if on_hold { "On hold".into() } else { "Connected".into() };
+        Task::none()
+    }
+
+    /// Puts the call on hold, or takes it off again.
+    ///
+    /// The flag is only flipped once the far end accepts, so the button never
+    /// claims a hold that did not happen.
+    pub(super) fn toggle_hold(&mut self) -> Task<Message> {
+        let (Some(call), Some(engine)) = (self.active.as_ref(), self.engine.clone()) else {
+            return Task::none();
+        };
+        let (id, hold) = (call.id, !call.on_hold);
+        self.status = if hold { "Holding…".into() } else { "Resuming…".into() };
+        Task::future(async move {
+            match engine.set_hold(id, hold).await {
+                Ok(()) => Message::HoldChanged(hold),
+                Err(e) => Message::ActionDone(Err(e.to_string())),
+            }
+        })
+    }
+
+    /// Hands the call to whatever is in the dial field and drops out of it.
+    pub(super) fn transfer(&mut self) -> Task<Message> {
+        let target = self.dial_number.trim().to_string();
+        let (Some(call), Some(engine)) = (self.active.as_ref(), self.engine.clone()) else {
+            return Task::none();
+        };
+        if target.is_empty() {
+            self.status = "Type a number to transfer to".into();
+            return Task::none();
+        }
+        let id = call.id;
+        self.status = format!("Transferring to {target}…");
+        Task::future(async move {
+            Message::ActionDone(
+                engine
+                    .transfer_blind(id, &target)
+                    .await
+                    .map_err(|e| e.to_string()),
+            )
+        })
+    }
+
+    /// Sends `digit` to the far end when a call is up.
+    ///
+    /// `None` when there is no call to send it to, which is the caller's cue
+    /// to treat the keypress as editing the number instead.
+    pub(super) fn send_dtmf(&self, digit: char) -> Option<Task<Message>> {
+        let call = self.active.as_ref()?;
+        if !sipster_core::engine::is_dtmf_digit(digit) {
+            return None;
+        }
+        let engine = self.engine.clone()?;
+        let id = call.id;
+        Some(Task::future(async move {
+            Message::ActionDone(engine.send_dtmf(id, digit).await.map_err(|e| e.to_string()))
+        }))
+    }
+
+    pub(super) fn on_dial_input_changed(&mut self, input: String) -> Task<Message> {
         // Typed rather than clicked: light the matching pad key so the two
         // halves of the dialer read as one control. A shortened field is a
         // backspace, which lights the ⌫ key instead.
@@ -389,10 +456,16 @@ impl SipsterApp {
                     sound::dtmf(ch);
                 }
                 self.glow.strike(ch);
+                // Typed during a call: send the tone and leave the field
+                // alone, so it keeps showing the number that was dialled.
+                if let Some(task) = self.send_dtmf(ch) {
+                    return task;
+                }
             }
         } else if input.len() < self.dial_number.len() {
             self.glow.strike('⌫');
         }
         self.dial_number = input;
+        Task::none()
     }
 }

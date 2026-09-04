@@ -4,13 +4,53 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
-/// Transport used to reach the registrar. Only UDP is implemented today; the
-/// enum exists so the on-disk config format is stable when TCP/TLS land.
+/// Transport used to reach the registrar.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Transport {
     #[default]
     Udp,
+    Tcp,
+    /// TLS, which addresses the registrar as `sips:`.
+    Tls,
+}
+
+impl Transport {
+    pub const ALL: [Self; 3] = [Self::Udp, Self::Tcp, Self::Tls];
+
+    /// The default SIP port for this transport. TLS is 5061; the other two
+    /// share 5060.
+    #[must_use]
+    pub fn default_port(self) -> u16 {
+        match self {
+            Self::Tls => 5061,
+            Self::Udp | Self::Tcp => 5060,
+        }
+    }
+
+    /// The URI scheme a registrar is addressed with.
+    #[must_use]
+    pub fn scheme(self) -> &'static str {
+        match self {
+            Self::Tls => "sips",
+            Self::Udp | Self::Tcp => "sip",
+        }
+    }
+
+    #[must_use]
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Udp => "UDP",
+            Self::Tcp => "TCP",
+            Self::Tls => "TLS",
+        }
+    }
+}
+
+impl std::fmt::Display for Transport {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
 }
 
 /// A single SIP account: everything needed to register and place calls.
@@ -121,12 +161,14 @@ impl SipAccount {
     /// `sip:`/`sips:` URI, and add the scheme and port when missing.
     pub fn registrar_uri(&self) -> String {
         let raw = self.registrar.trim();
+        // An explicit scheme in the host field wins — someone who typed
+        // `sips:` meant it — otherwise the transport decides.
         let (scheme, rest) = if let Some(rest) = raw.strip_prefix("sips:") {
             ("sips", rest)
         } else if let Some(rest) = raw.strip_prefix("sip:") {
             ("sip", rest)
         } else {
-            ("sip", raw)
+            (self.transport.scheme(), raw)
         };
         let rest = rest.trim_start_matches("//");
 
@@ -613,6 +655,59 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
+    /// TLS is addressed as `sips:` and defaults to 5061; the other two share
+    /// `sip:` and 5060. Getting this wrong means the registrar is contacted
+    /// on the wrong port with the wrong scheme.
+    #[test]
+    fn each_transport_has_its_own_scheme_and_default_port() {
+        use super::Transport;
+        assert_eq!(Transport::Udp.scheme(), "sip");
+        assert_eq!(Transport::Tcp.scheme(), "sip");
+        assert_eq!(Transport::Tls.scheme(), "sips");
+        assert_eq!(Transport::Udp.default_port(), 5060);
+        assert_eq!(Transport::Tcp.default_port(), 5060);
+        assert_eq!(Transport::Tls.default_port(), 5061);
+    }
+
+    #[test]
+    fn a_tls_account_builds_a_sips_registrar_uri() {
+        let account = super::SipAccount {
+            registrar: "fritz.box".into(),
+            port: 5061,
+            transport: super::Transport::Tls,
+            ..super::SipAccount::default()
+        };
+        assert_eq!(account.registrar_uri(), "sips:fritz.box:5061");
+    }
+
+    /// A scheme typed into the host field is a deliberate choice and must not
+    /// be overwritten by the transport setting.
+    #[test]
+    fn an_explicit_scheme_survives_the_transport_default() {
+        let account = super::SipAccount {
+            registrar: "sip:fritz.box".into(),
+            port: 5060,
+            transport: super::Transport::Tls,
+            ..super::SipAccount::default()
+        };
+        assert_eq!(account.registrar_uri(), "sip:fritz.box:5060");
+    }
+
+    /// The on-disk format has to keep round-tripping; a config written before
+    /// TCP and TLS existed still says `udp`.
+    #[test]
+    fn transports_round_trip_through_the_config_format() {
+        for transport in super::Transport::ALL {
+            let account = super::SipAccount { transport, ..super::SipAccount::default() };
+            let text = toml::to_string(&account).expect("serialize");
+            let back: super::SipAccount = toml::from_str(&text).expect("deserialize");
+            assert_eq!(back.transport, transport);
+        }
+        assert!(toml::to_string(&super::SipAccount::default())
+            .expect("serialize")
+            .contains("transport = \"udp\""));
+    }
+
     use super::Config;
 
     #[test]

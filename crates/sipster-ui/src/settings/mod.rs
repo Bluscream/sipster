@@ -81,6 +81,7 @@ pub enum Message {
     Password(String),
     Expires(String),
     LocalPort(String),
+    TransportChanged(sipster_core::Transport),
     RevealPassword(bool),
     RevealFritzPassword(bool),
     RevealCardDavPassword(bool),
@@ -173,6 +174,8 @@ pub struct State {
     /// account ports are: parsing every keystroke fights the user the moment
     /// they clear the field to retype it.
     pub draft_fritz_port: String,
+    /// The account's SIP transport, edited alongside the rest of the form.
+    pub transport: sipster_core::Transport,
     /// Google OAuth client credentials, which the user registers themselves.
     pub draft_google_client_id: String,
     pub draft_google_client_secret: String,
@@ -198,6 +201,7 @@ impl State {
         self.password.clone_from(&account.password);
         self.expires = account.expires.to_string();
         self.local_port = account.local_port.to_string();
+        self.transport = account.transport;
         self.error = None;
     }
 
@@ -524,7 +528,16 @@ fn account_section<'a>(
             "Local SIP port",
             input("5060", &state.local_port, Message::LocalPort)
         ),
-        field("Transport", text("UDP (only transport implemented)").size(13).into()),
+        field(
+            "Transport",
+            pick_list(
+                sipster_core::Transport::ALL,
+                Some(state.transport),
+                Message::TransportChanged,
+            )
+            .text_size(13)
+            .into(),
+        ),
         row![apply, revert].spacing(10),
     ]
     .spacing(9);

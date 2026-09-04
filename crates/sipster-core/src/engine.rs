@@ -309,6 +309,90 @@ impl SipEngine {
         }
     }
 
+    /// Sends one DTMF digit to the far end of an active call.
+    ///
+    /// This is what drives a phone menu: the local feedback tone the dialpad
+    /// plays is audible only here, and reaches nobody.
+    ///
+    /// Only `0-9`, `*`, `#` and `A-D` are valid RFC 4733 events; anything else
+    /// is rejected rather than sent, because a `+` typed into the dial field
+    /// is part of a number, not a tone.
+    ///
+    /// # Errors
+    ///
+    /// When the id is not an established call, or the digit is not dialable.
+    pub async fn send_dtmf(&self, id: CallId, digit: char) -> Result<()> {
+        if !is_dtmf_digit(digit) {
+            return Err(Error::Config(format!("{digit} is not a DTMF digit")));
+        }
+
+        // Borrow rather than take: the call carries on after the tone.
+        let reg = self.registry.lock().await;
+        match reg.tracked.get(&id) {
+            Some(Tracked::Active(call)) => call
+                .send_dtmf(digit)
+                .await
+                .map_err(|e| Error::Sip(format!("could not send DTMF {digit}: {e}"))),
+            _ => Err(Error::UnknownCall(id)),
+        }
+    }
+
+    /// Puts an established call on hold, or takes it off again.
+    ///
+    /// Hold is a re-INVITE that stops the media flowing; the call stays up.
+    ///
+    /// # Errors
+    ///
+    /// When the id is not an established call, or the far end refuses.
+    pub async fn set_hold(&self, id: CallId, hold: bool) -> Result<()> {
+        let reg = self.registry.lock().await;
+        let Some(Tracked::Active(call)) = reg.tracked.get(&id) else {
+            return Err(Error::UnknownCall(id));
+        };
+        let result = if hold { call.hold().await } else { call.resume().await };
+        result.map_err(|e| {
+            let what = if hold { "hold" } else { "resume" };
+            Error::Sip(format!("could not {what} the call: {e}"))
+        })
+    }
+
+    /// Whether a call is currently held.
+    pub async fn is_on_hold(&self, id: CallId) -> bool {
+        let reg = self.registry.lock().await;
+        match reg.tracked.get(&id) {
+            Some(Tracked::Active(call)) => call.as_session_handle().is_on_hold().await,
+            _ => false,
+        }
+    }
+
+    /// Hands an established call to `target` and drops out of it (RFC 5589
+    /// blind transfer).
+    ///
+    /// Blind, so it completes as soon as the far end accepts the REFER —
+    /// there is no consultation call and no way back if the target does not
+    /// answer. That is the transfer people mean when they say "put them
+    /// through".
+    ///
+    /// # Errors
+    ///
+    /// When the id is not an established call, the target is empty, or the
+    /// far end refuses the REFER.
+    pub async fn transfer_blind(&self, id: CallId, target: &str) -> Result<()> {
+        let target = target.trim();
+        if target.is_empty() {
+            return Err(Error::Config("no transfer target given".into()));
+        }
+        // Passed through as given, the same as `dial`: rvoip turns a bare
+        // extension into a URI against the registrar.
+        let reg = self.registry.lock().await;
+        let Some(Tracked::Active(call)) = reg.tracked.get(&id) else {
+            return Err(Error::UnknownCall(id));
+        };
+        call.transfer(target)
+            .await
+            .map_err(|e| Error::Sip(format!("could not transfer to {target}: {e}")))
+    }
+
     /// Hang up (or decline) a call by our id.
     pub async fn hangup(&self, id: CallId) -> Result<()> {
         let tracked = self.registry.lock().await.take(id);
@@ -596,5 +680,38 @@ mod tests {
         reg.take(first);
         assert_eq!(reg.resolve("rvoip-2"), Some(second), "unrelated call survives");
         assert_eq!(reg.take(second), Some("b"));
+    }
+}
+
+/// Whether `digit` is a sendable DTMF event.
+///
+/// RFC 4733 defines events for the twelve keys of a phone plus the A-D tones;
+/// `+` and anything else on the dialpad is dial-string syntax, not a tone.
+#[must_use]
+pub fn is_dtmf_digit(digit: char) -> bool {
+    digit.is_ascii_digit() || matches!(digit, '*' | '#' | 'A'..='D' | 'a'..='d')
+}
+
+#[cfg(test)]
+mod dtmf_tests {
+    use super::is_dtmf_digit;
+
+    #[test]
+    fn the_twelve_phone_keys_and_the_abcd_tones_are_sendable() {
+        for digit in "0123456789*#".chars() {
+            assert!(is_dtmf_digit(digit), "{digit} is a phone key");
+        }
+        for digit in "ABCDabcd".chars() {
+            assert!(is_dtmf_digit(digit), "{digit} is an RFC 4733 tone");
+        }
+    }
+
+    /// `+` is on our dialpad but is dial-string syntax, not a tone; sending it
+    /// would be a protocol error rather than a keypress the far end hears.
+    #[test]
+    fn dial_string_characters_are_not_tones() {
+        for digit in ['+', ' ', '-', '(', 'x', 'Z', '\n'] {
+            assert!(!is_dtmf_digit(digit), "{digit:?} is not a DTMF event");
+        }
     }
 }

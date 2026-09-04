@@ -268,6 +268,25 @@ fn dialer(app: &SipsterApp, compact: bool) -> Element<'_, Message> {
     .align_y(Alignment::Center)
     .spacing(8);
 
+    // Hold and transfer only exist while there is a call to apply them to.
+    let in_call_row: Element<'_, Message> = match &app.active {
+        Some(call) => row![
+            call_action(
+                if call.on_hold { "Resume" } else { "Hold" },
+                Message::HoldPressed,
+            ),
+            // Blind transfer sends the call to whatever is in the number
+            // field, so it stays disabled until there is something to send to.
+            call_action_maybe(
+                "Transfer",
+                (!app.dial_number.trim().is_empty()).then_some(Message::TransferPressed),
+            ),
+        ]
+        .spacing(8)
+        .into(),
+        None => Space::new().height(0).into(),
+    };
+
     let mut layout = column![].align_x(Alignment::Center).spacing(4);
     if app.ui().show_banner && !compact {
         layout = layout.push(banner()).push(Space::new().height(2));
@@ -285,7 +304,7 @@ fn dialer(app: &SipsterApp, compact: bool) -> Element<'_, Message> {
         layout = layout.push(dialpad(app)).push(Space::new().height(10));
     }
 
-    layout.push(action_row).into()
+    layout.push(action_row).push(in_call_row).into()
 }
 
 fn state_label(state: CallState) -> &'static str {
@@ -382,6 +401,25 @@ fn list_button(
         style.text_color = color;
         style
     })
+    .into()
+}
+
+/// A small labelled action shown only while a call is up.
+fn call_action(label: &str, msg: Message) -> Element<'static, Message> {
+    call_action_maybe(label, Some(msg))
+}
+
+/// As [`call_action`], but dimmed and inert when there is nothing to do.
+fn call_action_maybe(label: &str, msg: Option<Message>) -> Element<'static, Message> {
+    button(
+        container(text(label.to_owned()).size(13))
+            .center_x(Length::Fill)
+            .center_y(Length::Fill),
+    )
+    .width(Length::Fixed(88.0))
+    .height(Length::Fixed(28.0))
+    .on_press_maybe(msg)
+    .style(button::secondary)
     .into()
 }
 

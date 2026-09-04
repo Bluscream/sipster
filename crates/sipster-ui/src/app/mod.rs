@@ -41,6 +41,9 @@ pub struct ActiveCall {
     pub id: CallId,
     pub state: CallState,
     pub remote: String,
+    /// Mirrors the far end's view, flipped only once a hold or resume is
+    /// accepted — so the button never claims a hold that did not happen.
+    pub on_hold: bool,
 }
 
 /// A ringing inbound call awaiting the user's decision.
@@ -116,6 +119,10 @@ pub enum Message {
     ClearInput,
     CallPressed,
     HangupPressed,
+    HoldPressed,
+    TransferPressed,
+    /// A hold or resume the far end accepted.
+    HoldChanged(bool),
     AnswerPressed,
     DeclinePressed,
     ContactsPressed,
@@ -336,16 +343,19 @@ impl SipsterApp {
             Message::TrayTick => {
                 self.on_tray_tick()
             }
-            Message::DialInputChanged(v) => {
-                self.on_dial_input_changed(v);
-                Task::none()
-            }
+            Message::DialInputChanged(v) => self.on_dial_input_changed(v),
             Message::DialPad(d) => {
                 self.glow.strike(d);
-                self.dial_number.push(d);
                 if self.config.ui.dtmf_feedback {
                     sound::dtmf(d);
                 }
+                // On a call the pad drives the far end's phone menu; the
+                // number field is the number already dialled, so appending to
+                // it there would be nonsense.
+                if let Some(task) = self.send_dtmf(d) {
+                    return task;
+                }
+                self.dial_number.push(d);
                 Task::none()
             }
             Message::Backspace => {
@@ -358,6 +368,9 @@ impl SipsterApp {
             }
             Message::CallPressed => self.dial(),
             Message::HangupPressed => self.hangup(),
+            Message::HoldPressed => self.toggle_hold(),
+            Message::TransferPressed => self.transfer(),
+            Message::HoldChanged(on_hold) => self.on_hold_changed(on_hold),
             Message::AnswerPressed => self.answer(),
             Message::DeclinePressed => self.decline(),
             Message::ContactsPressed => self.cycle_contacts(),
@@ -620,6 +633,18 @@ impl SipsterApp {
             S::Password(v) => self.settings.password = v,
             S::Expires(v) => self.settings.expires = v,
             S::LocalPort(v) => self.settings.local_port = v,
+            S::TransportChanged(t) => {
+                self.settings.transport = t;
+                // Moving between UDP/TCP (5060) and TLS (5061) changes the
+                // usual port, so offer the new default rather than silently
+                // keeping one that will not connect.
+                let previous = sipster_core::Transport::ALL
+                    .iter()
+                    .find(|other| other.default_port().to_string() == self.settings.port);
+                if previous.is_some() {
+                    self.settings.port = t.default_port().to_string();
+                }
+            }
             S::RevealPassword(v) => self.settings.reveal_password = v,
             S::RevealFritzPassword(v) => self.settings.reveal_fritz_password = v,
             S::RevealCardDavPassword(v) => self.settings.reveal_carddav_password = v,
@@ -700,12 +725,7 @@ impl SipsterApp {
 
     /// Commits the account draft: rebuild the engine, then save.
     pub(super) fn apply_account(&mut self) -> Task<Message> {
-        let transport = self
-            .engine
-            .as_ref()
-            .map_or(sipster_core::Transport::Udp, |e| e.account().transport);
-
-        let account = match self.settings.to_account(transport) {
+        let account = match self.settings.to_account(self.settings.transport) {
             Ok(account) => account,
             Err(e) => {
                 self.settings.error = Some(e);

@@ -4,6 +4,8 @@
 //! `rvoip-audio-device` (cpal underneath). Kept in core, not the UI, so any
 //! frontend gets working audio for free.
 
+pub mod pipewire;
+
 use rvoip_audio_device::{AudioDirection, DeviceBridge, DeviceOptions, RunningAudio};
 use rvoip_sip::EndpointCall;
 use tracing::{info, warn};
@@ -33,18 +35,61 @@ pub async fn attach(call: &EndpointCall, devices: &DeviceSelection) -> Result<Ca
         .await
         .map_err(|e| Error::Audio(format!("no media stream for call: {e}")))?;
 
+    // A PipeWire node is not an ALSA PCM and cpal cannot open one, so those
+    // selections open the server's default PCM here and are moved onto the
+    // chosen device once the stream exists. See [`pipewire`].
     let mut opts = DeviceOptions::new();
     if let Some(input) = &devices.input {
-        opts = opts.with_input_device(input.clone());
+        opts = opts.with_input_device(cpal_selector(input));
     }
     if let Some(output) = &devices.output {
-        opts = opts.with_output_device(output.clone());
+        opts = opts.with_output_device(cpal_selector(output));
     }
 
     let running = DeviceBridge::start(stream, opts)
         .map_err(|e| Error::Audio(format!("could not open audio devices: {e}")))?;
     info!("audio devices attached to call");
+
+    route_pipewire(devices).await;
     Ok(CallAudio { _running: running })
+}
+
+/// The PCM name cpal should open for a selection.
+fn cpal_selector(id: &str) -> String {
+    if pipewire::is_node(id) {
+        pipewire::SERVER_PCM.to_string()
+    } else {
+        id.to_string()
+    }
+}
+
+/// How long to keep looking for our own stream nodes before giving up.
+///
+/// They are created asynchronously once the PCM is open, so the first look
+/// usually finds nothing.
+const ROUTE_ATTEMPTS: u32 = 10;
+const ROUTE_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
+
+/// Moves the call's streams onto the selected `PipeWire` devices, if any.
+async fn route_pipewire(devices: &DeviceSelection) {
+    let capture = devices.input.as_deref().and_then(pipewire::node_name);
+    let playback = devices.output.as_deref().and_then(pipewire::node_name);
+    if capture.is_none() && playback.is_none() {
+        return;
+    }
+
+    for _ in 0..ROUTE_ATTEMPTS {
+        tokio::time::sleep(ROUTE_INTERVAL).await;
+        if pipewire::streams_exist() {
+            break;
+        }
+    }
+    let (capture, playback) = (capture.map(str::to_owned), playback.map(str::to_owned));
+    // Two short-lived processes; keep them off the async runtime's threads.
+    let _ = tokio::task::spawn_blocking(move || {
+        pipewire::route(capture.as_deref(), playback.as_deref());
+    })
+    .await;
 }
 
 /// Which devices to use. `None` means "system default".
@@ -58,13 +103,24 @@ pub struct DeviceSelection {
 pub type Device = (String, String);
 
 /// Lists available capture devices, filtered and named for humans.
+///
+/// `PipeWire`'s own nodes come first when it is running, because they are the
+/// only entries that name a real microphone rather than "the default one".
 pub fn input_devices() -> Vec<Device> {
-    usable_devices(rvoip_audio_device::list_devices(AudioDirection::Input))
+    let mut devices = pipewire::devices(pipewire::Direction::Capture);
+    devices.extend(usable_devices(rvoip_audio_device::list_devices(
+        AudioDirection::Input,
+    )));
+    devices
 }
 
 /// Lists available playback devices, filtered and named for humans.
 pub fn output_devices() -> Vec<Device> {
-    usable_devices(rvoip_audio_device::list_devices(AudioDirection::Output))
+    let mut devices = pipewire::devices(pipewire::Direction::Playback);
+    devices.extend(usable_devices(rvoip_audio_device::list_devices(
+        AudioDirection::Output,
+    )));
+    devices
 }
 
 /// Reduces raw ALSA enumeration to devices worth offering, and gives them

@@ -8,6 +8,7 @@ mod app;
 mod calls;
 mod contacts;
 mod engine_bridge;
+mod pane;
 mod settings;
 mod sound;
 mod tray;

@@ -5,10 +5,95 @@ use super::{
     chrono_now_iso, BlockAction, BlockedNumber, Contact, Message, NumberType, PhoneNumber,
     RecordSource, SipsterApp, Task,
 };
+use crate::pane::Placement;
 use crate::{calls, contacts};
 use iced::window;
 
 impl SipsterApp {
+    /// Advances the contact list to its next placement.
+    ///
+    /// One button, three states: beside the dialer, in its own window, gone.
+    pub(super) fn cycle_contacts(&mut self) -> Task<Message> {
+        let next = self.contacts_at.next();
+        // Only one list may be docked; the dialer has room for one column.
+        if next.is_docked() && self.calls_at.is_docked() {
+            self.calls_at = Placement::Hidden;
+        }
+        self.contacts_at = next;
+        // The button gives no other hint about which of the three states a
+        // press just landed on.
+        self.status = format!("Contacts {}", next.label());
+        tracing::info!(placement = next.label(), "contacts pane");
+
+        let mut tasks = vec![self.prefetch_contacts()];
+        match next {
+            Placement::Window => tasks.push(self.open_contacts()),
+            // Leaving Window for Hidden means the window is still up.
+            Placement::Hidden | Placement::Docked => {
+                if let Some(id) = self.contacts_window.take() {
+                    tasks.push(window::close(id));
+                }
+            }
+        }
+        Task::batch(tasks)
+    }
+
+    /// Advances the history list to its next placement. See [`Self::cycle_contacts`].
+    pub(super) fn cycle_calls(&mut self) -> Task<Message> {
+        let next = self.calls_at.next();
+        if next.is_docked() && self.contacts_at.is_docked() {
+            self.contacts_at = Placement::Hidden;
+        }
+        self.calls_at = next;
+        self.status = format!("History {}", next.label());
+        tracing::info!(placement = next.label(), "history pane");
+
+        let mut tasks = vec![self.prefetch_calls()];
+        match next {
+            Placement::Window => tasks.push(self.open_calls()),
+            Placement::Hidden | Placement::Docked => {
+                if let Some(id) = self.calls_window.take() {
+                    tasks.push(window::close(id));
+                }
+            }
+        }
+        Task::batch(tasks)
+    }
+
+    /// Starts a contact sync if nothing has been loaded yet.
+    fn prefetch_contacts(&mut self) -> Task<Message> {
+        if self.contacts_at == Placement::Hidden
+            || !self.contacts.contacts.is_empty()
+            || self.contacts.loading
+        {
+            return Task::none();
+        }
+        self.contacts.loading = true;
+        self.stream_contacts()
+    }
+
+    /// Starts a history sync if nothing has been loaded yet.
+    fn prefetch_calls(&mut self) -> Task<Message> {
+        if self.calls_at == Placement::Hidden || !self.calls.calls.is_empty() || self.calls.loading {
+            return Task::none();
+        }
+        self.calls.loading = true;
+        self.stream_calls()
+    }
+
+    /// Forces the contact list into its own window, from the tray, a
+    /// `sipster://open/contacts` URI or the command line.
+    pub(super) fn show_contacts_window(&mut self) -> Task<Message> {
+        self.contacts_at = Placement::Window;
+        Task::batch([self.prefetch_contacts(), self.open_contacts()])
+    }
+
+    /// Forces the history list into its own window. See [`Self::show_contacts_window`].
+    pub(super) fn show_calls_window(&mut self) -> Task<Message> {
+        self.calls_at = Placement::Window;
+        Task::batch([self.prefetch_calls(), self.open_calls()])
+    }
+
     /// Opens the contacts window, or focuses it if already open.
     pub(super) fn open_contacts(&mut self) -> Task<Message> {
         if let Some(id) = self.contacts_window {

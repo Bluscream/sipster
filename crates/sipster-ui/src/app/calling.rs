@@ -70,8 +70,10 @@ impl SipsterApp {
                 }
             }
             Command::OpenSettings => self.open_settings(),
-            Command::OpenContacts => self.open_contacts(),
-            Command::OpenCallList => self.open_calls(),
+            // An explicit "open" from outside the app means a window,
+            // whatever the button had cycled to.
+            Command::OpenContacts => self.show_contacts_window(),
+            Command::OpenCallList => self.show_calls_window(),
             Command::Quit => {
                 // A pending Google sign-in runs on a blocking thread, and
                 // tokio waits for those at shutdown; without this the process
@@ -94,8 +96,8 @@ impl SipsterApp {
                 }
             }
             tray::Request::OpenSettings => self.open_settings(),
-            tray::Request::OpenCallList => self.open_calls(),
-            tray::Request::OpenContacts => self.open_contacts(),
+            tray::Request::OpenCallList => self.show_calls_window(),
+            tray::Request::OpenContacts => self.show_contacts_window(),
             tray::Request::Answer => self.answer(),
             tray::Request::Hangup => {
                 if self.incoming.is_some() {

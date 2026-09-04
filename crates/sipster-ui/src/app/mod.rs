@@ -28,6 +28,7 @@ use sipster_integrations::{
 use crate::calls;
 use crate::contacts;
 use crate::engine_bridge::{self, EngineHandle};
+use crate::pane;
 use crate::settings;
 use crate::sound;
 use crate::tray;
@@ -68,8 +69,16 @@ pub struct SipsterApp {
     settings: settings::State,
     contacts_window: Option<window::Id>,
     contacts: contacts::State,
+    /// Where the contact list currently lives. See [`crate::pane`].
+    contacts_at: pane::Placement,
     calls_window: Option<window::Id>,
     calls: calls::State,
+    /// Where the history list currently lives.
+    calls_at: pane::Placement,
+    /// The dialer window's current width, so a docked pane can lay itself out
+    /// to fit. Kept from resize events because iced's layout width is not
+    /// otherwise readable from `view`.
+    main_width: f32,
     sync_manager: SyncManager,
     /// Persisted preferences. The in-memory copy is authoritative; the file is
     /// rewritten whenever it changes.
@@ -99,6 +108,7 @@ pub enum Message {
     AnswerPressed,
     DeclinePressed,
     ContactsPressed,
+    WindowResized(window::Id, iced::Size),
     CallListPressed,
     MainOpened(window::Id),
     // Settings window:
@@ -154,8 +164,11 @@ impl SipsterApp {
             settings_window: None,
             settings: settings::State::default(),
             contacts_window: None,
+            contacts_at: pane::Placement::default(),
             contacts: contacts::State::default(),
             calls_window: None,
+            calls_at: pane::Placement::default(),
+            main_width: pane::DIALER_WIDTH,
             calls: calls::State::default(),
             sync_manager: {
                 let mut sm = SyncManager::new();
@@ -287,6 +300,7 @@ impl SipsterApp {
             tray_sub,
             key_sub,
             window::close_events().map(Message::WindowClosed),
+            window::resize_events().map(|(id, size)| Message::WindowResized(id, size)),
         ])
     }
 
@@ -361,8 +375,8 @@ impl SipsterApp {
             Message::HangupPressed => self.hangup(),
             Message::AnswerPressed => self.answer(),
             Message::DeclinePressed => self.decline(),
-            Message::ContactsPressed => self.open_contacts(),
-            Message::CallListPressed => self.open_calls(),
+            Message::ContactsPressed => self.cycle_contacts(),
+            Message::CallListPressed => self.cycle_calls(),
             Message::OpenSettings
             | Message::SettingsOpened(_)
             | Message::DevicesLoaded(..)
@@ -371,6 +385,7 @@ impl SipsterApp {
             | Message::CallsOpened(_)
             | Message::Calls(_)
             | Message::WindowClosed(_)
+            | Message::WindowResized(..)
             | Message::Settings(_) => self.on_window_message(message),
             Message::Dialed(Err(e)) => {
                 self.status = format!("Call failed: {e}");
@@ -391,6 +406,35 @@ impl SipsterApp {
                 Task::none()
             }
         }
+    }
+
+    /// Where the contact list currently is.
+    pub fn contacts_at(&self) -> pane::Placement {
+        self.contacts_at
+    }
+
+    /// Where the history list currently is.
+    pub fn calls_at(&self) -> pane::Placement {
+        self.calls_at
+    }
+
+    /// The dialer window's current width.
+    pub fn main_width(&self) -> f32 {
+        self.main_width
+    }
+
+    /// The docked list, if one is showing beside the dialer.
+    pub fn docked_pane(&self) -> Option<iced::Element<'_, Message>> {
+        if self.contacts_at.is_docked() {
+            return Some(
+                contacts::view(&self.contacts, self.config.ui.streaming_mode)
+                    .map(Message::Contacts),
+            );
+        }
+        if self.calls_at.is_docked() {
+            return Some(calls::view(&self.calls, self.config.ui.streaming_mode).map(Message::Calls));
+        }
+        None
     }
 
     pub fn view(&self, window: window::Id) -> iced::Element<'_, Message> {
@@ -447,13 +491,28 @@ impl SipsterApp {
                 Task::none()
             }
             Message::Calls(msg) => self.on_calls(msg),
+            Message::WindowResized(id, size) => {
+                if Some(id) == self.main_window {
+                    self.main_width = size.width;
+                }
+                Task::none()
+            }
             Message::WindowClosed(id) => {
                 if Some(id) == self.settings_window {
                     self.settings_window = None;
                 } else if Some(id) == self.contacts_window {
                     self.contacts_window = None;
+                    // Closing the window is the same as cycling past it, so
+                    // the next press starts from Hidden rather than reopening
+                    // a window that is no longer there.
+                    if self.contacts_at.is_window() {
+                        self.contacts_at = pane::Placement::Hidden;
+                    }
                 } else if Some(id) == self.calls_window {
                     self.calls_window = None;
+                    if self.calls_at.is_window() {
+                        self.calls_at = pane::Placement::Hidden;
+                    }
                 } else if Some(id) == self.main_window {
                     self.main_window = None;
                     // If close-to-tray is enabled AND the tray icon is working, keep running in background.

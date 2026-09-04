@@ -7,12 +7,50 @@ use sipster_core::{CallState, RegistrationState};
 use crate::app::{Message, SipsterApp};
 
 pub fn root(app: &SipsterApp) -> Element<'_, Message> {
-    let mut main_column = column![body(app)]
+    let Some(pane) = app.docked_pane() else {
+        return column![dialer_column(app, false), statusbar(app)]
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .into();
+    };
+
+    // Two columns once the window is wide enough for both; otherwise the pane
+    // takes the dialpad's place, which is the only way to show a readable list
+    // in a window the width of the dialer. See [`crate::pane`].
+    let content: Element<'_, Message> = if crate::pane::fits_beside_dialer(app.main_width()) {
+        row![
+            container(dialer_column(app, false)).width(Length::Fixed(crate::pane::DIALER_WIDTH)),
+            container(pane).width(Length::Fill).height(Length::Fill),
+        ]
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+    } else {
+        column![
+            dialer_column(app, true),
+            container(pane).width(Length::Fill).height(Length::Fill),
+        ]
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+    };
+
+    column![content, statusbar(app)]
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+}
+
+/// The dialer on its own, without the status bar.
+fn dialer_column(app: &SipsterApp, compact: bool) -> Element<'_, Message> {
+    let mut main_column = column![body(app, compact)]
         .align_x(Alignment::Center)
         .spacing(0)
         .max_width(320);
 
-    let main_content = if app.ui().show_banner {
+    // Compact mode gives its height to the pane below it, so the dialer must
+    // not also stretch to fill.
+    let main_content = if app.ui().show_banner && !compact {
         container(main_column)
             .center_x(Length::Fill)
             .center_y(Length::Fill)
@@ -25,18 +63,19 @@ pub fn root(app: &SipsterApp) -> Element<'_, Message> {
             bottom: 0.0,
             left: 0.0,
         });
-        container(main_column)
+        let stacked = container(main_column)
             .center_x(Length::Fill)
-            .width(Length::Fill)
-            .height(Length::Fill)
+            .width(Length::Fill);
+        // Compact mode hands its leftover height to the pane below it; on its
+        // own the dialer still fills the window.
+        if compact {
+            stacked
+        } else {
+            stacked.height(Length::Fill)
+        }
     };
 
-    let statusbar = statusbar(app);
-
-    column![main_content, statusbar]
-        .width(Length::Fill)
-        .height(Length::Fill)
-        .into()
+    main_content.into()
 }
 
 /// A name or number as it should appear, masked in streaming mode.
@@ -81,11 +120,11 @@ fn statusbar(app: &SipsterApp) -> Element<'_, Message> {
 }
 
 /// Shows the incoming-call prompt when ringing, otherwise the dialer.
-fn body(app: &SipsterApp) -> Element<'_, Message> {
+fn body(app: &SipsterApp, compact: bool) -> Element<'_, Message> {
     if let Some(incoming) = &app.incoming {
         return incoming_prompt(&incoming.remote, app.ui().streaming_mode);
     }
-    dialer(app)
+    dialer(app, compact)
 }
 
 fn incoming_prompt(remote: &str, mask: bool) -> Element<'_, Message> {
@@ -182,7 +221,7 @@ fn banner_handle() -> Option<&'static image::Handle> {
         .as_ref()
 }
 
-fn dialer(app: &SipsterApp) -> Element<'_, Message> {
+fn dialer(app: &SipsterApp, compact: bool) -> Element<'_, Message> {
     // The dial field is hidden with `secure`, not by rewriting its value:
     // substituting a mask would feed the mask back through `on_input` and
     // destroy what the user typed.
@@ -211,28 +250,34 @@ fn dialer(app: &SipsterApp) -> Element<'_, Message> {
         None => Space::new().height(0).into(),
     };
 
+    // The list buttons cycle hidden → docked → window, so they light up to
+    // show the list is somewhere rather than reading as plain "open".
     let action_row = row![
-        secondary_button('☰', Message::ContactsPressed),
+        list_button('☰', app.contacts_at(), Message::ContactsPressed),
         action,
-        secondary_button('☏', Message::CallListPressed),
+        list_button('☏', app.calls_at(), Message::CallListPressed),
     ]
     .align_y(Alignment::Center)
     .spacing(8);
 
     let mut layout = column![].align_x(Alignment::Center).spacing(4);
-    if app.ui().show_banner {
+    if app.ui().show_banner && !compact {
         layout = layout.push(banner()).push(Space::new().height(2));
     }
 
-    layout
+    layout = layout
         .push(number_input)
         .push(Space::new().height(4))
         .push(call_line)
-        .push(Space::new().height(4))
-        .push(dialpad())
-        .push(Space::new().height(10))
-        .push(action_row)
-        .into()
+        .push(Space::new().height(4));
+
+    // The dialpad is what a docked pane displaces in a narrow window; the
+    // number field and the call row stay, so a call can still be placed.
+    if !compact {
+        layout = layout.push(dialpad()).push(Space::new().height(10));
+    }
+
+    layout.push(action_row).into()
 }
 
 fn state_label(state: CallState) -> &'static str {
@@ -273,6 +318,33 @@ fn dialpad() -> Element<'static, Message> {
         .spacing(10),
     ]
     .spacing(8)
+    .into()
+}
+
+/// A list toggle, tinted while its list is showing somewhere.
+fn list_button(
+    glyph: char,
+    placement: crate::pane::Placement,
+    msg: Message,
+) -> Element<'static, Message> {
+    let color = match placement {
+        crate::pane::Placement::Hidden => iced::Color::from_rgb(0.7, 0.7, 0.7),
+        crate::pane::Placement::Docked => iced::Color::from_rgb(0.35, 0.7, 1.0),
+        crate::pane::Placement::Window => iced::Color::from_rgb(0.4, 0.85, 0.6),
+    };
+    button(
+        container(text(glyph.to_string()).size(20))
+            .center_x(Length::Fill)
+            .center_y(Length::Fill),
+    )
+    .width(Length::Fixed(44.0))
+    .height(Length::Fixed(36.0))
+    .on_press(msg)
+    .style(move |theme, status| {
+        let mut style = button::text(theme, status);
+        style.text_color = color;
+        style
+    })
     .into()
 }
 

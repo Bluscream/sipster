@@ -43,7 +43,8 @@ demonstrably work — see [Not yet](#not-yet) for the rest.
   port 5060.
 - **Remote control and URI handling.** `sipster --call 611`, a `tel:` link
   clicked in a browser, and a shell script all take the same path.
-- **Settings window**, opened from the wordmark or the ⚙ button. Account,
+- **Settings window**, opened from the wordmark or the ⚙ button, and
+  automatically on first run. Account,
   audio devices, theme and sound preferences are all editable **while the app
   runs** — theme, device and sound changes take effect on the spot, and an
   account change re-registers without a restart. Everything is written to
@@ -98,65 +99,45 @@ present, and are skipped when they are not.
 
 ## Configure
 
-Most people will not need this section: open **Settings** from the window and
-edit everything there.
+There is nothing to set up by hand. On first run Sipster opens its settings
+window; fill in the account and press **Apply & reconnect**.
 
-Underneath, Sipster reads `$XDG_CONFIG_HOME/sipster/sipster.toml` — or whatever
-`--config-file` points at. Environment variables are only a fallback, used when
-that file has no account, so a first run works with nothing but the environment
-and every later run reads the file. Settings shows which of the two the running
-account came from. The file is written `0600`, because it holds the password.
+The config file is the only source of configuration — Sipster reads no
+environment variables of its own. It lives at
+`$XDG_CONFIG_HOME/sipster/sipster.toml`, or wherever `--config-file` points,
+and the settings window rewrites it as you make changes. It is written `0600`,
+because it holds the account password in the clear (SIP digest auth needs it).
+
+The account fields mirror the Fritz!Box "telephony device" dialog, so you can
+copy values across without translating them. In particular, **Username** is the
+*Benutzername* on the device's *Anmeldedaten* tab — not the internal number
+(620) and not your router's admin login.
 
 ```bash
 sipster --config-file ~/work-phone.toml   # a second account, side by side
 ```
 
-Pair it with `--socket` and `--no-single-instance` to run two independently
+Pair that with `--socket` and `--no-single-instance` to run two independently
 configured instances at once.
 
-The names mirror the Fritz!Box "telephony device" dialog, so you can copy the
-values across without translating them. In particular, `SIPSTER_USERNAME` is
-the **Benutzername** on the device's *Anmeldedaten* tab — not the internal
-number (620) and not your router's admin login.
-
 <details>
-<summary><b>Environment variables</b> (every <code>SIPSTER_</code> name also works with the shorter <code>SIP_</code> prefix)</summary>
+<summary><b>What the file looks like</b></summary>
 
-| Variable              | Required | Default   | Meaning                                    |
-| --------------------- | :------: | --------- | ------------------------------------------ |
-| `SIPSTER_REGISTRAR`   |    yes   | —         | `fritz.box`, a LAN IP, or a provider domain |
-| `SIPSTER_USERNAME`    |    yes   | —         | SIP username registered on the PBX          |
-| `SIPSTER_PASSWORD`    |          | empty     | Account password                            |
-| `SIPSTER_AUTH_USER`   |          | username  | Auth user, when it differs from the username |
-| `SIPSTER_PORT`        |          | `5060`    | Registrar port                              |
-| `SIPSTER_LOCAL_PORT`  |          | `5060`    | Local SIP port; falls back to an ephemeral one if taken |
-| `SIPSTER_EXPIRES`     |          | `600`     | Re-registration interval, seconds           |
-| `SIPSTER_LABEL`       |          | `env`     | Friendly name shown in the UI               |
-| `SIPSTER_IPC_SOCKET`  |          | `$XDG_RUNTIME_DIR/sipster.sock` | Control socket path     |
-| `SIPSTER_CONFIG`      |          | `$XDG_CONFIG_HOME/sipster/sipster.toml` | Config file (same as `--config-file`) |
-
-These exist for first run and for scripted deployments. Once you have saved
-anything in Settings the config file supersedes them, and you can drop them.
-
-</details>
-
-<details>
-<summary><b>Config file</b> — <code>$XDG_CONFIG_HOME/sipster/sipster.toml</code></summary>
+Everything below is written and read by the settings window; you only need this
+if you would rather edit it directly or deploy it from a script.
 
 ```toml
 [[accounts]]
 label     = "Fritz!Box"
-registrar = "fritz.box"
+registrar = "fritz.box"    # host, host:port, or a full sip:/sips: URI
 port      = 5060
 username  = "bluscream"
+auth_user = ""             # defaults to username
 password  = "…"
-expires   = 600
-```
+transport = "udp"          # only udp is implemented
+expires   = 600            # re-registration interval, seconds
+local_port = 5060          # falls back to an ephemeral port if taken
 
-Only the first account is used today. The `[ui]` and `[audio]` tables are
-written by the settings window:
-
-```toml
 [ui]
 theme = "dark"          # dark, light, dracula, nord, solarized-dark,
                         # gruvbox-dark, catppuccin-mocha, tokyo-night
@@ -169,7 +150,12 @@ show_banner = true
 [audio]
 input = "…"             # omit for the system default
 output = "…"
+
+[ipc]
+socket = "…"            # omit for $XDG_RUNTIME_DIR/sipster.sock
 ```
+
+Only the first account is used today.
 
 </details>
 
@@ -191,14 +177,19 @@ sipster --config-file ~/other.toml   # use a different config
 sipster --log-file /tmp/sipster.log  # log to a file instead of stderr
 ```
 
+Sipster reads no environment variables of its own. It does honour the platform
+conventions that tell any Linux program where to put things — `XDG_CONFIG_HOME`,
+`XDG_RUNTIME_DIR`, `HOME` — and `RUST_LOG`, which is a debugging switch rather
+than configuration.
+
 Register Sipster as your desktop's handler for `tel:`, `sip:` and `callto:`
 links by installing `packaging/sipster.desktop` into
 `~/.local/share/applications/`.
 
 Click the **Sipster** wordmark, or the ⚙ button, to open Settings.
 
-Set `RUST_LOG` for detail, e.g. `RUST_LOG=sipster_core=trace`, and
-`--log-file <path>` to send logs to a file instead of stderr.
+For detail while debugging, set `RUST_LOG`, e.g. `RUST_LOG=sipster_core=trace`.
+`--log-file <path>` sends logs to a file instead of stderr.
 
 ## Architecture
 
@@ -234,7 +225,7 @@ Artifacts land in `dist/` named `sipster-{os}-{arch}.{ext}`.
 To try registration without the GUI:
 
 ```bash
-./scripts/register-test.sh          # prompts; the password is never echoed
+./scripts/register-test.sh          # offers your config, or prompts for one
 ./scripts/register-test.sh '**9'    # register, then dial
 ```
 

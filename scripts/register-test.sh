@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 # Interactive registration smoke test against a real PBX.
 #
-# Prompts for credentials (password is read silently), then runs the headless
-# `register` example. The password is passed via the environment only — it never
-# appears in your shell history, in `ps` output, or in any file.
+# Sipster is configured by its config file only — there are no credential
+# environment variables any more. This script therefore writes a throwaway
+# config, runs the headless `register` example against it, and deletes it
+# again. The password never reaches your shell history, `ps` output, or your
+# real config.
 #
 # Builds require the `build-box` distrobox (it has alsa + cmake); this script
 # re-invokes itself inside the container automatically.
@@ -27,85 +29,59 @@ if ! in_container; then
         exit 1
     fi
     echo "==> host detected; re-running inside the '${BOX}' container"
-    # Credentials are collected inside the container so they are never
-    # exported into the host environment.
+    # Credentials are collected inside the container so they never enter the
+    # host environment.
     exec distrobox enter "${BOX}" -- bash -lc \
         "cd '${ROOT_DIR}' && ./scripts/register-test.sh ${TARGET@Q}"
 fi
 
-# systemd's environment.d is only applied when the user session starts, so the
-# variables are usually absent from an already-running shell. Load them here.
-load_environment_d() {
-    local dir="${XDG_CONFIG_HOME:-${HOME}/.config}/environment.d"
-    [[ -d "${dir}" ]] || return 0
-    local file
-    for file in "${dir}"/*.conf; do
-        [[ -e "${file}" ]] || continue
-        # Warn if a file holding a password is readable by other users.
-        if [[ "$(stat -c '%a' "${file}")" != "600" ]] && grep -qi 'password' "${file}"; then
-            echo "warning: ${file} contains a password but is mode $(stat -c '%a' "${file}")." >&2
-            echo "         consider: chmod 600 ${file}" >&2
-        fi
-        # KEY=VALUE lines only; never execute the file.
-        while IFS='=' read -r key value; do
-            [[ "${key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
-            [[ -n "${!key:-}" ]] && continue          # already-set env wins
-            # systemd strips one layer of surrounding quotes; match that, or
-            # the quotes end up inside the value and corrupt the SIP URI.
-            if [[ "${value}" == \"*\" && ${#value} -ge 2 ]]; then
-                value="${value:1:${#value}-2}"
-            elif [[ "${value}" == \'*\' && ${#value} -ge 2 ]]; then
-                value="${value:1:${#value}-2}"
-            fi
-            export "${key}=${value}"
-        done < <(grep -E '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*=' "${file}" | sed 's/^[[:space:]]*//')
-    done
-}
-
-load_environment_d
-
-# Accept either prefix; SIPSTER_ wins when both are present.
-REGISTRAR="${SIPSTER_REGISTRAR:-${SIP_REGISTRAR:-}}"
-USERNAME="${SIPSTER_USERNAME:-${SIP_USERNAME:-}}"
-AUTH_USER="${SIPSTER_AUTH_USER:-${SIP_AUTH_USER:-}}"
-PASSWORD="${SIPSTER_PASSWORD:-${SIP_PASSWORD:-}}"
-
-# Prompt only for what the environment did not supply.
-if [[ -z "${REGISTRAR}" ]]; then
-    read -r -p "Registrar host [fritz.box]: " REGISTRAR
-    REGISTRAR="${REGISTRAR:-fritz.box}"
+# Offer the existing config as the default, so the common case is one Enter.
+DEFAULT_CONFIG="${XDG_CONFIG_HOME:-${HOME}/.config}/sipster/sipster.toml"
+if [[ -f "${DEFAULT_CONFIG}" ]]; then
+    echo "Found a config at ${DEFAULT_CONFIG}"
+    read -r -p "Use it? [Y/n]: " use_existing
+    if [[ ! "${use_existing}" =~ ^[Nn] ]]; then
+        cd "${ROOT_DIR}"
+        exec cargo run -q -p sipster-core --example register -- \
+            --config-file "${DEFAULT_CONFIG}" ${TARGET:+"${TARGET}"}
+    fi
 fi
+
+read -r -p "Registrar host [fritz.box]: " REGISTRAR
+REGISTRAR="${REGISTRAR:-fritz.box}"
 
 # On a Fritz!Box this is the "Benutzername" on the telephony device's
 # "Anmeldedaten" tab — a name like "bluscream", NOT the internal number (620)
 # and NOT the router's admin login.
-if [[ -z "${USERNAME}" ]]; then
-    read -r -p "SIP username (Fritz!Box 'Benutzername'): " USERNAME
-fi
+read -r -p "SIP username (Fritz!Box 'Benutzername'): " USERNAME
 if [[ -z "${USERNAME}" ]]; then
     echo "error: username is required" >&2
     exit 1
 fi
 
-# -s: no echo. The password never reaches the terminal, history, or argv.
-if [[ -z "${PASSWORD}" ]]; then
-    read -r -s -p "Password: " PASSWORD
-    echo
-fi
+# -s: no echo. The password never reaches the terminal or the history.
+read -r -s -p "Password: " PASSWORD
+echo
 
-export SIPSTER_REGISTRAR="${REGISTRAR}"
-export SIPSTER_USERNAME="${USERNAME}"
-export SIPSTER_AUTH_USER="${AUTH_USER}"
-export SIPSTER_PASSWORD="${PASSWORD}"
+# Written 0600 before anything is put in it, and removed however we exit.
+CONFIG="$(mktemp -t sipster-register-XXXXXX.toml)"
+chmod 600 "${CONFIG}"
+trap 'rm -f "${CONFIG}"' EXIT
+
+# A here-doc keeps the password off the command line entirely.
+cat > "${CONFIG}" <<EOF
+[[accounts]]
+label = "register-test"
+registrar = "${REGISTRAR}"
+username = "${USERNAME}"
+password = "${PASSWORD}"
+EOF
 unset PASSWORD
 
 echo
-echo "==> registering ${USERNAME}@${REGISTRAR} (password hidden)"
+echo "==> registering ${USERNAME}@${REGISTRAR} (throwaway config, password hidden)"
 echo
 
 cd "${ROOT_DIR}"
-if [[ -n "${TARGET}" ]]; then
-    exec cargo run -q -p sipster-core --example register -- "${TARGET}"
-else
-    exec cargo run -q -p sipster-core --example register
-fi
+cargo run -q -p sipster-core --example register -- \
+    --config-file "${CONFIG}" ${TARGET:+"${TARGET}"}

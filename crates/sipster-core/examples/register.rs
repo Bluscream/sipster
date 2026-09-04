@@ -1,17 +1,16 @@
 //! Headless registration smoke test against a real PBX.
 //!
-//! Credentials come from the environment so they never enter a repo file or a
-//! chat transcript:
+//! Reads the same config file the GUI does, so there is one place credentials
+//! live and no environment variables to leak into a shell history or a chat
+//! transcript:
 //!
 //! ```bash
-//! export SIPSTER_REGISTRAR=fritz.box
-//! export SIPSTER_USERNAME=620
-//! export SIPSTER_PASSWORD='...'      # note the leading space to skip shell history
 //! cargo run -p sipster-core --example register
+//! cargo run -p sipster-core --example register -- --config-file /tmp/test.toml
 //! ```
 //!
 //! Optionally place a call by passing a target:
-//! `cargo run -p sipster-core --example register -- **9`
+//! `cargo run -p sipster-core --example register -- '**9'`
 
 use std::time::Duration;
 
@@ -26,11 +25,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         )
         .init();
 
-    let account = Config::from_env()?
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let path = Config::path_from(&args);
+    println!("config: {}", path.display());
+
+    let account = Config::load(&path)?
         .accounts
         .into_iter()
         .next()
-        .ok_or("no account configured")?;
+        .ok_or_else(|| format!("no account in {} — run the GUI and fill in Settings", path.display()))?;
 
     println!("account: {account:?}"); // password is redacted by Debug
     println!("connecting…");
@@ -64,9 +67,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    if let Some(target) = std::env::args().nth(1) {
+    // The first positional argument that is not a flag or a flag's value.
+    if let Some(target) = dial_target(&args) {
         println!("dialing {target}…");
-        let id = engine.dial(&target).await?;
+        let id = engine.dial(target).await?;
         println!("call {id} placed — listen now; hanging up in 30s (Ctrl-C to stop)");
         tokio::time::sleep(Duration::from_secs(30)).await;
         println!("hanging up");
@@ -80,4 +84,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     engine.unregister().await?;
     Ok(())
+}
+
+/// Picks the dial target out of argv, skipping `--config-file <PATH>` and its
+/// value so the path is never mistaken for a number to call.
+fn dial_target(args: &[String]) -> Option<&str> {
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--config-file" | "--config" => {
+                let _ = iter.next();
+            }
+            other if other.starts_with('-') => {}
+            other => return Some(other),
+        }
+    }
+    None
 }

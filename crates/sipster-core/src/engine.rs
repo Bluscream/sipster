@@ -13,7 +13,10 @@ use tokio::sync::{broadcast, Mutex};
 use tokio::task::JoinHandle;
 use tracing::{debug, info, warn};
 
-use rvoip_sip::{EndpointCall, EndpointControl, EndpointEvent, EndpointEvents, EndpointIncomingCall};
+use rvoip_sip::{
+    EndpointCall, EndpointControl, EndpointEvent, EndpointEvents, EndpointIncomingCall,
+    EndpointRegistrationStatus,
+};
 
 use crate::audio::{self, CallAudio, DeviceSelection};
 use crate::call::{CallEvent, CallId, CallState, RegistrationState};
@@ -203,10 +206,14 @@ impl SipEngine {
             .send(CallEvent::Registration(RegistrationState::Registering));
         match self.control.register().await {
             Ok(()) => {
-                info!(account = %self.account.label, "registered");
-                let _ = self
-                    .event_tx
-                    .send(CallEvent::Registration(RegistrationState::Registered));
+                // Deliberately *not* reporting Registered here. This only says
+                // the REGISTER was accepted for sending; the registrar can
+                // still reject it, and with a wrong password it answers 401
+                // forever. The authoritative answer arrives asynchronously as
+                // a RegistrationChanged event, which `translate` forwards.
+                // Claiming success here showed "Registered" for an account
+                // that never authenticated.
+                info!(account = %self.account.label, "REGISTER sent");
                 Ok(())
             }
             Err(e) => {
@@ -369,42 +376,13 @@ async fn translate(
 ) {
     match event {
         EndpointEvent::IncomingCall(incoming) => {
-            let (from, rvoip_id) = (incoming.from().to_string(), incoming.id().to_string());
-            let id = {
-                let mut reg = registry.lock().await;
-                reg.insert(rvoip_id, Tracked::Incoming(Box::new(incoming)))
-            };
-            let _ = tx.send(CallEvent::IncomingCall {
-                id,
-                remote_uri: from,
-                display_name: None,
-            });
+            on_incoming_call(incoming, registry, tx).await;
         }
         EndpointEvent::CallProgress { call_id, has_sdp, .. } => {
-            let rvoip_id = call_id.to_string();
-            // A 183 with SDP means early media: ringback tones, announcements
-            // and IVR prompts arrive before any 200 OK. Bind the speaker now,
-            // or the user hears silence through the whole announcement.
-            if has_sdp {
-                attach_audio_if_missing(&rvoip_id, registry, devices).await;
-            }
-            emit_state(rvoip_id, CallState::Ringing, registry, tx).await;
+            on_call_progress(call_id.to_string(), has_sdp, registry, tx, devices).await;
         }
         EndpointEvent::CallAnswered { call, .. } => {
-            let rvoip_id = call.id().to_string();
-            let id = {
-                let reg = registry.lock().await;
-                reg.resolve(&rvoip_id)
-            };
-            if let Some(id) = id {
-                registry.lock().await.tracked.insert(id, Tracked::Active(call));
-                // No-op when early media already bound the devices.
-                attach_audio_if_missing(&rvoip_id, registry, devices).await;
-                let _ = tx.send(CallEvent::StateChanged {
-                    id,
-                    state: CallState::Active,
-                });
-            }
+            on_call_answered(call, registry, tx, devices).await;
         }
         EndpointEvent::CallEnded { call_id, reason }
         | EndpointEvent::CallFailed { call_id, reason, .. } => {
@@ -413,6 +391,8 @@ async fn translate(
         EndpointEvent::CallCancelled { call_id } => {
             terminate(call_id.to_string(), "cancelled".into(), registry, tx).await;
         }
+        EndpointEvent::RegistrationChanged(info) => on_registration_changed(&info, tx),
+
         _ => debug!("unhandled rvoip event"),
     }
 }
@@ -448,6 +428,91 @@ async fn attach_audio_if_missing(
     let selection = current(devices);
     if let Some(bound) = audio::warn_on_failure(audio::attach(&call, &selection).await) {
         registry.lock().await.audio.insert(id, bound);
+    }
+}
+
+/// Handles a provisional response (180/183) for an outbound call.
+async fn on_call_progress(
+    rvoip_id: String,
+    has_sdp: bool,
+    registry: &Arc<Mutex<Registry>>,
+    tx: &broadcast::Sender<CallEvent>,
+    devices: &Devices,
+) {
+    // A 183 with SDP means early media: ringback tones, announcements and IVR
+    // prompts arrive before any 200 OK. Bind the speaker now, or the user
+    // hears silence through the whole announcement.
+    if has_sdp {
+        attach_audio_if_missing(&rvoip_id, registry, devices).await;
+    }
+    emit_state(rvoip_id, CallState::Ringing, registry, tx).await;
+}
+
+/// Records a ringing inbound call and announces it.
+async fn on_incoming_call(
+    incoming: EndpointIncomingCall,
+    registry: &Arc<Mutex<Registry>>,
+    tx: &broadcast::Sender<CallEvent>,
+) {
+    let (from, rvoip_id) = (incoming.from().to_string(), incoming.id().to_string());
+    let id = {
+        let mut reg = registry.lock().await;
+        reg.insert(rvoip_id, Tracked::Incoming(Box::new(incoming)))
+    };
+    let _ = tx.send(CallEvent::IncomingCall {
+        id,
+        remote_uri: from,
+        display_name: None,
+    });
+}
+
+/// Promotes an answered outbound call to active and binds its audio.
+async fn on_call_answered(
+    call: EndpointCall,
+    registry: &Arc<Mutex<Registry>>,
+    tx: &broadcast::Sender<CallEvent>,
+    devices: &Devices,
+) {
+    let rvoip_id = call.id().to_string();
+    let Some(id) = registry.lock().await.resolve(&rvoip_id) else {
+        return;
+    };
+    registry.lock().await.tracked.insert(id, Tracked::Active(call));
+    // No-op when early media already bound the devices.
+    attach_audio_if_missing(&rvoip_id, registry, devices).await;
+    let _ = tx.send(CallEvent::StateChanged {
+        id,
+        state: CallState::Active,
+    });
+}
+
+/// Publishes a registration change. This — not the return of `register()` —
+/// is what the UI's status line reflects.
+fn on_registration_changed(
+    info: &rvoip_sip::EndpointRegistrationInfo,
+    tx: &broadcast::Sender<CallEvent>,
+) {
+    let state = registration_state(info);
+    info!(?state, "registration state changed");
+    let _ = tx.send(CallEvent::Registration(state));
+}
+
+/// Translates rvoip's registration snapshot into our own state.
+///
+/// `Failed` carries the registrar's reason so the status line can show why —
+/// a wrong password reads as a 401 loop, which is worth saying out loud.
+fn registration_state(info: &rvoip_sip::EndpointRegistrationInfo) -> RegistrationState {
+    match info.status {
+        EndpointRegistrationStatus::Registered => RegistrationState::Registered,
+        EndpointRegistrationStatus::Registering | EndpointRegistrationStatus::Unregistering => {
+            RegistrationState::Registering
+        }
+        EndpointRegistrationStatus::Unregistered => RegistrationState::Unregistered,
+        EndpointRegistrationStatus::Failed => RegistrationState::Failed(
+            info.last_failure
+                .clone()
+                .unwrap_or_else(|| "registration rejected".into()),
+        ),
     }
 }
 

@@ -243,29 +243,13 @@ pub struct AudioSettings {
     pub output: Option<String>,
 }
 
-/// Where the running account was read from.
-///
-/// Surfaced in the settings window: with a bare `SIPSTER_*` environment and no
-/// file yet, "where do these values come from and why did my edit not stick?"
-/// is otherwise a genuinely confusing question.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AccountSource {
-    /// Read from the config file.
-    File,
-    /// No account in the file; taken from `SIPSTER_*`/`SIP_*`.
-    Environment,
-    /// Nothing configured anywhere yet.
-    None,
-}
-
-impl AccountSource {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::File => "config file",
-            Self::Environment => "environment (SIPSTER_* / SIP_*)",
-            Self::None => "not configured",
-        }
-    }
+/// Control-channel settings.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct IpcSettings {
+    /// Control socket (Unix) or named pipe (Windows). `None` uses the
+    /// per-user default under `XDG_RUNTIME_DIR`.
+    pub socket: Option<std::path::PathBuf>,
 }
 
 /// Top-level config. A file holds zero or more accounts; the UI edits this.
@@ -277,6 +261,8 @@ pub struct Config {
     pub ui: UiSettings,
     #[serde(default)]
     pub audio: AudioSettings,
+    #[serde(default)]
+    pub ipc: IpcSettings,
 }
 
 impl Config {
@@ -292,57 +278,30 @@ impl Config {
         std::path::PathBuf::from("sipster.toml")
     }
 
-    /// The config file this process should use.
-    ///
-    /// `--config-file <PATH>`, then `SIPSTER_CONFIG`, then [`default_path`].
-    ///
-    /// [`default_path`]: Self::default_path
+    /// The config file this process should use: `--config-file <PATH>`, else
+    /// [`default_path`](Self::default_path).
     pub fn path() -> std::path::PathBuf {
         let args: Vec<String> = std::env::args().skip(1).collect();
-        Self::path_from(&args, |key| std::env::var(key).ok())
+        Self::path_from(&args)
     }
 
-    /// The testable core of [`path`](Self::path), with argv and the
-    /// environment injected.
-    pub fn path_from<S: AsRef<str>>(
-        args: &[S],
-        env: impl Fn(&str) -> Option<String>,
-    ) -> std::path::PathBuf {
+    /// The testable core of [`path`](Self::path), with argv injected.
+    pub fn path_from<S: AsRef<str>>(args: &[S]) -> std::path::PathBuf {
         const FLAGS: [&str; 2] = ["--config-file", "--config"];
 
-        if let Some(path) = crate::cli::flag_value(args, &FLAGS) {
-            return std::path::PathBuf::from(path);
-        }
-        if let Some(path) = env("SIPSTER_CONFIG").or_else(|| env("SIP_CONFIG")) {
-            if !path.trim().is_empty() {
-                return std::path::PathBuf::from(path.trim());
-            }
-        }
-        Self::default_path()
+        crate::cli::flag_value(args, &FLAGS)
+            .map_or_else(Self::default_path, std::path::PathBuf::from)
     }
 
-    /// Loads the config file, falling back to the environment for the account.
+    /// Whether this looks like a first run: no usable account configured.
     ///
-    /// The file wins: once the settings window has written one, it is the
-    /// source of truth. `SIPSTER_*`/`SIP_*` variables only supply the account
-    /// when the file has none, which is what makes first run work with nothing
-    /// but environment variables.
-    ///
-    /// The returned [`AccountSource`] says which of those actually happened,
-    /// so the UI can show where the running account came from instead of
-    /// leaving the user to guess.
-    pub fn load_or_env(path: impl AsRef<Path>) -> Result<(Self, AccountSource)> {
-        let mut config = Self::load(path)?;
-        if !config.accounts.is_empty() {
-            return Ok((config, AccountSource::File));
-        }
-        match Self::from_env() {
-            Ok(from_env) => {
-                config.accounts = from_env.accounts;
-                Ok((config, AccountSource::Environment))
-            }
-            Err(_) => Ok((config, AccountSource::None)),
-        }
+    /// The UI opens the settings window when this is true — without an account
+    /// the app cannot do anything at all, and there is now no environment
+    /// variable that could be supplying one behind the scenes.
+    pub fn needs_setup(&self) -> bool {
+        self.accounts
+            .first()
+            .is_none_or(|account| account.validate().is_err())
     }
 
     /// Writes the config as TOML, creating parent directories as needed.
@@ -396,112 +355,54 @@ impl Config {
             Err(e) => Err(Error::Io(e)),
         }
     }
-
-    /// Builds a single-account config from environment variables.
-    ///
-    /// Accepts either the `SIPSTER_` prefix or the shorter `SIP_` prefix
-    /// (`SIP_REGISTRAR`, `SIP_USERNAME`, `SIP_AUTH_USER`, `SIP_PASSWORD`), so
-    /// credentials can live in something like
-    /// `~/.config/environment.d/95-sip.conf` instead of being typed each run.
-    pub fn from_env() -> Result<Self> {
-        Self::from_lookup(|key| std::env::var(key).ok())
-    }
-
-    /// The testable core of [`Config::from_env`], with the environment
-    /// injected so tests do not mutate global process state.
-    pub fn from_lookup(lookup: impl Fn(&str) -> Option<String>) -> Result<Self> {
-        let get = |name: &str| {
-            lookup(&format!("SIPSTER_{name}"))
-                .or_else(|| lookup(&format!("SIP_{name}")))
-                .filter(|value| !value.is_empty())
-        };
-
-        let registrar = get("REGISTRAR")
-            .ok_or_else(|| Error::Config("SIP_REGISTRAR (or SIPSTER_REGISTRAR) not set".into()))?;
-        let username = get("USERNAME")
-            .ok_or_else(|| Error::Config("SIP_USERNAME (or SIPSTER_USERNAME) not set".into()))?;
-
-        let account = SipAccount {
-            label: get("LABEL").unwrap_or_else(|| "env".into()),
-            registrar,
-            port: get("PORT").and_then(|p| p.parse().ok()).unwrap_or_else(default_port),
-            auth_user: get("AUTH_USER").unwrap_or_default(),
-            username,
-            password: get("PASSWORD").unwrap_or_default(),
-            transport: Transport::Udp,
-            expires: get("EXPIRES").and_then(|e| e.parse().ok()).unwrap_or_else(default_expires),
-            local_port: get("LOCAL_PORT").and_then(|p| p.parse().ok()).unwrap_or_else(default_port),
-        };
-        Ok(Self { accounts: vec![account], ..Self::default() })
-    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{AccountSource, Config};
+    use super::Config;
 
     #[test]
-    fn config_flag_beats_environment_and_default() {
-        let env = |key: &str| match key {
-            "SIPSTER_CONFIG" => Some("/from/env.toml".to_string()),
-            _ => None,
-        };
+    fn the_config_flag_selects_the_file() {
         assert_eq!(
-            Config::path_from(&["--config-file", "/from/flag.toml"], env),
+            Config::path_from(&["--config-file", "/from/flag.toml"]),
             std::path::PathBuf::from("/from/flag.toml")
         );
         assert_eq!(
-            Config::path_from(&["--config=/short.toml"], env),
+            Config::path_from(&["--config=/short.toml"]),
             std::path::PathBuf::from("/short.toml")
         );
     }
 
     #[test]
-    fn environment_beats_the_default_path() {
-        let env = |key: &str| (key == "SIP_CONFIG").then(|| "/from/env.toml".to_string());
-        assert_eq!(
-            Config::path_from::<&str>(&[], env),
-            std::path::PathBuf::from("/from/env.toml")
-        );
+    fn defaults_when_no_flag_is_given() {
+        assert_eq!(Config::path_from::<&str>(&[]), Config::default_path());
+        // A blank value must fall through rather than yield an empty path.
+        assert_eq!(Config::path_from(&["--config-file", "  "]), Config::default_path());
     }
 
-    /// A blank value must not produce an empty path that fails deep inside a
-    /// file open; it should fall through to the default.
+    /// First run drives the settings window opening on its own, so "is
+    /// anything usable configured" has to be answered precisely: an account
+    /// that cannot register is as good as no account.
     #[test]
-    fn a_blank_environment_value_falls_through() {
-        let env = |key: &str| (key == "SIPSTER_CONFIG").then(String::new);
-        assert_eq!(Config::path_from::<&str>(&[], env), Config::default_path());
+    fn needs_setup_until_a_usable_account_exists() {
+        let mut config = Config::default();
+        assert!(config.needs_setup(), "no accounts at all");
+
+        config.accounts.push(super::SipAccount::default());
+        assert!(config.needs_setup(), "default account has no registrar");
+
+        config.accounts[0].registrar = "fritz.box".into();
+        assert!(config.needs_setup(), "still no username");
+
+        config.accounts[0].username = "bob".into();
+        assert!(!config.needs_setup(), "registrar and username are enough");
     }
 
     #[test]
-    fn defaults_when_nothing_is_set() {
-        assert_eq!(Config::path_from::<&str>(&[], |_| None), Config::default_path());
-    }
-
-    /// The settings window shows where the account came from, so the source
-    /// must be reported accurately for each case.
-    #[test]
-    fn reports_where_the_account_came_from() {
-        let dir = std::env::temp_dir().join(format!("sipster-cfg-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("sipster.toml");
-
-        // No file and (in a hermetic test) no environment -> nothing configured.
-        let (config, source) = Config::load_or_env(&path).expect("missing file is not an error");
-        if source == AccountSource::None {
-            assert!(config.accounts.is_empty());
-        }
-
-        std::fs::write(
-            &path,
-            "[[accounts]]\nregistrar = \"fritz.box\"\nusername = \"bob\"\n",
-        )
-        .unwrap();
-        let (config, source) = Config::load_or_env(&path).expect("valid file");
-        assert_eq!(source, AccountSource::File);
-        assert_eq!(config.accounts[0].username, "bob");
-
-        std::fs::remove_dir_all(&dir).ok();
+    fn missing_file_loads_as_an_empty_config() {
+        let config = Config::load("/nonexistent/sipster.toml").expect("not an error");
+        assert!(config.accounts.is_empty());
+        assert!(config.needs_setup());
     }
 
     /// Saving must round-trip every table, or a settings change would quietly
@@ -531,12 +432,13 @@ mod tests {
         assert_eq!(back.ui.theme, super::ThemeChoice::Nord);
         assert!(!back.ui.ringtone);
         assert_eq!(back.audio.output.as_deref(), Some("hw:1"));
+        assert!(!back.needs_setup());
 
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// The file holds a plaintext SIP password, so it must not be readable by
-    /// other users on the machine.
+    /// The file is now the only place a password can live, so it must not be
+    /// readable by other users on the machine.
     #[cfg(unix)]
     #[test]
     fn saved_config_is_not_world_readable() {

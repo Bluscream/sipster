@@ -122,7 +122,13 @@ build_target() {
     esac
 
     mkdir -p "${DIST_DIR}"
-    cp "${ROOT_DIR}/target/${target}/release/${bin_name}" "${DIST_DIR}/${output_name}"
+    # Copy to a temporary name and rename over the target. `cp` truncates the
+    # destination in place, which fails with "Text file busy" when the previous
+    # build is still running — and because that is only a warning from cp, a
+    # stale binary would otherwise be tested as if it were the new one. Rename
+    # swaps the directory entry instead, which the kernel always allows.
+    cp "${ROOT_DIR}/target/${target}/release/${bin_name}" "${DIST_DIR}/.${output_name}.new"
+    mv -f "${DIST_DIR}/.${output_name}.new" "${DIST_DIR}/${output_name}"
     ok "${DIST_DIR}/${output_name} ($(du -h "${DIST_DIR}/${output_name}" | cut -f1))"
 }
 

@@ -19,7 +19,7 @@ use iced::widget::{
 };
 use iced::{Alignment, Element, Length};
 use sipster_core::audio::{Device, DeviceSelection};
-use sipster_core::{AccountSource, SipAccount, ThemeChoice, UiSettings};
+use sipster_core::{SipAccount, ThemeChoice, UiSettings};
 
 /// A selectable audio device. `id: None` is the system default.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -181,14 +181,14 @@ pub fn view<'a>(
     devices: &'a DeviceSelection,
     account: Option<&'a SipAccount>,
     config_path: &'a str,
-    source: AccountSource,
+    first_run: bool,
 ) -> Element<'a, Message> {
     let body = column![
-        account_section(state, account, source),
+        account_section(state, account, first_run),
         audio_section(state, devices),
         appearance_section(ui),
         sounds_section(ui),
-        about_section(config_path, source),
+        about_section(config_path),
     ]
     .spacing(26)
     .padding(24)
@@ -273,7 +273,7 @@ fn input<'a>(
 fn account_section<'a>(
     state: &'a State,
     account: Option<&'a SipAccount>,
-    source: AccountSource,
+    first_run: bool,
 ) -> Element<'a, Message> {
     let password = {
         let mut widget = text_input("", &state.password)
@@ -286,7 +286,13 @@ fn account_section<'a>(
         widget
     };
 
-    let dirty = account.is_some_and(|acc| state.account_is_dirty(acc));
+    // `account` is the one the engine is actually running. When there is none
+    // — first run, or a failed connect — nothing has been applied yet, so
+    // whatever is in the form is worth applying and Apply must be live.
+    // Comparing against a non-existent account would leave the button dead
+    // exactly when it is the only way forward; validation on Apply reports
+    // anything still missing.
+    let dirty = account.is_none_or(|acc| state.account_is_dirty(acc));
 
     let mut apply = button(text("Apply & reconnect").size(14));
     let mut revert = button(text("Revert").size(14));
@@ -333,16 +339,10 @@ fn account_section<'a>(
     ]
     .spacing(9);
 
-    // Saying where these values came from matters most in the environment
-    // case: the fields are populated but the file is still empty, so it is
-    // not obvious that editing anything here is what makes them permanent.
-    let hint = match source {
-        AccountSource::File => "Applied together — reconnects and re-registers.",
-        AccountSource::Environment => {
-            "From the environment. Applied together — reconnects, re-registers, \
-             and writes them to the config file."
-        }
-        AccountSource::None => "Nothing configured yet. Fill these in to connect.",
+    let hint = if first_run {
+        "Nothing configured yet — fill these in and press Apply to connect."
+    } else {
+        "Applied together — reconnects and re-registers."
     };
 
     section("Account", Some(hint), content.into())
@@ -455,7 +455,7 @@ fn sounds_section(ui: &UiSettings) -> Element<'_, Message> {
     )
 }
 
-fn about_section(config_path: &str, source: AccountSource) -> Element<'_, Message> {
+fn about_section(config_path: &str) -> Element<'_, Message> {
     let dim = iced::Color::from_rgb(0.62, 0.62, 0.66);
     let line = |label: &'static str, value: String| -> Element<'_, Message> {
         row![
@@ -474,7 +474,6 @@ fn about_section(config_path: &str, source: AccountSource) -> Element<'_, Messag
         column![
             line("Version", format!("Sipster {}", env!("CARGO_PKG_VERSION"))),
             line("Config file", config_path.to_string()),
-            line("Account from", source.label().to_string()),
             line("Control socket", socket.display().to_string()),
             line(
                 "Log level",
@@ -539,6 +538,19 @@ mod tests {
 
         state.registrar = "other.box".into();
         assert!(state.account_is_dirty(&account));
+    }
+
+    /// The first-run path: with no engine there is no account to diff against,
+    /// and an earlier version disabled Apply in exactly that case — leaving
+    /// the settings window unable to configure anything on a fresh install.
+    #[test]
+    fn apply_is_live_when_no_account_is_running_yet() {
+        let state = State::default();
+        let running: Option<&SipAccount> = None;
+        assert!(
+            running.is_none_or(|acc| state.account_is_dirty(acc)),
+            "Apply must be available when nothing is applied yet"
+        );
     }
 
     #[test]

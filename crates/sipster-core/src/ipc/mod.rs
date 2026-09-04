@@ -154,24 +154,40 @@ fn percent_decode(input: &str) -> String {
 /// a named pipe. See [`transport`] for the details.
 pub fn socket_path() -> PathBuf {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    socket_path_from(&args, |key| std::env::var(key).ok())
+    socket_path_from(&args, configured_socket())
 }
 
-/// The testable core of [`socket_path`], with argv and the environment
-/// injected. Precedence is explicit flag, then environment, then the default.
-pub fn socket_path_from<S: AsRef<str>>(
-    args: &[S],
-    env: impl Fn(&str) -> Option<String>,
-) -> PathBuf {
+/// A socket path from the config file, published once at startup.
+///
+/// The control socket is needed by code that has no access to the config (the
+/// forwarding path in a second invocation, and cleanup), so the resolved value
+/// is parked here rather than threaded through every call site.
+static CONFIGURED: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+
+/// Publishes the socket path from the config file. Call once, at startup.
+pub fn set_configured_socket(path: Option<PathBuf>) {
+    let _ = CONFIGURED.set(path);
+}
+
+fn configured_socket() -> Option<PathBuf> {
+    CONFIGURED.get().cloned().flatten()
+}
+
+/// The testable core of [`socket_path`], with argv and the configured value
+/// injected. Precedence is explicit flag, then config file, then the default
+/// under `XDG_RUNTIME_DIR`.
+pub fn socket_path_from<S: AsRef<str>>(args: &[S], configured: Option<PathBuf>) -> PathBuf {
     const SOCKET_FLAGS: [&str; 3] = ["--socket", "--target-socket", "-s"];
 
     if let Some(path) = cli::flag_value(args, &SOCKET_FLAGS) {
         return PathBuf::from(path);
     }
-    if let Some(path) = env("SIPSTER_IPC_SOCKET").or_else(|| env("SIP_IPC_SOCKET")) {
-        return PathBuf::from(path);
+    if let Some(path) = configured {
+        return path;
     }
-    transport::default_path(env("XDG_RUNTIME_DIR"))
+    // XDG_RUNTIME_DIR is a platform directory convention, not Sipster
+    // configuration — it says where per-user runtime state belongs.
+    transport::default_path(std::env::var("XDG_RUNTIME_DIR").ok())
 }
 
 /// Outcome of trying to become the single running instance.
@@ -330,42 +346,26 @@ mod tests {
     }
 
     #[test]
-    fn socket_flag_beats_environment_and_default() {
-        let env = |key: &str| match key {
-            "SIPSTER_IPC_SOCKET" => Some("/from/env.sock".to_string()),
-            "XDG_RUNTIME_DIR" => Some("/run/user/1000".to_string()),
-            _ => None,
-        };
+    fn the_socket_flag_wins() {
         assert_eq!(
-            socket_path_from(&["--socket", "/from/flag.sock"], env),
+            socket_path_from(&["--socket", "/from/flag.sock"], Some("/from/config.sock".into())),
             PathBuf::from("/from/flag.sock")
         );
     }
 
     #[test]
-    fn environment_beats_the_runtime_directory_default() {
-        let env = |key: &str| match key {
-            "SIP_IPC_SOCKET" => Some("/from/env.sock".to_string()),
-            "XDG_RUNTIME_DIR" => Some("/run/user/1000".to_string()),
-            _ => None,
-        };
-        assert_eq!(socket_path_from::<&str>(&[], env), PathBuf::from("/from/env.sock"));
-    }
-
-    #[test]
-    fn defaults_into_the_runtime_directory() {
-        let env = |key: &str| (key == "XDG_RUNTIME_DIR").then(|| "/run/user/1000".to_string());
+    fn the_configured_socket_is_used_when_there_is_no_flag() {
         assert_eq!(
-            socket_path_from::<&str>(&[], env),
-            PathBuf::from("/run/user/1000/sipster.sock")
+            socket_path_from::<&str>(&[], Some("/from/config.sock".into())),
+            PathBuf::from("/from/config.sock")
         );
     }
 
-    /// Without a runtime directory the path must still be absolute and usable,
-    /// not a bare relative filename in whatever the cwd happens to be.
+    /// Without a flag or a configured path the socket must still land
+    /// somewhere absolute and per-user, not in the working directory.
     #[test]
-    fn falls_back_to_a_temporary_directory() {
-        let path = socket_path_from::<&str>(&[], |_| None);
+    fn falls_back_to_a_runtime_directory() {
+        let path = socket_path_from::<&str>(&[], None);
         assert!(path.is_absolute(), "socket path must be absolute: {}", path.display());
         assert_eq!(path.file_name().unwrap(), "sipster.sock");
     }

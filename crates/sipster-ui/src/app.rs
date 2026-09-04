@@ -54,9 +54,6 @@ pub struct SipsterApp {
     /// rewritten whenever it changes.
     config: Config,
     config_path: String,
-    /// Where the startup account came from, shown in the settings window.
-    /// Becomes `File` as soon as a save lands, because that is then the truth.
-    account_source: sipster_core::AccountSource,
     /// Mirror of the engine's device selection, so the picker can render
     /// before an engine exists.
     devices: DeviceSelection,
@@ -100,8 +97,12 @@ impl SipsterApp {
     pub fn boot() -> (Self, Task<Message>) {
         // Shared with the engine bridge, so the settings window always edits
         // the same account the engine was built from.
-        let (config_path, config, account_source) = crate::startup_config();
+        let (config_path, config) = crate::startup_config();
         let (config, config_path) = (config.clone(), config_path.clone());
+        // Nothing is configured and there is no environment variable that
+        // could be supplying an account behind our back, so the user has to
+        // fill Settings in before anything works. Open it for them.
+        let first_run = config.needs_setup();
 
         let (main_id, open) = window::open(crate::main_window_settings());
 
@@ -111,8 +112,8 @@ impl SipsterApp {
             registration: RegistrationState::Unregistered,
             account_info: None,
             dial_number: String::new(),
-            status: if *account_source == sipster_core::AccountSource::None {
-                "No account configured — open Settings".into()
+            status: if first_run {
+                "Welcome — fill in your SIP account to get started".into()
             } else {
                 "Ready".into()
             },
@@ -128,10 +129,14 @@ impl SipsterApp {
                 output: config.audio.output.clone(),
             },
             config_path: config_path.display().to_string(),
-            account_source: *account_source,
             config,
         };
-        (app, open.map(Message::SettingsOpened).chain(Task::none()))
+
+        let mut startup = open.map(Message::SettingsOpened);
+        if first_run {
+            startup = startup.chain(Task::done(Message::OpenSettings));
+        }
+        (app, startup)
     }
 
     pub fn title(&self, window: window::Id) -> String {
@@ -195,14 +200,7 @@ impl SipsterApp {
                 Task::none()
             }
             Message::Call(event) => self.on_call_event(event),
-            Message::Ipc(cmd) => {
-                if self.engine.is_none() {
-                    self.pending_command = Some(cmd);
-                    Task::none()
-                } else {
-                    self.handle_ipc(cmd)
-                }
-            }
+            Message::Ipc(cmd) => self.on_ipc(cmd),
             Message::TrayTick => {
                 // Drain one pending tray request per tick (non-blocking).
                 if let Some(req) = self.tray.as_ref().and_then(crate::tray::Handle::poll) {
@@ -268,7 +266,7 @@ impl SipsterApp {
                 &self.devices,
                 account,
                 &self.config_path,
-                self.account_source,
+                self.config.needs_setup(),
             )
             .map(Message::Settings);
         }
@@ -485,11 +483,6 @@ impl SipsterApp {
     fn persist(&mut self) {
         match self.config.save(&self.config_path) {
             Ok(()) => {
-                // The file now holds an account, so that is where the next
-                // start will read it from regardless of the environment.
-                if !self.config.accounts.is_empty() {
-                    self.account_source = sipster_core::AccountSource::File;
-                }
                 self.settings.error = None;
                 self.settings.notice = Some("Saved".into());
             }
@@ -498,6 +491,21 @@ impl SipsterApp {
                 self.settings.error = Some(format!("Could not save: {e}"));
             }
         }
+    }
+
+    /// Routes a control command, deferring it if it needs an engine we do not
+    /// have yet.
+    ///
+    /// Only telephony commands need one. Show and Quit must run immediately:
+    /// on first run there is no engine, and parking a Quit made an
+    /// unconfigured instance impossible to stop with `sipster --quit`.
+    fn on_ipc(&mut self, cmd: Command) -> Task<Message> {
+        let needs_engine = !matches!(cmd, Command::Show | Command::Quit);
+        if needs_engine && self.engine.is_none() {
+            self.pending_command = Some(cmd);
+            return Task::none();
+        }
+        self.handle_ipc(cmd)
     }
 
     fn handle_ipc(&mut self, cmd: Command) -> Task<Message> {

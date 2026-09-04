@@ -88,44 +88,38 @@ fn registrar_uri_handles_ipv6() {
     assert_eq!(with("[2001:db8::1]:5070"), "sip:[2001:db8::1]:5070");
 }
 
+/// The config file is the only source of configuration; the environment
+/// variables that used to supply an account are gone, so a file with no
+/// account must read as "needs setup" rather than silently picking one up.
 #[test]
-fn env_config_accepts_the_short_sip_prefix() {
-    // Credentials may live in ~/.config/environment.d using SIP_* names.
-    let env = |key: &str| -> Option<String> {
-        match key {
-            "SIP_REGISTRAR" => Some("192.168.2.1".into()),
-            "SIP_USERNAME" => Some("bluscream".into()),
-            "SIP_PASSWORD" => Some("pw".into()),
-            _ => None,
-        }
-    };
-    let config = Config::from_lookup(env).expect("SIP_ prefix should be accepted");
-    let account = &config.accounts[0];
-    assert_eq!(account.registrar, "192.168.2.1");
-    assert_eq!(account.username, "bluscream");
-    assert_eq!(account.effective_auth_user(), "bluscream");
-    assert_eq!(account.registrar_uri(), "sip:192.168.2.1:5060");
+fn a_config_without_an_account_needs_setup() {
+    let config: Config = toml::from_str("").expect("an empty config is valid");
+    assert!(config.accounts.is_empty());
+    assert!(config.needs_setup());
 }
 
 #[test]
-fn sipster_prefix_wins_over_short_prefix() {
-    let env = |key: &str| -> Option<String> {
-        match key {
-            "SIPSTER_REGISTRAR" => Some("preferred.example".into()),
-            "SIP_REGISTRAR" => Some("fallback.example".into()),
-            "SIP_USERNAME" => Some("user".into()),
-            _ => None,
-        }
-    };
-    let config = Config::from_lookup(env).unwrap();
-    assert_eq!(config.accounts[0].registrar, "preferred.example");
+fn a_config_with_a_usable_account_does_not_need_setup() {
+    let toml = r#"
+        [[accounts]]
+        registrar = "fritz.box"
+        username = "620"
+    "#;
+    let config: Config = toml::from_str(toml).expect("valid config");
+    assert!(!config.needs_setup());
 }
 
+/// An account that could never register must still count as unconfigured, or
+/// the settings window would not open and the user would be stuck.
 #[test]
-fn env_config_requires_registrar_and_username() {
-    assert!(Config::from_lookup(|_| None).is_err());
-    let only_registrar = |k: &str| (k == "SIP_REGISTRAR").then(|| "fritz.box".to_string());
-    assert!(Config::from_lookup(only_registrar).is_err());
+fn an_unusable_account_still_needs_setup() {
+    let toml = r#"
+        [[accounts]]
+        registrar = ""
+        username = ""
+    "#;
+    let config: Config = toml::from_str(toml).expect("valid config");
+    assert!(config.needs_setup());
 }
 
 /// Binding SIP to loopback makes every send to a LAN registrar fail with

@@ -58,7 +58,7 @@ pub fn run() -> impl iced::futures::Stream<Item = Message> {
             tokio::spawn(sipster_core::ipc::serve(primary.listener, ipc_tx));
         }
 
-        let (_, config, _) = crate::startup_config();
+        let (_, config) = crate::startup_config();
         let devices = DeviceSelection {
             input: config.audio.input.clone(),
             output: config.audio.output.clone(),

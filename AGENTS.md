@@ -88,6 +88,12 @@ must not be broken casually.
   orphan `assets` branch is gone; do not recreate that pattern.
 - `crates/sipster-ui/assets/icons/` holds the sized PNGs that are `include_bytes!`'d into
   the binary for the tray and window icon. Those are code inputs, not documentation assets.
+- **No environment configuration.** The config file is the only source of Sipster's own
+  settings; `Config::from_env` and the `SIPSTER_*`/`SIP_*` variables are gone. Do not add
+  an environment variable for a new setting — add a field to `Config` and a control to the
+  settings window, so it is discoverable and editable at runtime. The only variables read
+  at all are platform conventions (`XDG_CONFIG_HOME`, `XDG_RUNTIME_DIR`, `HOME`, and
+  `USERNAME` for the Windows pipe name) plus `RUST_LOG`, which is a debugging switch.
 - **One config read.** `main.rs` resolves `--config-file`/`SIPSTER_CONFIG` and loads the
   config once into a `OnceLock`, which both `SipsterApp::boot` and `engine_bridge` read.
   Do not add a second `Config::load*` call in the UI: two reads can disagree, and the

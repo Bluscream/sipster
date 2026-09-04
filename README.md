@@ -12,11 +12,15 @@ place and take calls from your PC.
 [![License: Unlicense](https://img.shields.io/badge/license-Unlicense-blue.svg)](UNLICENSE)
 [![Rust 1.89+](https://img.shields.io/badge/rust-1.89%2B-orange.svg)](https://www.rust-lang.org)
 
-<img src="assets/screenshots/main.png" alt="Sipster dialpad, registered" width="270">
-&nbsp;
-<img src="assets/screenshots/in_call.png" alt="Sipster during a call" width="270">
-&nbsp;
-<img src="assets/screenshots/settings.png" alt="Sipster settings window" width="330">
+<details>
+<summary>📸 <b>Screenshots</b></summary>
+<br>
+
+| Dialer (Registered) | In-Call | Settings |
+| :---: | :---: | :---: |
+| <img src="assets/screenshots/main.png" alt="Sipster dialpad, registered" width="260"> | <img src="assets/screenshots/in_call.png" alt="Sipster during a call" width="260"> | <img src="assets/screenshots/settings.png" alt="Sipster settings window" width="300"> |
+
+</details>
 
 </div>
 

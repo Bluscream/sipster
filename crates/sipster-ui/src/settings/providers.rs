@@ -264,7 +264,7 @@ fn vdir_panel<'a>(
 
     // Evolution is listed with the folder because they are the two providers
     // that need no account: both read what the desktop already has.
-    let eds_available = sipster_integrations::eds::available();
+    let eds_available = sipster_integrations::eds_available();
     let eds_note = if eds_available {
         "Found on this desktop.".to_string()
     } else {

@@ -5919,7 +5919,7 @@ checksum = "8ee5873ec9cce0195efcb7a4e9507a04cd49aec9c83d0389df45b1ef7ba2e649"
 
 [[package]]
 name = "sipster-core"
-version = "0.2.0"
+version = "1.0.0"
 dependencies = [
  "rvoip-audio-device",
  "rvoip-sip",
@@ -5935,7 +5935,7 @@ dependencies = [
 
 [[package]]
 name = "sipster-integrations"
-version = "0.2.0"
+version = "1.0.0"
 dependencies = [
  "futures-util",
  "md-5",
@@ -5952,7 +5952,7 @@ dependencies = [
 
 [[package]]
 name = "sipster-tests"
-version = "0.2.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "serde_json",
@@ -5965,7 +5965,7 @@ dependencies = [
 
 [[package]]
 name = "sipster-ui"
-version = "0.2.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "iced",

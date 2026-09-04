@@ -425,3 +425,22 @@ fn eds_contacts() -> Result<Vec<Contact>, String> {
 fn eds_contacts() -> Result<Vec<Contact>, String> {
     Ok(Vec::new())
 }
+
+/// Whether Evolution Data Server is reachable on this machine.
+///
+/// Cross-platform so callers — the settings panel especially — need no `cfg`
+/// of their own. EDS is a GNOME component, so this is simply `false` off
+/// Linux. Not having this is what broke the Windows build: the UI called into
+/// the Linux-only module directly, and `build.sh check` only covers the host
+/// target, so nothing caught it until the cross build ran.
+#[must_use]
+pub fn eds_available() -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        eds::available()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        false
+    }
+}

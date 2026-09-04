@@ -176,7 +176,7 @@ fn dialer(app: &SipsterApp) -> Element<'_, Message> {
     };
 
     let action_row = row![
-        secondary_button('⚙', Message::OpenSettings),
+        secondary_button('☰', Message::ContactsPressed),
         action,
         secondary_button('☏', Message::CallListPressed),
     ]

@@ -37,6 +37,9 @@ impl CallState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Request {
     Show,
+    OpenSettings,
+    OpenCallList,
+    OpenContacts,
     Answer,
     Hangup,
     Quit,
@@ -128,6 +131,30 @@ impl ksni::Tray for Icon {
                 label: "Open Sipster".into(),
                 activate: Box::new(|this: &mut Self| {
                     let _ = this.tx.send(Request::Show);
+                }),
+                ..Default::default()
+            }
+            .into(),
+            StandardItem {
+                label: "Open Contacts".into(),
+                activate: Box::new(|this: &mut Self| {
+                    let _ = this.tx.send(Request::OpenContacts);
+                }),
+                ..Default::default()
+            }
+            .into(),
+            StandardItem {
+                label: "Open Call List".into(),
+                activate: Box::new(|this: &mut Self| {
+                    let _ = this.tx.send(Request::OpenCallList);
+                }),
+                ..Default::default()
+            }
+            .into(),
+            StandardItem {
+                label: "Open Settings".into(),
+                activate: Box::new(|this: &mut Self| {
+                    let _ = this.tx.send(Request::OpenSettings);
                 }),
                 ..Default::default()
             }

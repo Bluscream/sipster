@@ -77,6 +77,7 @@ pub enum Message {
     HangupPressed,
     AnswerPressed,
     DeclinePressed,
+    ContactsPressed,
     CallListPressed,
     // Settings window:
     OpenSettings,
@@ -157,7 +158,33 @@ impl SipsterApp {
         // Poll the tray channel every 100 ms.
         let tray_sub = iced::time::every(std::time::Duration::from_millis(100))
             .map(|_| Message::TrayTick);
-        Subscription::batch([engine_sub, tray_sub, window::close_events().map(Message::WindowClosed)])
+        let key_sub = iced::event::listen_with(|event, _status, _window| {
+            if let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
+                key,
+                modifiers,
+                ..
+            }) = event
+            {
+                if modifiers.command() {
+                    match key.as_ref() {
+                        iced::keyboard::Key::Character("p" | "P") => Some(Message::OpenSettings),
+                        iced::keyboard::Key::Character("k" | "K") => Some(Message::ContactsPressed),
+                        iced::keyboard::Key::Character("h" | "H") => Some(Message::CallListPressed),
+                        _ => None,
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        });
+        Subscription::batch([
+            engine_sub,
+            tray_sub,
+            key_sub,
+            window::close_events().map(Message::WindowClosed),
+        ])
     }
 
     // Signature is dictated by iced::daemon(..).theme(..).
@@ -231,6 +258,10 @@ impl SipsterApp {
             Message::HangupPressed => self.hangup(),
             Message::AnswerPressed => self.answer(),
             Message::DeclinePressed => self.decline(),
+            Message::ContactsPressed => {
+                self.status = "Contact sync planned".into();
+                Task::none()
+            }
             Message::CallListPressed => {
                 self.status = "Call list sync planned".into();
                 Task::none()
@@ -529,7 +560,30 @@ impl SipsterApp {
 
     fn handle_tray(&mut self, req: tray::Request) -> Task<Message> {
         match req {
-            tray::Request::Show => Task::none(), // window focus handled by OS/compositor
+            tray::Request::Show => {
+                if let Some(id) = self.main_window {
+                    window::gain_focus(id)
+                } else {
+                    Task::none()
+                }
+            }
+            tray::Request::OpenSettings => self.open_settings(),
+            tray::Request::OpenCallList => {
+                self.status = "Call list sync planned".into();
+                if let Some(id) = self.main_window {
+                    window::gain_focus(id)
+                } else {
+                    Task::none()
+                }
+            }
+            tray::Request::OpenContacts => {
+                self.status = "Contact sync planned".into();
+                if let Some(id) = self.main_window {
+                    window::gain_focus(id)
+                } else {
+                    Task::none()
+                }
+            }
             tray::Request::Answer => self.answer(),
             tray::Request::Hangup => {
                 if self.incoming.is_some() {

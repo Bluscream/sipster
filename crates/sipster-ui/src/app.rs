@@ -824,14 +824,7 @@ impl SipsterApp {
             }
             contacts::Message::ConfirmBlockNumber(number, name, action) => {
                 self.contacts.block_prompt = None;
-                self.config.integration.blocked_numbers.retain(|b| b.number != number);
-                self.config.integration.blocked_numbers.push(BlockedNumber {
-                    number,
-                    name,
-                    action,
-                    added_at: chrono_now_iso(),
-                });
-                self.persist();
+                self.block_number(&number, name, action);
                 Task::none()
             }
             contacts::Message::CancelBlockPrompt => {
@@ -919,14 +912,7 @@ impl SipsterApp {
             }
             calls::Message::ConfirmBlockNumber(number, name, action) => {
                 self.calls.block_prompt = None;
-                self.config.integration.blocked_numbers.retain(|b| b.number != number);
-                self.config.integration.blocked_numbers.push(BlockedNumber {
-                    number,
-                    name,
-                    action,
-                    added_at: chrono_now_iso(),
-                });
-                self.persist();
+                self.block_number(&number, name, action);
                 Task::none()
             }
             calls::Message::CancelBlockPrompt => {
@@ -934,6 +920,30 @@ impl SipsterApp {
                 Task::none()
             }
         }
+    }
+
+    /// Adds or replaces a block rule, storing the caller's number rather than
+    /// whatever string the UI happened to show.
+    ///
+    /// Entries with nothing dialable in them are rejected: they can never match
+    /// (see `number_matches`), so storing one only produces a rule the user
+    /// believes is protecting them.
+    fn block_number(&mut self, number: &str, name: Option<String>, action: BlockAction) {
+        let number = sipster_integrations::caller_number(number).to_string();
+        if sipster_integrations::normalize_number(&number).is_empty() {
+            self.status = "Cannot block an entry with no number in it".into();
+            return;
+        }
+
+        let blocked = &mut self.config.integration.blocked_numbers;
+        blocked.retain(|b| !sipster_integrations::number_matches(&number, &b.number));
+        blocked.push(BlockedNumber {
+            number,
+            name,
+            action,
+            added_at: chrono_now_iso(),
+        });
+        self.persist();
     }
 
     fn on_settings(&mut self, msg: settings::Message) -> Task<Message> {
@@ -1185,12 +1195,15 @@ impl SipsterApp {
             }
             CallEvent::IncomingCall { id, remote_uri, .. } => {
                 // Check if the remote party is blocked
+                // Match on the caller's number, not the whole URI. A raw
+                // `contains` matched the host and any longer number, and a
+                // blank entry matched everything.
                 let blocked_entry = self
                     .config
                     .integration
                     .blocked_numbers
                     .iter()
-                    .find(|b| remote_uri.contains(&b.number));
+                    .find(|b| sipster_integrations::number_matches(&remote_uri, &b.number));
 
                 if let Some(blocked) = blocked_entry {
                     match blocked.action {
@@ -1219,7 +1232,21 @@ impl SipsterApp {
                         }
                         BlockAction::Mute => {
                             tracing::info!(remote = %remote_uri, "muting call from blocked number");
-                            // Do not notify and do not play ringtone
+                            // Silent: no notification, no ringtone. Still
+                            // recorded — a muted call the user never heard is
+                            // exactly the one they want to find afterwards.
+                            if self.config.integration.local_history_enabled {
+                                self.sync_manager.record_local_call(CallRecord {
+                                    id: format!("local-muted-{id}"),
+                                    call_type: CallType::Incoming,
+                                    remote_number: remote_uri.clone(),
+                                    remote_name: blocked.name.clone(),
+                                    local_party: self.account_info.clone(),
+                                    timestamp: chrono_now_iso(),
+                                    duration_seconds: 0,
+                                    source: RecordSource::Local,
+                                });
+                            }
                             self.incoming = Some(IncomingCall { id, remote: remote_uri });
                             self.status = "Incoming call (muted)…".into();
                             return Task::none();

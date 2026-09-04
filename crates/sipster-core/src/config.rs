@@ -287,7 +287,7 @@ pub struct BlockedNumber {
 }
 
 /// Google OAuth 2.0 Account configuration for Google Contacts sync.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GoogleAccountConfig {
     pub id: String,
     pub email: String,
@@ -298,7 +298,7 @@ pub struct GoogleAccountConfig {
 }
 
 /// `CardDAV` account configuration for remote address book sync.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CardDavAccountConfig {
     pub id: String,
     pub name: String,
@@ -309,7 +309,7 @@ pub struct CardDavAccountConfig {
 }
 
 /// FRITZ!Box TR-064 integration credentials.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FritzBoxSettings {
     pub host: String,
     pub port: u16,
@@ -321,17 +321,91 @@ pub struct FritzBoxSettings {
 impl Default for FritzBoxSettings {
     fn default() -> Self {
         Self {
-            host: "192.168.2.1".into(),
+            // `fritz.box` is the name AVM routers answer to on any LAN. The
+            // previous default was one developer's own address, which every
+            // other user would have had their router credentials sent to.
+            host: "fritz.box".into(),
             port: 49000,
             username: String::new(),
             password: String::new(),
-            enabled: true,
+            // Off until the user configures it. Defaulting to on meant a fresh
+            // install immediately tried to authenticate against a guessed host
+            // with blank credentials on every sync.
+            enabled: false,
         }
     }
 }
 
+/// Redacts the refresh token and client secret. Both are bearer credentials:
+/// anything holding them can read the user's Google contacts. `SipAccount`
+/// already learned this lesson; these regressed it.
+impl std::fmt::Debug for GoogleAccountConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GoogleAccountConfig")
+            .field("id", &self.id)
+            .field("email", &self.email)
+            .field("refresh_token", &redacted(&self.refresh_token))
+            .field("client_id", &self.client_id)
+            .field("client_secret", &self.client_secret.as_deref().map(redacted))
+            .field("enabled", &self.enabled)
+            .finish()
+    }
+}
+
+/// Redacts the account password.
+impl std::fmt::Debug for CardDavAccountConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CardDavAccountConfig")
+            .field("id", &self.id)
+            .field("name", &self.name)
+            .field("url", &self.url)
+            .field("username", &self.username)
+            .field("password", &redacted(&self.password))
+            .field("enabled", &self.enabled)
+            .finish()
+    }
+}
+
+/// Redacts the router password, which is also the FRITZ!Box admin password.
+impl std::fmt::Debug for FritzBoxSettings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FritzBoxSettings")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("username", &self.username)
+            .field("password", &redacted(&self.password))
+            .field("enabled", &self.enabled)
+            .finish()
+    }
+}
+
+/// Hand-written so the secret-bearing members above keep their redaction; a
+/// derived `Debug` here would print them through their own fields.
+impl std::fmt::Debug for IntegrationSettings {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IntegrationSettings")
+            .field("local_history_enabled", &self.local_history_enabled)
+            .field("fritzbox", &self.fritzbox)
+            .field("google_accounts", &self.google_accounts)
+            .field("carddav_accounts", &self.carddav_accounts)
+            .field("blocked_numbers", &self.blocked_numbers.len())
+            .field("default_block_action", &self.default_block_action)
+            .finish()
+    }
+}
+
+/// `<redacted>` for anything set, `<empty>` for anything not — so a missing
+/// credential is still diagnosable without revealing one that is present.
+fn redacted(secret: &str) -> &'static str {
+    if secret.is_empty() {
+        "<empty>"
+    } else {
+        "<redacted>"
+    }
+}
+
 /// Comprehensive settings for contact and call history providers, local storage, and call blocking.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct IntegrationSettings {
     /// Save placed and received calls to local history (~/.local/share/sipster/history.json).

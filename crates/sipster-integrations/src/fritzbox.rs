@@ -26,7 +26,7 @@ impl From<ureq::Error> for FritzError {
 }
 
 /// Configuration credentials to connect to a FRITZ!Box TR-064 interface.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct FritzConfig {
     pub host: String,
     pub port: u16,
@@ -34,29 +34,27 @@ pub struct FritzConfig {
     pub password: String,
 }
 
+/// Redacts the router password, which on a FRITZ!Box is also the admin
+/// password for the whole router.
+impl std::fmt::Debug for FritzConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FritzConfig")
+            .field("host", &self.host)
+            .field("port", &self.port)
+            .field("username", &self.username)
+            .field("password", &"<redacted>")
+            .finish()
+    }
+}
+
 impl Default for FritzConfig {
     fn default() -> Self {
         Self {
-            host: "192.168.2.1".into(),
+            host: "fritz.box".into(),
             port: 49000,
             username: String::new(),
             password: String::new(),
         }
-    }
-}
-
-impl FritzConfig {
-    /// Discovers credentials from environment variables (`FRITZ_HOST`, `FRITZ_USERNAME`, `FRITZ_PASSWORD`).
-    pub fn from_env() -> Option<Self> {
-        let host = std::env::var("FRITZ_HOST").unwrap_or_else(|_| "192.168.2.1".into());
-        let username = std::env::var("FRITZ_USERNAME").ok()?;
-        let password = std::env::var("FRITZ_PASSWORD").ok()?;
-        Some(Self {
-            host,
-            port: 49000,
-            username,
-            password,
-        })
     }
 }
 

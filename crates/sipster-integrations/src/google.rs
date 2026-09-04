@@ -8,12 +8,19 @@ use tracing::info;
 
 use crate::model::{Contact, NumberType, PhoneNumber, RecordSource};
 
-/// Default Google OAuth Client ID for desktop applications.
-pub const DEFAULT_CLIENT_ID: &str = "1032895697664-9sbl5m06fl5r9q5a9n519l2p8vd1b2h1.apps.googleusercontent.com";
-pub const DEFAULT_CLIENT_SECRET: &str = "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l2p8";
+// There are deliberately no built-in OAuth credentials.
+//
+// The pair previously hard-coded here could not have worked: the "secret"
+// embedded the client id's own random segment, so it was invented rather than
+// issued by Google. Shipping it made the integration look configured while
+// every token request would have failed with invalid_client — and a real
+// desktop client secret is not a secret once published anyway.
+//
+// Users register their own OAuth client (Google Cloud console → Credentials →
+// OAuth client ID → Desktop app) and paste the id and secret into Settings.
 
 /// Structure representing a token response from Google OAuth 2.0.
-#[derive(Debug, Clone, serde::Deserialize)]
+#[derive(Clone, serde::Deserialize)]
 pub struct GoogleTokenResponse {
     pub access_token: String,
     pub refresh_token: Option<String>,
@@ -28,13 +35,39 @@ pub struct GoogleUserInfo {
 }
 
 /// Client for communicating with Google People API v1.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct GoogleContactsClient {
     pub account_id: String,
     pub email: String,
     pub refresh_token: String,
     pub client_id: String,
     pub client_secret: String,
+}
+
+/// Redacts the refresh token and client secret; both grant access to the
+/// user's contacts on their own.
+impl std::fmt::Debug for GoogleContactsClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GoogleContactsClient")
+            .field("account_id", &self.account_id)
+            .field("email", &self.email)
+            .field("refresh_token", &"<redacted>")
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"<redacted>")
+            .finish()
+    }
+}
+
+/// The token response carries a live access token; never print it.
+impl std::fmt::Debug for GoogleTokenResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("GoogleTokenResponse")
+            .field("access_token", &"<redacted>")
+            .field("refresh_token", &self.refresh_token.as_ref().map(|_| "<redacted>"))
+            .field("expires_in", &self.expires_in)
+            .field("token_type", &self.token_type)
+            .finish()
+    }
 }
 
 impl GoogleContactsClient {
@@ -49,13 +82,29 @@ impl GoogleContactsClient {
             account_id,
             email,
             refresh_token,
-            client_id: client_id.unwrap_or_else(|| DEFAULT_CLIENT_ID.to_string()),
-            client_secret: client_secret.unwrap_or_else(|| DEFAULT_CLIENT_SECRET.to_string()),
+            client_id: client_id.unwrap_or_default(),
+            client_secret: client_secret.unwrap_or_default(),
         }
+    }
+
+    /// Whether this account has the OAuth credentials it needs.
+    ///
+    /// Checked before any request so a missing client id reports "not
+    /// configured" instead of an opaque `invalid_client` from Google.
+    pub fn is_configured(&self) -> bool {
+        !self.client_id.trim().is_empty()
+            && !self.client_secret.trim().is_empty()
+            && !self.refresh_token.trim().is_empty()
     }
 
     /// Refreshes the OAuth 2.0 access token using the stored refresh token.
     pub fn refresh_access_token(&self) -> Result<String, String> {
+        if !self.is_configured() {
+            return Err(format!(
+                "Google account {} has no OAuth client id/secret — add them in Settings",
+                self.email
+            ));
+        }
         let resp = ureq::post("https://oauth2.googleapis.com/token")
             .send_form(&[
                 ("client_id", self.client_id.as_str()),

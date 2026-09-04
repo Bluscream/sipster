@@ -3,14 +3,25 @@
 use crate::model::{Contact, NumberType, PhoneNumber, RecordSource};
 
 /// Configuration for connecting to a `CardDAV` address book.
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct CardDavConfig {
     pub url: String,
     pub username: String,
     pub password: String,
 }
 
-/// A `CardDAV` client stub ready for `WebDAV` PROPFIND / REPORT requests and vCard parsing.
+/// Redacts the account password.
+impl std::fmt::Debug for CardDavConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CardDavConfig")
+            .field("url", &self.url)
+            .field("username", &self.username)
+            .field("password", &"<redacted>")
+            .finish()
+    }
+}
+
+/// A `CardDAV` client.
 #[derive(Debug, Clone)]
 pub struct CardDavClient {
     pub config: CardDavConfig,

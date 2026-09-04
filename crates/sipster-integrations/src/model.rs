@@ -127,3 +127,151 @@ pub struct CallRecord {
     /// Source of this call history record.
     pub source: RecordSource,
 }
+
+/// Extracts the dialable part of a SIP URI or raw number.
+///
+/// `"Alice" <sip:+49301234@fritz.box;user=phone>` becomes `+49301234`. Falls
+/// back to the input when there is no URI structure, so a bare number passes
+/// through unchanged.
+#[must_use]
+pub fn caller_number(remote: &str) -> &str {
+    let raw = remote.trim();
+
+    // Prefer the angle-bracketed URI when a display name is present, so the
+    // name can never be matched against.
+    let raw = raw
+        .split_once('<')
+        .map_or(raw, |(_, rest)| rest.split('>').next().unwrap_or(rest));
+
+    // Strip the scheme, then take the user part before '@'. Everything after
+    // is the host, which must never take part in matching: blocking "100" once
+    // matched sip:alice@10.0.0.100.
+    let without_scheme = raw
+        .split_once(':')
+        .filter(|(scheme, _)| matches!(*scheme, "sip" | "sips" | "tel" | "callto"))
+        .map_or(raw, |(_, rest)| rest);
+
+    let user = without_scheme
+        .split('@')
+        .next()
+        .unwrap_or(without_scheme);
+
+    // Drop URI parameters (`;user=phone`) that can trail the user part.
+    user.split(';').next().unwrap_or(user).trim()
+}
+
+/// Reduces a number to comparable digits: `+49 (30) 12-34` becomes `+493012 34`
+/// without the separators, i.e. `+493012 34` → `+4930 1234` → `+493 01234`.
+///
+/// Keeps a leading `+` so international and national forms stay distinct, and
+/// keeps `*`/`#` because they are meaningful in extensions like `**610`.
+#[must_use]
+pub fn normalize_number(raw: &str) -> String {
+    raw.chars()
+        .filter(|c| c.is_ascii_digit() || matches!(c, '+' | '*' | '#'))
+        .collect()
+}
+
+/// Digits a number must have before national/international suffix matching is
+/// allowed. Below this, short internal extensions would collide.
+const MIN_SIGNIFICANT: usize = 6;
+
+/// Whether `remote` should be treated as the blocked entry `pattern`.
+///
+/// Matching is on the normalized *caller number* only, and is exact apart from
+/// one deliberate allowance: a pattern without a country code matches a caller
+/// that has one, so blocking `03012345` still catches `+493012345`.
+///
+/// An empty or non-numeric pattern never matches. That is not a detail — the
+/// previous implementation used `remote_uri.contains(&pattern)`, so a blank
+/// entry matched every string and silently rejected every inbound call.
+#[must_use]
+pub fn number_matches(remote: &str, pattern: &str) -> bool {
+    let pattern = normalize_number(pattern);
+    if pattern.is_empty() {
+        return false;
+    }
+    let caller = normalize_number(caller_number(remote));
+    if caller.is_empty() {
+        return false;
+    }
+    if caller == pattern {
+        return true;
+    }
+
+    // Compare national/international spellings by their trailing significant
+    // digits, requiring enough of them that short extensions cannot collide.
+    let trim_prefix = |n: &str| n.trim_start_matches('+').trim_start_matches('0').to_string();
+    let (a, b) = (trim_prefix(&caller), trim_prefix(&pattern));
+    if a.len() >= MIN_SIGNIFICANT && b.len() >= MIN_SIGNIFICANT {
+        return a.ends_with(&b) || b.ends_with(&a);
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{caller_number, normalize_number, number_matches};
+
+    #[test]
+    fn extracts_the_user_part_from_a_sip_uri() {
+        assert_eq!(caller_number("sip:+49301234@fritz.box"), "+49301234");
+        assert_eq!(caller_number("\"Alice\" <sip:611@fritz.box>"), "611");
+        assert_eq!(caller_number("sip:611@fritz.box;user=phone"), "611");
+        assert_eq!(caller_number("tel:+4930999"), "+4930999");
+        // A bare number is already the answer.
+        assert_eq!(caller_number("611"), "611");
+    }
+
+    /// The host must never take part in matching. Blocking "100" used to
+    /// reject sip:alice@10.0.0.100 because the old check searched the whole URI.
+    #[test]
+    fn the_host_is_not_part_of_the_number() {
+        assert!(!number_matches("sip:alice@10.0.0.100", "100"));
+        assert!(!number_matches("sip:bob@100.example.com", "100"));
+    }
+
+    /// The old `contains` check made every longer number a match too.
+    #[test]
+    fn a_block_does_not_catch_longer_numbers() {
+        assert!(number_matches("sip:100@fritz.box", "100"));
+        assert!(!number_matches("sip:1001@fritz.box", "100"));
+        assert!(!number_matches("sip:5100@fritz.box", "100"));
+    }
+
+    /// A blank entry previously matched everything, silently rejecting every
+    /// inbound call.
+    #[test]
+    fn an_empty_pattern_never_matches() {
+        assert!(!number_matches("sip:611@fritz.box", ""));
+        assert!(!number_matches("sip:611@fritz.box", "   "));
+        assert!(!number_matches("sip:611@fritz.box", "---"));
+    }
+
+    #[test]
+    fn separators_and_spacing_are_ignored() {
+        assert!(number_matches("sip:+493012345@fritz.box", "+49 (30) 123-45"));
+        assert!(number_matches("sip:**610@fritz.box", "**610"));
+    }
+
+    #[test]
+    fn national_and_international_forms_match() {
+        assert!(number_matches("sip:+493012345@fritz.box", "03012345"));
+        assert!(number_matches("sip:03012345@fritz.box", "+493012345"));
+    }
+
+    /// Short extensions must compare exactly; suffix matching them would make
+    /// "610" block "5610".
+    #[test]
+    fn short_extensions_require_an_exact_match() {
+        assert!(number_matches("sip:610@fritz.box", "610"));
+        assert!(!number_matches("sip:5610@fritz.box", "610"));
+    }
+
+    #[test]
+    fn normalization_keeps_meaningful_symbols() {
+        assert_eq!(normalize_number("+49 (30) 12-34"), "+493012 34".replace(' ', ""));
+        assert_eq!(normalize_number("**610"), "**610");
+        assert_eq!(normalize_number("abc"), "");
+    }
+}

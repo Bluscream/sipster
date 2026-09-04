@@ -87,11 +87,25 @@ impl LocalStore {
     }
 
     /// Loads all recorded local call records.
+    ///
+    /// Repairs records written before `remote_number` held a number: earlier
+    /// versions stored the whole `From` header, tag and all, so history read
+    /// as `"Alice" <sip:611@fritz.box>;tag=179BED3B…`. Repairing on read fixes
+    /// existing files without a migration step, and the next write persists it.
     pub fn load_calls(&self) -> Result<Vec<CallRecord>, LocalStoreError> {
         let Some(path) = self.history_path() else {
             return Ok(Vec::new());
         };
-        Ok(read_json::<HistoryPayload>(&path)?.calls)
+        let mut calls = read_json::<HistoryPayload>(&path)?.calls;
+        for call in &mut calls {
+            if call.remote_number.contains('<') || call.remote_number.contains(';') {
+                if call.remote_name.is_none() {
+                    call.remote_name = display_name_of(&call.remote_number);
+                }
+                call.remote_number = crate::model::caller_number(&call.remote_number).to_string();
+            }
+        }
+        Ok(calls)
     }
 
     /// Appends a new call record to local history.
@@ -147,6 +161,12 @@ impl LocalStore {
         };
         write_json(&path, &HistoryPayload { calls: Vec::new() })
     }
+}
+
+/// The display name from a legacy `From`-header value, if it had one.
+fn display_name_of(raw: &str) -> Option<String> {
+    let name = raw.split_once('<')?.0.trim().trim_matches('"').trim();
+    (!name.is_empty()).then(|| name.to_string())
 }
 
 /// Reads a JSON payload, treating a missing file as empty.
@@ -211,4 +231,82 @@ fn data_directory() -> Option<PathBuf> {
         return Some(Path::new(&home).join(".local/share/sipster"));
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{HistoryPayload, LocalStore};
+    use crate::model::{CallRecord, CallType, RecordSource};
+
+    fn store(name: &str) -> (LocalStore, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("sipster-local-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        (LocalStore::with_directory(dir.clone()).expect("store"), dir)
+    }
+
+    fn record(number: &str) -> CallRecord {
+        CallRecord {
+            id: "1".into(),
+            call_type: CallType::Incoming,
+            remote_number: number.into(),
+            remote_name: None,
+            local_party: None,
+            timestamp: "2026-09-04T10:00:00Z".into(),
+            duration_seconds: 0,
+            source: RecordSource::Local,
+        }
+    }
+
+    #[test]
+    fn records_round_trip() {
+        let (store, dir) = store("roundtrip");
+        store.record_call(record("611")).expect("write");
+        let calls = store.load_calls().expect("read");
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].remote_number, "611");
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// Files written before the number was extracted stored the whole From
+    /// header; they must read back as a dialable number, not a URI with a tag.
+    #[test]
+    fn legacy_records_are_repaired_on_read() {
+        let (store, dir) = store("legacy");
+        let legacy = HistoryPayload {
+            calls: vec![record("\"Alice\" <sip:611@fritz.box>;tag=179BED3B")],
+        };
+        std::fs::write(
+            dir.join("history.json"),
+            serde_json::to_vec(&legacy).unwrap(),
+        )
+        .unwrap();
+
+        let calls = store.load_calls().expect("read");
+        assert_eq!(calls[0].remote_number, "611");
+        assert_eq!(calls[0].remote_name.as_deref(), Some("Alice"));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn history_is_capped() {
+        let (store, dir) = store("cap");
+        for i in 0..520 {
+            let mut r = record("611");
+            r.id = i.to_string();
+            store.record_call(r).expect("write");
+        }
+        assert_eq!(store.load_calls().unwrap().len(), super::MAX_HISTORY_RECORDS);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// A store with nowhere to write must read empty and swallow writes rather
+    /// than erroring, so the app runs without history.
+    #[test]
+    fn a_disabled_store_is_inert() {
+        let store = LocalStore::disabled();
+        assert!(!store.is_enabled());
+        assert!(store.load_calls().unwrap().is_empty());
+        assert!(store.record_call(record("611")).is_ok());
+        assert!(store.load_contacts().unwrap().is_empty());
+    }
 }

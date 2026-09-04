@@ -32,9 +32,13 @@ pub use model::{
 #[must_use]
 pub fn http_agent() -> ureq::Agent {
     ureq::AgentBuilder::new()
+        // Connect fast so an unreachable host fails quickly, but read
+        // patiently: a FRITZ!Box generates calllist.lua on demand and can take
+        // the better part of a minute to answer for a long call list. 20s was
+        // not enough and the sync failed against a working router.
         .timeout_connect(std::time::Duration::from_secs(5))
-        .timeout_read(std::time::Duration::from_secs(20))
-        .timeout_write(std::time::Duration::from_secs(10))
+        .timeout_read(std::time::Duration::from_secs(60))
+        .timeout_write(std::time::Duration::from_secs(15))
         .build()
 }
 

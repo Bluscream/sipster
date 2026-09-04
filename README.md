@@ -17,9 +17,13 @@ history your desktop already has.
 <summary>📸 <b>Screenshots</b></summary>
 <br>
 
-| Dialer (Registered) | In-Call | Settings |
+| Dialer (registered) | Incoming call | Settings |
 | :---: | :---: | :---: |
-| <img src="assets/screenshots/main.png" alt="Sipster dialpad, registered" width="260"> | <img src="assets/screenshots/in_call.png" alt="Sipster during a call" width="260"> | <img src="assets/screenshots/settings.png" alt="Sipster settings window" width="300"> |
+| <img src="assets/screenshots/main.png" alt="Sipster dialpad, registered" width="240"> | <img src="assets/screenshots/incoming.png" alt="Sipster showing an incoming call with Answer and Decline" width="240"> | <img src="assets/screenshots/settings.png" alt="Sipster settings window, Account page" width="330"> |
+
+Contacts docked beside the dialer — the middle step of the ☰ button's cycle:
+
+<img src="assets/screenshots/docked.png" alt="Sipster with the contact list docked beside the dialer" width="560">
 
 </details>
 

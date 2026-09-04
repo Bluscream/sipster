@@ -22,7 +22,22 @@ in_container() {
     [[ -f /run/.containerenv || -f /.dockerenv || -n "${CONTAINER_ID:-}" ]]
 }
 
-if ! in_container && command -v distrobox >/dev/null 2>&1; then
+# Accept both "appimage" and the legacy "--appimage" spelling.
+TARGET="${1:-all}"
+TARGET="${TARGET#--}"
+
+# `run` launches the GUI and `clean` unmounts host FUSE mounts; neither wants
+# the build container, and unmounting from inside it would target the wrong
+# mount namespace. Everything else needs the cross toolchains.
+host_only_target() {
+    case "$1" in
+        run | clean | help | -h) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+if ! host_only_target "${TARGET}" && ! in_container \
+    && command -v distrobox >/dev/null 2>&1; then
     exec distrobox enter "${BOX}" -- "${SCRIPT_DIR}/build.sh" "$@"
 fi
 
@@ -52,10 +67,16 @@ Targets:
   windows           all working Windows binaries
   all               every working target above, including the AppImage
   check             clippy (warnings denied) + test
-  clean             remove dist/
+  run [args...]     run the built AppImage without FUSE-mounting it
+  clean             remove dist/ and release orphaned AppImage leftovers
 
 Environment:
   SIPSTER_BOX       distrobox to build in (default: build-box)
+
+Test the AppImage with '$0 run', never by executing dist/*.AppImage
+directly: a killed AppImage orphans its /tmp/.mount_* FUSE mount, and these
+accumulate. 'run' extracts instead of mounting, and 'clean' clears whatever
+a killed run did leave behind.
 
 Artifacts are written to dist/ as sipster-{os}-{arch}.{ext}
 EOF
@@ -157,6 +178,80 @@ build_windows() {
     build_target "i686-pc-windows-gnu"   "sipster-ui.exe" "sipster-windows-x86.exe"
 }
 
+# ── AppImage leftover hygiene ────────────────────────────────────────────────
+#
+# An AppImage that does not exit cleanly leaves something behind in /tmp, and
+# which thing depends on how it was started:
+#
+#   - Mounted (the default): it self-mounts at /tmp/.mount_<name>XXXXXX and
+#     unmounts on clean exit only. Killed, the mountpoint is orphaned and
+#     reports "Transport endpoint is not connected" until someone runs
+#     fusermount3 by hand.
+#   - APPIMAGE_EXTRACT_AND_RUN (what `run` uses): no mount, but the payload is
+#     unpacked to /tmp/appimage_extracted_<hash> and only deleted on clean
+#     exit. Killed, that stays — ~40 MB per run, and /tmp is tmpfs here, so it
+#     is RAM.
+#
+# Neither is fatal, both accumulate over a testing session, so clean up both.
+
+# Releases orphaned Sipster AppImage mounts and extracted payloads.
+#
+# Safe by construction. A mountpoint is only unmounted when reading it fails,
+# which means its FUSE daemon is already gone and nothing can be using it;
+# a running instance's mount reads fine and is left alone. Note that `stat` on
+# an orphaned mountpoint still succeeds — only readdir fails — so the check has
+# to actually list the directory. An extracted payload is only deleted when no
+# live process references its path.
+prune_appimage_leftovers() {
+    local path mounts=0 payloads=0 busy=0
+    shopt -s nullglob
+
+    for path in /tmp/.mount_sipste*; do
+        if ls -A "${path}" >/dev/null 2>&1; then
+            busy=$((busy + 1))
+            continue
+        fi
+        fusermount3 -u "${path}" 2>/dev/null || fusermount -u "${path}" 2>/dev/null || true
+        rmdir "${path}" 2>/dev/null || true
+        mounts=$((mounts + 1))
+    done
+
+    for path in /tmp/appimage_extracted_*; do
+        # Only payloads this project produced: `run` extracts Sipster itself,
+        # and build_appimage extracts appimagetool (which is also an AppImage,
+        # self-extracted because the build container has no FUSE). Anything
+        # else in /tmp belongs to another application — leave it be.
+        [[ -f "${path}/usr/bin/sipster" || -f "${path}/usr/bin/appimagetool" ]] || continue
+        if pgrep -f "${path}" >/dev/null 2>&1; then
+            busy=$((busy + 1))
+            continue
+        fi
+        rm -rf "${path}"
+        payloads=$((payloads + 1))
+    done
+
+    shopt -u nullglob
+
+    (( mounts > 0 )) && ok "released ${mounts} orphaned AppImage mount(s)"
+    (( payloads > 0 )) && ok "removed ${payloads} orphaned extracted payload(s)"
+    (( busy > 0 )) && echo "  note: ${busy} leftover(s) still in use; left alone"
+    return 0
+}
+
+# Runs the built AppImage without ever mounting it.
+#
+# APPIMAGE_EXTRACT_AND_RUN makes the runtime unpack to a temp dir instead of
+# using FUSE, so however the process dies there is nothing to orphan. Use this
+# rather than launching dist/*.AppImage directly when testing.
+run_appimage() {
+    local image="${DIST_DIR}/sipster-linux-x86_64.AppImage"
+    [[ -f "${image}" ]] || die "${image} not found — run '$0 appimage' first"
+
+    prune_appimage_leftovers
+    step "Running ${image##*/} (extract-and-run, no FUSE mount)"
+    APPIMAGE_EXTRACT_AND_RUN=1 "${image}" "$@"
+}
+
 # The gate a change must pass before it is committed. Warnings are denied here
 # even though a plain `cargo clippy` only warns, so "warning-free" is enforced
 # rather than merely intended.
@@ -168,10 +263,7 @@ run_check() {
     ok "workspace is clean"
 }
 
-# Accept both "appimage" and the legacy "--appimage" spelling.
-TARGET="${1:-all}"
-TARGET="${TARGET#--}"
-
+# TARGET was parsed near the top, before the distrobox re-exec.
 case "${TARGET}" in
     x86_64-linux)     build_target "x86_64-unknown-linux-gnu"      "sipster-ui" "sipster-linux-x86_64" ;;
     aarch64-linux)    build_target "aarch64-unknown-linux-gnu"     "sipster-ui" "sipster-linux-aarch64" ;;
@@ -186,7 +278,13 @@ case "${TARGET}" in
     windows)          build_windows ;;
     all)              build_linux; build_windows; build_appimage ;;
     check)            run_check ;;
-    clean)            step "Removing ${DIST_DIR}"; rm -rf "${DIST_DIR}"; ok "clean" ;;
+    run)              shift || true; run_appimage "$@" ;;
+    clean)
+                      step "Removing ${DIST_DIR}"
+                      rm -rf "${DIST_DIR}"
+                      prune_appimage_leftovers
+                      ok "clean"
+                      ;;
     help|-h|--help)   usage ;;
     *)                usage; exit 1 ;;
 esac

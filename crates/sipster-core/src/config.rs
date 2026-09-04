@@ -243,6 +243,31 @@ pub struct AudioSettings {
     pub output: Option<String>,
 }
 
+/// Where the running account was read from.
+///
+/// Surfaced in the settings window: with a bare `SIPSTER_*` environment and no
+/// file yet, "where do these values come from and why did my edit not stick?"
+/// is otherwise a genuinely confusing question.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccountSource {
+    /// Read from the config file.
+    File,
+    /// No account in the file; taken from `SIPSTER_*`/`SIP_*`.
+    Environment,
+    /// Nothing configured anywhere yet.
+    None,
+}
+
+impl AccountSource {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::File => "config file",
+            Self::Environment => "environment (SIPSTER_* / SIP_*)",
+            Self::None => "not configured",
+        }
+    }
+}
+
 /// Top-level config. A file holds zero or more accounts; the UI edits this.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
@@ -267,20 +292,57 @@ impl Config {
         std::path::PathBuf::from("sipster.toml")
     }
 
+    /// The config file this process should use.
+    ///
+    /// `--config-file <PATH>`, then `SIPSTER_CONFIG`, then [`default_path`].
+    ///
+    /// [`default_path`]: Self::default_path
+    pub fn path() -> std::path::PathBuf {
+        let args: Vec<String> = std::env::args().skip(1).collect();
+        Self::path_from(&args, |key| std::env::var(key).ok())
+    }
+
+    /// The testable core of [`path`](Self::path), with argv and the
+    /// environment injected.
+    pub fn path_from<S: AsRef<str>>(
+        args: &[S],
+        env: impl Fn(&str) -> Option<String>,
+    ) -> std::path::PathBuf {
+        const FLAGS: [&str; 2] = ["--config-file", "--config"];
+
+        if let Some(path) = crate::cli::flag_value(args, &FLAGS) {
+            return std::path::PathBuf::from(path);
+        }
+        if let Some(path) = env("SIPSTER_CONFIG").or_else(|| env("SIP_CONFIG")) {
+            if !path.trim().is_empty() {
+                return std::path::PathBuf::from(path.trim());
+            }
+        }
+        Self::default_path()
+    }
+
     /// Loads the config file, falling back to the environment for the account.
     ///
     /// The file wins: once the settings window has written one, it is the
     /// source of truth. `SIPSTER_*`/`SIP_*` variables only supply the account
     /// when the file has none, which is what makes first run work with nothing
     /// but environment variables.
-    pub fn load_or_env(path: impl AsRef<Path>) -> Result<Self> {
+    ///
+    /// The returned [`AccountSource`] says which of those actually happened,
+    /// so the UI can show where the running account came from instead of
+    /// leaving the user to guess.
+    pub fn load_or_env(path: impl AsRef<Path>) -> Result<(Self, AccountSource)> {
         let mut config = Self::load(path)?;
-        if config.accounts.is_empty() {
-            if let Ok(from_env) = Self::from_env() {
-                config.accounts = from_env.accounts;
-            }
+        if !config.accounts.is_empty() {
+            return Ok((config, AccountSource::File));
         }
-        Ok(config)
+        match Self::from_env() {
+            Ok(from_env) => {
+                config.accounts = from_env.accounts;
+                Ok((config, AccountSource::Environment))
+            }
+            Err(_) => Ok((config, AccountSource::None)),
+        }
     }
 
     /// Writes the config as TOML, creating parent directories as needed.
@@ -371,5 +433,123 @@ impl Config {
             local_port: get("LOCAL_PORT").and_then(|p| p.parse().ok()).unwrap_or_else(default_port),
         };
         Ok(Self { accounts: vec![account], ..Self::default() })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AccountSource, Config};
+
+    #[test]
+    fn config_flag_beats_environment_and_default() {
+        let env = |key: &str| match key {
+            "SIPSTER_CONFIG" => Some("/from/env.toml".to_string()),
+            _ => None,
+        };
+        assert_eq!(
+            Config::path_from(&["--config-file", "/from/flag.toml"], env),
+            std::path::PathBuf::from("/from/flag.toml")
+        );
+        assert_eq!(
+            Config::path_from(&["--config=/short.toml"], env),
+            std::path::PathBuf::from("/short.toml")
+        );
+    }
+
+    #[test]
+    fn environment_beats_the_default_path() {
+        let env = |key: &str| (key == "SIP_CONFIG").then(|| "/from/env.toml".to_string());
+        assert_eq!(
+            Config::path_from::<&str>(&[], env),
+            std::path::PathBuf::from("/from/env.toml")
+        );
+    }
+
+    /// A blank value must not produce an empty path that fails deep inside a
+    /// file open; it should fall through to the default.
+    #[test]
+    fn a_blank_environment_value_falls_through() {
+        let env = |key: &str| (key == "SIPSTER_CONFIG").then(String::new);
+        assert_eq!(Config::path_from::<&str>(&[], env), Config::default_path());
+    }
+
+    #[test]
+    fn defaults_when_nothing_is_set() {
+        assert_eq!(Config::path_from::<&str>(&[], |_| None), Config::default_path());
+    }
+
+    /// The settings window shows where the account came from, so the source
+    /// must be reported accurately for each case.
+    #[test]
+    fn reports_where_the_account_came_from() {
+        let dir = std::env::temp_dir().join(format!("sipster-cfg-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("sipster.toml");
+
+        // No file and (in a hermetic test) no environment -> nothing configured.
+        let (config, source) = Config::load_or_env(&path).expect("missing file is not an error");
+        if source == AccountSource::None {
+            assert!(config.accounts.is_empty());
+        }
+
+        std::fs::write(
+            &path,
+            "[[accounts]]\nregistrar = \"fritz.box\"\nusername = \"bob\"\n",
+        )
+        .unwrap();
+        let (config, source) = Config::load_or_env(&path).expect("valid file");
+        assert_eq!(source, AccountSource::File);
+        assert_eq!(config.accounts[0].username, "bob");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Saving must round-trip every table, or a settings change would quietly
+    /// drop the account or the preferences.
+    #[test]
+    fn saved_config_round_trips() {
+        let dir = std::env::temp_dir().join(format!("sipster-save-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("nested/sipster.toml");
+
+        let mut config = Config::default();
+        config.accounts.push(super::SipAccount {
+            registrar: "fritz.box".into(),
+            username: "bob".into(),
+            password: "pw".into(),
+            ..super::SipAccount::default()
+        });
+        config.ui.theme = super::ThemeChoice::Nord;
+        config.ui.ringtone = false;
+        config.audio.output = Some("hw:1".into());
+
+        config.save(&path).expect("save creates parent directories");
+        let back = Config::load(&path).expect("reload");
+
+        assert_eq!(back.accounts.len(), 1);
+        assert_eq!(back.accounts[0].password, "pw");
+        assert_eq!(back.ui.theme, super::ThemeChoice::Nord);
+        assert!(!back.ui.ringtone);
+        assert_eq!(back.audio.output.as_deref(), Some("hw:1"));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The file holds a plaintext SIP password, so it must not be readable by
+    /// other users on the machine.
+    #[cfg(unix)]
+    #[test]
+    fn saved_config_is_not_world_readable() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!("sipster-perm-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("sipster.toml");
+
+        Config::default().save(&path).expect("save");
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "config holds a password; mode was {mode:o}");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

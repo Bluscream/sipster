@@ -17,7 +17,7 @@ use iced::futures::channel::mpsc;
 use iced::futures::SinkExt;
 use iced::stream;
 use sipster_core::audio::DeviceSelection;
-use sipster_core::{Config, SipAccount, SipEngine};
+use sipster_core::{SipAccount, SipEngine};
 use tokio::sync::mpsc as tokio_mpsc;
 
 use crate::app::Message;
@@ -58,25 +58,28 @@ pub fn run() -> impl iced::futures::Stream<Item = Message> {
             tokio::spawn(sipster_core::ipc::serve(primary.listener, ipc_tx));
         }
 
-        let config = match load_config() {
-            Ok(config) => config,
-            Err(err) => {
-                let _ = output.send(Message::EngineFailed(err)).await;
-                return;
-            }
-        };
+        let (_, config, _) = crate::startup_config();
         let devices = DeviceSelection {
             input: config.audio.input.clone(),
             output: config.audio.output.clone(),
         };
-        let Some(mut account) = config.accounts.into_iter().next() else {
+
+        let mut account = if let Some(account) = config.accounts.first().cloned() {
+            account
+        } else {
+            // Nothing configured yet. Report it and wait — returning here
+            // would end the stream and close the reconfigure channel, so
+            // entering an account in Settings could never start anything and
+            // a fresh install would be stuck until the next launch.
             let _ = output
                 .send(Message::EngineFailed(
-                    "no SIP account configured — open Settings, or set SIPSTER_* in the environment"
-                        .into(),
+                    "no SIP account configured — open Settings to add one".into(),
                 ))
                 .await;
-            return;
+            let Some(account) = reconfigure_rx.recv().await else {
+                return;
+            };
+            account
         };
 
         // Outer loop: one iteration per engine. A reconfigure drops the engine
@@ -179,11 +182,6 @@ async fn connect(account: SipAccount, devices: DeviceSelection) -> Result<SipEng
     // already uses them rather than the system default.
     let _ = engine.set_devices(devices).await;
     Ok(engine)
-}
-
-/// Loads the config file, falling back to the environment for the account.
-fn load_config() -> Result<Config, String> {
-    Config::load_or_env(Config::default_path()).map_err(|e| e.to_string())
 }
 
 /// Shared engine handle used by `app` to drive calls.

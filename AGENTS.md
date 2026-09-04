@@ -88,6 +88,11 @@ must not be broken casually.
   orphan `assets` branch is gone; do not recreate that pattern.
 - `crates/sipster-ui/assets/icons/` holds the sized PNGs that are `include_bytes!`'d into
   the binary for the tray and window icon. Those are code inputs, not documentation assets.
+- **One config read.** `main.rs` resolves `--config-file`/`SIPSTER_CONFIG` and loads the
+  config once into a `OnceLock`, which both `SipsterApp::boot` and `engine_bridge` read.
+  Do not add a second `Config::load*` call in the UI: two reads can disagree, and the
+  settings window would then be editing a different account from the one the engine
+  registered with.
 - **App-id invariant:** the Wayland `application_id` in `sipster-ui/src/main.rs` (`APP_ID`),
   the `packaging/sipster.desktop` filename, and its `StartupWMClass` must all read
   `sipster`. If they diverge the window falls back to a generic placeholder icon. Every

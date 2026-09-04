@@ -19,7 +19,7 @@ use iced::widget::{
 };
 use iced::{Alignment, Element, Length};
 use sipster_core::audio::{Device, DeviceSelection};
-use sipster_core::{SipAccount, ThemeChoice, UiSettings};
+use sipster_core::{AccountSource, SipAccount, ThemeChoice, UiSettings};
 
 /// A selectable audio device. `id: None` is the system default.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -181,13 +181,14 @@ pub fn view<'a>(
     devices: &'a DeviceSelection,
     account: Option<&'a SipAccount>,
     config_path: &'a str,
+    source: AccountSource,
 ) -> Element<'a, Message> {
     let body = column![
-        account_section(state, account),
+        account_section(state, account, source),
         audio_section(state, devices),
         appearance_section(ui),
         sounds_section(ui),
-        about_section(config_path),
+        about_section(config_path, source),
     ]
     .spacing(26)
     .padding(24)
@@ -269,7 +270,11 @@ fn input<'a>(
         .into()
 }
 
-fn account_section<'a>(state: &'a State, account: Option<&'a SipAccount>) -> Element<'a, Message> {
+fn account_section<'a>(
+    state: &'a State,
+    account: Option<&'a SipAccount>,
+    source: AccountSource,
+) -> Element<'a, Message> {
     let password = {
         let mut widget = text_input("", &state.password)
             .on_input(Message::Password)
@@ -328,11 +333,19 @@ fn account_section<'a>(state: &'a State, account: Option<&'a SipAccount>) -> Ele
     ]
     .spacing(9);
 
-    section(
-        "Account",
-        Some("Applied together — reconnects and re-registers."),
-        content.into(),
-    )
+    // Saying where these values came from matters most in the environment
+    // case: the fields are populated but the file is still empty, so it is
+    // not obvious that editing anything here is what makes them permanent.
+    let hint = match source {
+        AccountSource::File => "Applied together — reconnects and re-registers.",
+        AccountSource::Environment => {
+            "From the environment. Applied together — reconnects, re-registers, \
+             and writes them to the config file."
+        }
+        AccountSource::None => "Nothing configured yet. Fill these in to connect.",
+    };
+
+    section("Account", Some(hint), content.into())
 }
 
 fn audio_section<'a>(state: &'a State, devices: &'a DeviceSelection) -> Element<'a, Message> {
@@ -442,7 +455,7 @@ fn sounds_section(ui: &UiSettings) -> Element<'_, Message> {
     )
 }
 
-fn about_section(config_path: &str) -> Element<'_, Message> {
+fn about_section(config_path: &str, source: AccountSource) -> Element<'_, Message> {
     let dim = iced::Color::from_rgb(0.62, 0.62, 0.66);
     let line = |label: &'static str, value: String| -> Element<'_, Message> {
         row![
@@ -461,6 +474,7 @@ fn about_section(config_path: &str) -> Element<'_, Message> {
         column![
             line("Version", format!("Sipster {}", env!("CARGO_PKG_VERSION"))),
             line("Config file", config_path.to_string()),
+            line("Account from", source.label().to_string()),
             line("Control socket", socket.display().to_string()),
             line(
                 "Log level",

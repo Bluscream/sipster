@@ -54,6 +54,9 @@ pub struct SipsterApp {
     /// rewritten whenever it changes.
     config: Config,
     config_path: String,
+    /// Where the startup account came from, shown in the settings window.
+    /// Becomes `File` as soon as a save lands, because that is then the truth.
+    account_source: sipster_core::AccountSource,
     /// Mirror of the engine's device selection, so the picker can render
     /// before an engine exists.
     devices: DeviceSelection,
@@ -95,13 +98,10 @@ impl SipsterApp {
     /// Daemon mode starts with no windows at all, so the main one is opened
     /// here rather than declared as application settings.
     pub fn boot() -> (Self, Task<Message>) {
-        let config_path = Config::default_path();
-        // A broken config file must not stop the app from starting; fall back
-        // to defaults and say so in the status line.
-        let (config, load_error) = match Config::load_or_env(&config_path) {
-            Ok(config) => (config, None),
-            Err(e) => (Config::default(), Some(e.to_string())),
-        };
+        // Shared with the engine bridge, so the settings window always edits
+        // the same account the engine was built from.
+        let (config_path, config, account_source) = crate::startup_config();
+        let (config, config_path) = (config.clone(), config_path.clone());
 
         let (main_id, open) = window::open(crate::main_window_settings());
 
@@ -111,7 +111,11 @@ impl SipsterApp {
             registration: RegistrationState::Unregistered,
             account_info: None,
             dial_number: String::new(),
-            status: load_error.map_or_else(|| "Ready".into(), |e| format!("Config error: {e}")),
+            status: if *account_source == sipster_core::AccountSource::None {
+                "No account configured — open Settings".into()
+            } else {
+                "Ready".into()
+            },
             active: None,
             incoming: None,
             tray: crate::take_tray(),
@@ -124,6 +128,7 @@ impl SipsterApp {
                 output: config.audio.output.clone(),
             },
             config_path: config_path.display().to_string(),
+            account_source: *account_source,
             config,
         };
         (app, open.map(Message::SettingsOpened).chain(Task::none()))
@@ -263,6 +268,7 @@ impl SipsterApp {
                 &self.devices,
                 account,
                 &self.config_path,
+                self.account_source,
             )
             .map(Message::Settings);
         }
@@ -319,10 +325,16 @@ impl SipsterApp {
             return window::gain_focus(id);
         }
 
-        if let Some(engine) = &self.engine {
-            let account = engine.account().clone();
-            self.settings.load_account(&account);
-        }
+        // Prefer the engine's account (what is actually registered); fall back
+        // to the config, so a failed start still opens an editable form rather
+        // than a blank one the user cannot fix.
+        let account = self
+            .engine
+            .as_ref()
+            .map(|engine| engine.account().clone())
+            .or_else(|| self.config.accounts.first().cloned())
+            .unwrap_or_default();
+        self.settings.load_account(&account);
         self.settings.notice = None;
         self.settings.error = None;
 
@@ -365,10 +377,13 @@ impl SipsterApp {
             S::RevealPassword(v) => self.settings.reveal_password = v,
 
             S::RevertAccount => {
-                if let Some(engine) = &self.engine {
-                    let account = engine.account().clone();
-                    self.settings.load_account(&account);
-                }
+                let account = self
+                    .engine
+                    .as_ref()
+                    .map(|engine| engine.account().clone())
+                    .or_else(|| self.config.accounts.first().cloned())
+                    .unwrap_or_default();
+                self.settings.load_account(&account);
                 self.settings.error = None;
             }
             S::ApplyAccount => return self.apply_account(),
@@ -470,6 +485,11 @@ impl SipsterApp {
     fn persist(&mut self) {
         match self.config.save(&self.config_path) {
             Ok(()) => {
+                // The file now holds an account, so that is where the next
+                // start will read it from regardless of the environment.
+                if !self.config.accounts.is_empty() {
+                    self.account_source = sipster_core::AccountSource::File;
+                }
                 self.settings.error = None;
                 self.settings.notice = Some("Saved".into());
             }

@@ -29,6 +29,15 @@ pub(crate) struct PrimaryState {
 static PRIMARY_LOCK: OnceLock<sipster_core::instance::Guard> = OnceLock::new();
 static PRIMARY_STATE: OnceLock<std::sync::Mutex<Option<PrimaryState>>> = OnceLock::new();
 
+/// The config file path and the config read from it at startup.
+///
+/// Loaded exactly once and shared by the app and the engine bridge. They used
+/// to load it independently, which meant two reads that could disagree if the
+/// file changed in between — and the settings window would then be editing a
+/// different account from the one the engine was registered with.
+static CONFIG: OnceLock<(std::path::PathBuf, sipster_core::Config, sipster_core::AccountSource)> =
+    OnceLock::new();
+
 /// Tray handle — produced before Iced starts, consumed once by
 /// [`SipsterApp::new`].
 static TRAY: OnceLock<std::sync::Mutex<Option<tray::Handle>>> = OnceLock::new();
@@ -75,6 +84,9 @@ Actions:
   -q, --quit              Ask the running instance to quit
 
 Options:
+      --config-file <PATH>
+                          Config file to use
+                          (default: $XDG_CONFIG_HOME/sipster/sipster.toml)
       --log-file <PATH>   Append logs to PATH instead of stderr
   -s, --socket <PATH>     Control socket to use
                           (default: $XDG_RUNTIME_DIR/sipster.sock)
@@ -84,8 +96,10 @@ Options:
   -h, --help              Show this help
   -V, --version           Show the version
 
-Configuration is read from SIPSTER_* (or SIP_*) environment variables, then
-from $XDG_CONFIG_HOME/sipster/sipster.toml. See the README for the full list.
+Everything is configured in the settings window, which writes the config file.
+The file is authoritative; SIPSTER_* (or SIP_*) environment variables supply
+the account only when the file has none, so a first run works with nothing but
+the environment. See the README for the full list.
 
 Log verbosity follows RUST_LOG, e.g. RUST_LOG=sipster_core=trace.
 ";
@@ -108,6 +122,22 @@ pub fn main() -> iced::Result {
     }
 
     init_logging(cli::flag_value(&args, &["--log-file"]));
+
+    // Resolve and read the config before Iced starts: the dialer and the
+    // engine bridge both need it, and neither can take arguments.
+    let config_path = sipster_core::Config::path_from(&args, |key| std::env::var(key).ok());
+    let (config, source) = sipster_core::Config::load_or_env(&config_path).unwrap_or_else(|e| {
+        // A broken file must not stop the app; start on defaults and let the
+        // settings window fix it.
+        eprintln!("sipster: {}: {e}", config_path.display());
+        (sipster_core::Config::default(), sipster_core::AccountSource::None)
+    });
+    tracing::info!(
+        path = %config_path.display(),
+        source = source.label(),
+        "configuration loaded"
+    );
+    let _ = CONFIG.set((config_path, config, source));
 
     if let Some(early_exit) = claim_instance(&args) {
         return early_exit;
@@ -242,6 +272,17 @@ fn init_logging(path: Option<&str>) {
             .init(),
         None => tracing_subscriber::fmt().with_env_filter(filter).init(),
     }
+}
+
+/// The config file path, the startup config, and where its account came from.
+///
+/// # Panics
+///
+/// Panics only if called before `main` initialises it, which cannot happen:
+/// both callers run inside the Iced runtime that `main` starts.
+pub(crate) fn startup_config(
+) -> &'static (std::path::PathBuf, sipster_core::Config, sipster_core::AccountSource) {
+    CONFIG.get().expect("config is loaded before Iced starts")
 }
 
 /// Called by [`engine_bridge::run`] to take the primary state exactly once.

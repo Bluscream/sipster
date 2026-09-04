@@ -101,11 +101,18 @@ present, and are skipped when they are not.
 Most people will not need this section: open **Settings** from the window and
 edit everything there.
 
-Underneath, Sipster reads `$XDG_CONFIG_HOME/sipster/sipster.toml`, falling back
-to `SIPSTER_*`/`SIP_*` environment variables when that file has no account —
-which is what makes first run work with nothing but environment variables. Once
-Settings writes the file, the file wins. It is written `0600`, because it holds
-the account password.
+Underneath, Sipster reads `$XDG_CONFIG_HOME/sipster/sipster.toml` — or whatever
+`--config-file` points at. Environment variables are only a fallback, used when
+that file has no account, so a first run works with nothing but the environment
+and every later run reads the file. Settings shows which of the two the running
+account came from. The file is written `0600`, because it holds the password.
+
+```bash
+sipster --config-file ~/work-phone.toml   # a second account, side by side
+```
+
+Pair it with `--socket` and `--no-single-instance` to run two independently
+configured instances at once.
 
 The names mirror the Fritz!Box "telephony device" dialog, so you can copy the
 values across without translating them. In particular, `SIPSTER_USERNAME` is
@@ -126,9 +133,10 @@ number (620) and not your router's admin login.
 | `SIPSTER_EXPIRES`     |          | `600`     | Re-registration interval, seconds           |
 | `SIPSTER_LABEL`       |          | `env`     | Friendly name shown in the UI               |
 | `SIPSTER_IPC_SOCKET`  |          | `$XDG_RUNTIME_DIR/sipster.sock` | Control socket path     |
+| `SIPSTER_CONFIG`      |          | `$XDG_CONFIG_HOME/sipster/sipster.toml` | Config file (same as `--config-file`) |
 
-Keeping them in `~/.config/environment.d/95-sip.conf` means they survive a
-reboot. `chmod 600` it — it holds a password.
+These exist for first run and for scripted deployments. Once you have saved
+anything in Settings the config file supersedes them, and you can drop them.
 
 </details>
 
@@ -178,6 +186,9 @@ sipster --answer             # answer the ringing call
 sipster --hangup             # hang up, or decline
 sipster --quit
 sipster --help
+
+sipster --config-file ~/other.toml   # use a different config
+sipster --log-file /tmp/sipster.log  # log to a file instead of stderr
 ```
 
 Register Sipster as your desktop's handler for `tel:`, `sip:` and `callto:`

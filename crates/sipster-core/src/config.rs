@@ -222,6 +222,8 @@ pub struct UiSettings {
     pub show_banner: bool,
     /// Register and set as default handler for tel:, sip:, sips:, callto:, and sipster: URI schemes.
     pub register_uri_schemes: bool,
+    /// Keep running in the background when the dialer window is closed if a system tray icon is active.
+    pub close_to_tray: bool,
 }
 
 impl Default for UiSettings {
@@ -234,6 +236,7 @@ impl Default for UiSettings {
             call_chimes: true,
             show_banner: true,
             register_uri_schemes: false,
+            close_to_tray: true,
         }
     }
 }

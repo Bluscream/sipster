@@ -87,6 +87,7 @@ pub enum Message {
     CallChimes(bool),
     ShowBanner(bool),
     RegisterUriSchemes(bool),
+    CloseToTray(bool),
 
     Close,
 }
@@ -458,17 +459,24 @@ fn sounds_section(ui: &UiSettings) -> Element<'_, Message> {
 }
 
 fn integration_section(ui: &UiSettings) -> Element<'_, Message> {
-    let cb: Element<'_, Message> = checkbox(ui.register_uri_schemes)
+    let uri_cb: Element<'_, Message> = checkbox(ui.register_uri_schemes)
         .label("Set Sipster as default handler for telephony & SIP links")
         .on_toggle(Message::RegisterUriSchemes)
         .size(15)
         .text_size(13)
         .into();
 
+    let tray_cb: Element<'_, Message> = checkbox(ui.close_to_tray)
+        .label("Close to system tray (keeps running in background)")
+        .on_toggle(Message::CloseToTray)
+        .size(15)
+        .text_size(13)
+        .into();
+
     section(
         "Desktop Integration",
-        Some("Handles tel:, sip:, sips:, callto:, and sipster: links clicked on your desktop."),
-        column![cb]
+        Some("Handles background tray operation and tel:, sip:, sips:, callto: links."),
+        column![tray_cb, uri_cb]
             .spacing(9)
             .into(),
     )

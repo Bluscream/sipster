@@ -92,6 +92,7 @@ pub enum Message {
     DeclinePressed,
     ContactsPressed,
     CallListPressed,
+    MainOpened(window::Id),
     // Settings window:
     OpenSettings,
     SettingsOpened(window::Id),
@@ -354,6 +355,10 @@ impl SipsterApp {
                 Task::none()
             }
             Message::Dialed(Ok(_)) => Task::none(),
+            Message::MainOpened(id) => {
+                self.main_window = Some(id);
+                Task::none()
+            }
         }
     }
 
@@ -417,9 +422,12 @@ impl SipsterApp {
                 } else if Some(id) == self.calls_window {
                     self.calls_window = None;
                 } else if Some(id) == self.main_window {
-                    // Daemon mode outlives its windows, so closing the dialer
-                    // has to be an explicit quit rather than a hide.
-                    return iced::exit();
+                    self.main_window = None;
+                    // If close-to-tray is enabled AND the tray icon is working, keep running in background.
+                    // Otherwise (or if tray failed), closing the dialer exits the app.
+                    if !(self.config.ui.close_to_tray && self.tray.is_some()) {
+                        return iced::exit();
+                    }
                 }
                 Task::none()
             }
@@ -1003,6 +1011,10 @@ impl SipsterApp {
                     crate::register_desktop_uri_schemes();
                 }
             }
+            S::CloseToTray(on) => {
+                self.config.ui.close_to_tray = on;
+                self.persist();
+            }
 
             S::Close => {
                 if let Some(id) = self.settings_window.take() {
@@ -1126,7 +1138,9 @@ impl SipsterApp {
                 if let Some(id) = self.main_window {
                     window::gain_focus(id)
                 } else {
-                    Task::none()
+                    let (id, open) = window::open(crate::main_window_settings());
+                    self.main_window = Some(id);
+                    Task::batch([open.map(Message::MainOpened), window::gain_focus(id)])
                 }
             }
             Command::OpenSettings => self.open_settings(),
@@ -1142,7 +1156,9 @@ impl SipsterApp {
                 if let Some(id) = self.main_window {
                     window::gain_focus(id)
                 } else {
-                    Task::none()
+                    let (id, open) = window::open(crate::main_window_settings());
+                    self.main_window = Some(id);
+                    Task::batch([open.map(Message::MainOpened), window::gain_focus(id)])
                 }
             }
             tray::Request::OpenSettings => self.open_settings(),

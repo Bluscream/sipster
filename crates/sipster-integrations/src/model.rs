@@ -44,6 +44,7 @@ pub enum RecordSource {
     Local,
     FritzBox { phonebook_id: u32, phonebook_name: String },
     CardDav { account: String },
+    Google { email: String },
     Other(String),
 }
 
@@ -53,6 +54,7 @@ impl std::fmt::Display for RecordSource {
             Self::Local => write!(f, "Local"),
             Self::FritzBox { phonebook_name, .. } => write!(f, "FRITZ!Box ({phonebook_name})"),
             Self::CardDav { account } => write!(f, "CardDAV ({account})"),
+            Self::Google { email } => write!(f, "Google ({email})"),
             Self::Other(s) => write!(f, "{s}"),
         }
     }

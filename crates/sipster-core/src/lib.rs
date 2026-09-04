@@ -17,7 +17,9 @@ pub mod net;
 
 pub use call::{CallDirection, CallEvent, CallId, CallState, RegistrationState};
 pub use config::{
-    AudioSettings, Config, IpcSettings, SipAccount, ThemeChoice, Transport, UiSettings,
+    AudioSettings, BlockAction, BlockedNumber, CardDavAccountConfig, Config, FritzBoxSettings,
+    GoogleAccountConfig, IntegrationSettings, IpcSettings, SipAccount, ThemeChoice, Transport,
+    UiSettings,
 };
 pub use engine::SipEngine;
 pub use error::{Error, Result};

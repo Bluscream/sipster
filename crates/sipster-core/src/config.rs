@@ -246,6 +246,118 @@ pub struct AudioSettings {
     pub output: Option<String>,
 }
 
+/// Action taken when an incoming call matches a blocked number.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum BlockAction {
+    /// Send SIP 603 Decline immediately.
+    #[default]
+    Reject,
+    /// Ring silently without playing audio or showing popup alerts.
+    Mute,
+}
+
+impl BlockAction {
+    pub const ALL: [Self; 2] = [Self::Reject, Self::Mute];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Reject => "Reject (Instant SIP 603)",
+            Self::Mute => "Mute (Silent Ring)",
+        }
+    }
+}
+
+impl std::fmt::Display for BlockAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
+/// A blocked number rule.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BlockedNumber {
+    pub number: String,
+    pub name: Option<String>,
+    pub action: BlockAction,
+    pub added_at: String,
+}
+
+/// Google OAuth 2.0 Account configuration for Google Contacts sync.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GoogleAccountConfig {
+    pub id: String,
+    pub email: String,
+    pub refresh_token: String,
+    pub client_id: Option<String>,
+    pub client_secret: Option<String>,
+    pub enabled: bool,
+}
+
+/// `CardDAV` account configuration for remote address book sync.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CardDavAccountConfig {
+    pub id: String,
+    pub name: String,
+    pub url: String,
+    pub username: String,
+    pub password: String,
+    pub enabled: bool,
+}
+
+/// FRITZ!Box TR-064 integration credentials.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FritzBoxSettings {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    pub enabled: bool,
+}
+
+impl Default for FritzBoxSettings {
+    fn default() -> Self {
+        Self {
+            host: "192.168.2.1".into(),
+            port: 49000,
+            username: String::new(),
+            password: String::new(),
+            enabled: true,
+        }
+    }
+}
+
+/// Comprehensive settings for contact and call history providers, local storage, and call blocking.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct IntegrationSettings {
+    /// Save placed and received calls to local history (~/.local/share/sipster/history.json).
+    pub local_history_enabled: bool,
+    /// FRITZ!Box router integration.
+    pub fritzbox: FritzBoxSettings,
+    /// Google Contacts accounts.
+    pub google_accounts: Vec<GoogleAccountConfig>,
+    /// `CardDAV` / vCard servers.
+    pub carddav_accounts: Vec<CardDavAccountConfig>,
+    /// Numbers blocked from calling in.
+    pub blocked_numbers: Vec<BlockedNumber>,
+    /// Default action applied when blocking a number.
+    pub default_block_action: BlockAction,
+}
+
+impl Default for IntegrationSettings {
+    fn default() -> Self {
+        Self {
+            local_history_enabled: true,
+            fritzbox: FritzBoxSettings::default(),
+            google_accounts: Vec::new(),
+            carddav_accounts: Vec::new(),
+            blocked_numbers: Vec::new(),
+            default_block_action: BlockAction::default(),
+        }
+    }
+}
+
 /// Control-channel settings.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -266,6 +378,8 @@ pub struct Config {
     pub audio: AudioSettings,
     #[serde(default)]
     pub ipc: IpcSettings,
+    #[serde(default)]
+    pub integration: IntegrationSettings,
 }
 
 impl Config {

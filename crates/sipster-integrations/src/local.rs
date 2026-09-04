@@ -106,6 +106,32 @@ impl LocalStore {
         serde_json::to_writer_pretty(writer, &ContactsPayload { contacts: contacts.to_vec() })?;
         Ok(())
     }
+
+    /// Adds or updates a local contact.
+    pub fn upsert_contact(&self, contact: Contact) -> Result<(), LocalStoreError> {
+        let mut contacts = self.load_contacts().unwrap_or_default();
+        if let Some(idx) = contacts.iter().position(|c| c.id == contact.id) {
+            contacts[idx] = contact;
+        } else {
+            contacts.push(contact);
+        }
+        self.save_contacts(&contacts)
+    }
+
+    /// Deletes a local contact by ID.
+    pub fn delete_contact(&self, contact_id: &str) -> Result<(), LocalStoreError> {
+        let mut contacts = self.load_contacts().unwrap_or_default();
+        contacts.retain(|c| c.id != contact_id);
+        self.save_contacts(&contacts)
+    }
+
+    /// Clears all stored local call history.
+    pub fn clear_calls(&self) -> Result<(), LocalStoreError> {
+        let file = File::create(self.history_path())?;
+        let writer = BufWriter::new(file);
+        serde_json::to_writer_pretty(writer, &HistoryPayload { calls: Vec::new() })?;
+        Ok(())
+    }
 }
 
 /// Fallback or XDG data directory resolution without external dependency.

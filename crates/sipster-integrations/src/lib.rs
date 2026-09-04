@@ -5,6 +5,7 @@
 
 pub mod carddav;
 pub mod fritzbox;
+pub mod google;
 pub mod local;
 pub mod model;
 
@@ -14,6 +15,7 @@ use tracing::{info, warn};
 
 pub use carddav::{CardDavClient, CardDavConfig};
 pub use fritzbox::{FritzBoxClient, FritzConfig, FritzError};
+pub use google::{GoogleContactsClient, GoogleTokenResponse, DEFAULT_CLIENT_ID, DEFAULT_CLIENT_SECRET};
 pub use local::{LocalStore, LocalStoreError};
 pub use model::{CallRecord, CallType, Contact, NumberType, PhoneNumber, RecordSource};
 
@@ -22,6 +24,8 @@ pub use model::{CallRecord, CallType, Contact, NumberType, PhoneNumber, RecordSo
 pub struct SyncManager {
     local_store: LocalStore,
     fritz_client: Option<FritzBoxClient>,
+    google_clients: Vec<GoogleContactsClient>,
+    carddav_clients: Vec<CardDavClient>,
     cached_contacts: Arc<RwLock<Vec<Contact>>>,
     cached_calls: Arc<RwLock<Vec<CallRecord>>>,
 }
@@ -45,14 +49,26 @@ impl SyncManager {
         Self {
             local_store,
             fritz_client,
+            google_clients: Vec::new(),
+            carddav_clients: Vec::new(),
             cached_contacts: Arc::new(RwLock::new(Vec::new())),
             cached_calls: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
-    /// Sets or updates the active FRITZ!Box client.
-    pub fn set_fritzbox(&mut self, config: FritzConfig) {
-        self.fritz_client = Some(FritzBoxClient::new(config));
+    /// Configures the active FRITZ!Box client.
+    pub fn set_fritzbox(&mut self, config: Option<FritzConfig>) {
+        self.fritz_client = config.map(FritzBoxClient::new);
+    }
+
+    /// Sets the list of active Google Contacts clients.
+    pub fn set_google_accounts(&mut self, clients: Vec<GoogleContactsClient>) {
+        self.google_clients = clients;
+    }
+
+    /// Sets the list of active `CardDAV` clients.
+    pub fn set_carddav_accounts(&mut self, clients: Vec<CardDavClient>) {
+        self.carddav_clients = clients;
     }
 
     /// Access to the underlying local storage engine.
@@ -71,14 +87,34 @@ impl SyncManager {
     pub async fn sync_contacts(&self) -> Vec<Contact> {
         let mut merged = Vec::new();
 
+        // 1. Local contacts
         if let Ok(local_contacts) = self.local_store.load_contacts() {
             merged.extend(local_contacts);
         }
 
+        // 2. FRITZ!Box contacts
         if let Some(client) = self.fritz_client.clone() {
             if let Ok(Ok(fritz_contacts)) = tokio::task::spawn_blocking(move || client.fetch_contacts()).await {
                 info!(count = fritz_contacts.len(), "fetched contacts from FRITZ!Box");
                 merged.extend(fritz_contacts);
+            }
+        }
+
+        // 3. Google Contacts accounts
+        for google_client in self.google_clients.clone() {
+            let g_email = google_client.email.clone();
+            if let Ok(Ok(google_contacts)) = tokio::task::spawn_blocking(move || google_client.fetch_contacts()).await {
+                info!(count = google_contacts.len(), email = %g_email, "fetched contacts from Google");
+                merged.extend(google_contacts);
+            }
+        }
+
+        // 4. CardDAV accounts
+        for carddav_client in self.carddav_clients.clone() {
+            let label = carddav_client.config.url.clone();
+            if let Ok(Ok(carddav_contacts)) = tokio::task::spawn_blocking(move || carddav_client.fetch_contacts()).await {
+                info!(count = carddav_contacts.len(), url = %label, "fetched contacts from CardDAV");
+                merged.extend(carddav_contacts);
             }
         }
 

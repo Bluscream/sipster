@@ -17,7 +17,7 @@ use tracing::{info, warn};
 
 pub use carddav::{CardDavClient, CardDavConfig};
 pub use fritzbox::{FritzBoxClient, FritzConfig, FritzError};
-pub use google::{GoogleContactsClient, GoogleTokenResponse};
+pub use google::{cancel_pending_auth, GoogleContactsClient, GoogleTokenResponse};
 pub use local::{LocalStore, LocalStoreError};
 pub use vdir::VdirStore;
 pub use model::{

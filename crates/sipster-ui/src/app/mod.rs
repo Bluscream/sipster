@@ -459,6 +459,10 @@ impl SipsterApp {
                     // If close-to-tray is enabled AND the tray icon is working, keep running in background.
                     // Otherwise (or if tray failed), closing the dialer exits the app.
                     if !(self.config.ui.close_to_tray && self.tray.is_some()) {
+                        // A pending Google sign-in runs on a blocking thread,
+                        // which tokio waits for at shutdown; without this the
+                        // process outlives the close by up to three minutes.
+                        sipster_integrations::cancel_pending_auth();
                         return iced::exit();
                     }
                 }

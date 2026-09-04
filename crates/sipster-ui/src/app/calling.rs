@@ -72,7 +72,13 @@ impl SipsterApp {
             Command::OpenSettings => self.open_settings(),
             Command::OpenContacts => self.open_contacts(),
             Command::OpenCallList => self.open_calls(),
-            Command::Quit => iced::exit(),
+            Command::Quit => {
+                // A pending Google sign-in runs on a blocking thread, and
+                // tokio waits for those at shutdown; without this the process
+                // outlives the quit by up to three minutes.
+                sipster_integrations::cancel_pending_auth();
+                iced::exit()
+            }
         }
     }
 
@@ -98,7 +104,10 @@ impl SipsterApp {
                     self.hangup()
                 }
             }
-            tray::Request::Quit => iced::exit(),
+            tray::Request::Quit => {
+                sipster_integrations::cancel_pending_auth();
+                iced::exit()
+            }
         }
     }
 

@@ -11,6 +11,29 @@ use crate::model::{Contact, NumberType, PhoneNumber, RecordSource};
 /// How long to wait for the user to finish signing in before giving up.
 const AUTH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 
+/// Set when the application is shutting down, so a pending sign-in stops
+/// waiting.
+///
+/// This is not a nicety. The wait runs on a `spawn_blocking` thread, and
+/// dropping a tokio runtime *waits* for blocking tasks to finish — so a
+/// sign-in nobody completed kept the whole process alive for the full three
+/// minutes after `--quit`, and it had to be killed instead.
+static CANCELLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Asks any in-flight sign-in to give up. Call on shutdown.
+pub fn cancel_pending_auth() {
+    CANCELLED.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Clears the cancellation so a later sign-in can run.
+fn begin_auth() {
+    CANCELLED.store(false, std::sync::atomic::Ordering::Relaxed);
+}
+
+fn cancelled() -> bool {
+    CANCELLED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 const FAILURE_PAGE: &str = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n    <!DOCTYPE html><html><body style='font-family:sans-serif;text-align:center;padding:50px;'>    <h2>Sign-in was not completed</h2><p>You can close this tab and try again in Sipster.</p>    </body></html>";
 
 /// Opens `url` in the user's default browser.
@@ -279,6 +302,7 @@ impl GoogleContactsClient {
 
         // Google desktop clients register "http://localhost" and accept any
         // port on it. Sending 127.0.0.1 instead risks redirect_uri_mismatch.
+        begin_auth();
         let redirect_uri = format!("http://localhost:{port}");
         let listener = TcpListener::bind(format!("127.0.0.1:{port}"))
             .map_err(|e| format!("could not listen on port {port}: {e}"))?;
@@ -306,10 +330,6 @@ impl GoogleContactsClient {
         // Without a deadline this blocked forever when the user closed the tab
         // or never completed consent, pinning the worker thread for the rest of
         // the session.
-        listener
-            .set_nonblocking(false)
-            .map_err(|e| format!("could not configure the redirect listener: {e}"))?;
-
         let deadline = std::time::Instant::now() + AUTH_TIMEOUT;
         listener
             .set_nonblocking(true)
@@ -319,6 +339,9 @@ impl GoogleContactsClient {
             match listener.accept() {
                 Ok(accepted) => break accepted,
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    if cancelled() {
+                        return Err("sign-in cancelled".into());
+                    }
                     if std::time::Instant::now() >= deadline {
                         return Err("timed out waiting for the Google sign-in to finish".into());
                     }
@@ -434,4 +457,36 @@ fn urlencoding_simple(input: &str) -> String {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod auth_cancel_tests {
+    use super::{begin_auth, cancel_pending_auth, GoogleContactsClient};
+    use std::net::TcpListener;
+
+    /// The wait runs on a `spawn_blocking` thread, and dropping a tokio
+    /// runtime waits for those to finish. Before this was cancellable, a
+    /// sign-in nobody completed kept the whole process alive for the full
+    /// `AUTH_TIMEOUT` after `--quit`, and it had to be killed instead.
+    #[test]
+    fn cancelling_stops_the_wait_instead_of_running_out_the_timeout() {
+        begin_auth();
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+
+        std::thread::spawn(|| {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            cancel_pending_auth();
+        });
+
+        let started = std::time::Instant::now();
+        let result = GoogleContactsClient::wait_for_code(&listener);
+        let waited = started.elapsed();
+
+        assert!(result.is_err(), "no browser ever connected");
+        assert!(
+            waited < std::time::Duration::from_secs(5),
+            "gave up after {waited:?}, so cancellation was not observed"
+        );
+        begin_auth();
+    }
 }

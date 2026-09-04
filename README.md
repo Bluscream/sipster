@@ -64,9 +64,11 @@ Named here so nobody has to discover them the hard way:
   the number field. It does not send RFC 4733 or in-band digits to the peer, so
   it cannot drive a phone menu mid-call.
 - **No hold or transfer.**
-- **No contact or call-list sync.** The ☏ button is a placeholder. Sync from
-  the Fritz!Box phonebook and call history (TR-064), Google Contacts, KDE and
-  Home Assistant is the next major goal.
+- **No GNOME/KDE contact-store integration.** Contacts come from the FRITZ!Box
+  phonebook, Google, CardDAV, and a local folder of `.vcf` files (the
+  vdirsyncer/khard convention at `~/.local/share/contacts`). Evolution Data
+  Server and Akonadi both need D-Bus clients against services that are not on
+  every machine, so neither is implemented rather than shipped unverified.
 - **UDP only.** The config format reserves a `transport` field, but TCP and TLS
   are not implemented.
 - **No Windows-on-ARM build.** `aarch64-pc-windows-msvc` does not currently

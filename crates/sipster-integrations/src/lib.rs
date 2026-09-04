@@ -8,6 +8,8 @@ pub mod fritzbox;
 pub mod google;
 pub mod local;
 pub mod model;
+pub mod vcard;
+pub mod vdir;
 
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -17,6 +19,7 @@ pub use carddav::{CardDavClient, CardDavConfig};
 pub use fritzbox::{FritzBoxClient, FritzConfig, FritzError};
 pub use google::{GoogleContactsClient, GoogleTokenResponse};
 pub use local::{LocalStore, LocalStoreError};
+pub use vdir::VdirStore;
 pub use model::{
     caller_number, normalize_number, number_contains, number_matches, timestamp_key, CallRecord,
     CallType, Contact, NumberType,
@@ -58,6 +61,7 @@ pub struct SyncManager {
     fritz_client: Option<FritzBoxClient>,
     google_clients: Vec<GoogleContactsClient>,
     carddav_clients: Vec<CardDavClient>,
+    vdir_store: Option<VdirStore>,
     cached_contacts: Arc<RwLock<Vec<Contact>>>,
     cached_calls: Arc<RwLock<Vec<CallRecord>>>,
 }
@@ -88,6 +92,7 @@ impl SyncManager {
             fritz_client: None,
             google_clients: Vec::new(),
             carddav_clients: Vec::new(),
+            vdir_store: None,
             cached_contacts: Arc::new(RwLock::new(Vec::new())),
             cached_calls: Arc::new(RwLock::new(Vec::new())),
         }
@@ -106,6 +111,11 @@ impl SyncManager {
     /// Sets the list of active `CardDAV` clients.
     pub fn set_carddav_accounts(&mut self, clients: Vec<CardDavClient>) {
         self.carddav_clients = clients;
+    }
+
+    /// Sets the local vCard directory, or clears it with `None`.
+    pub fn set_vdir(&mut self, store: Option<VdirStore>) {
+        self.vdir_store = store;
     }
 
     /// Access to the underlying local storage engine.
@@ -132,6 +142,7 @@ impl SyncManager {
         let fritz = self.fritz_client.clone();
         let google = self.google_clients.clone();
         let carddav = self.carddav_clients.clone();
+        let vdir = self.vdir_store.clone();
         let cache = Arc::clone(&self.cached_contacts);
 
         tokio::spawn(async move {
@@ -167,6 +178,10 @@ impl SyncManager {
                 tasks.push(Box::pin(run_provider_owned(label, move || {
                     client.fetch_contacts()
                 })));
+            }
+            if let Some(store) = vdir {
+                let label = format!("vCards ({})", store.root().display());
+                tasks.push(Box::pin(run_provider_owned(label, move || store.load())));
             }
 
             // Emit each provider the moment it finishes, in completion order.
@@ -271,6 +286,10 @@ impl SyncManager {
             tasks.push(Box::pin(run_provider_owned(label, move || {
                 client.fetch_contacts()
             })));
+        }
+        if let Some(store) = self.vdir_store.clone() {
+            let label = format!("vCards ({})", store.root().display());
+            tasks.push(Box::pin(run_provider_owned(label, move || store.load())));
         }
 
         futures_util::future::join_all(tasks)

@@ -101,6 +101,8 @@ pub enum Message {
     // three windows.
     ToggleProvidersModal,
     ToggleLocalHistory(bool),
+    ToggleVdir(bool),
+    VdirPathChanged(String),
     DefaultBlockActionChanged(BlockAction),
     UnblockNumber(String),
 
@@ -170,6 +172,8 @@ pub struct State {
     pub draft_google_client_secret: String,
     /// Path typed into the `client_secret` JSON import box.
     pub draft_google_json_path: String,
+    /// Path typed into the local vCard folder box.
+    pub draft_vdir_path: String,
 
     /// Set when the last apply failed, cleared on the next successful one.
     pub error: Option<String>,
@@ -710,6 +714,7 @@ fn providers_section<'a>(
         content = content.push(rule::horizontal(1)).push(fritzbox_panel(state, integration));
         content = content.push(rule::horizontal(1)).push(google_panel(state, integration));
         content = content.push(rule::horizontal(1)).push(carddav_panel(state, integration));
+        content = content.push(rule::horizontal(1)).push(vdir_panel(state, integration));
     }
 
     content = content.push(
@@ -907,6 +912,42 @@ fn carddav_panel<'a>(
                 .padding([5, 11]),
         )
         .into()
+}
+
+/// Local vCard directory — the closest thing to a Linux-wide contact store.
+fn vdir_panel<'a>(
+    state: &'a State,
+    integration: &'a IntegrationSettings,
+) -> Element<'a, Message> {
+    let discovered = sipster_integrations::VdirStore::discover()
+        .map_or_else(|| "none found".to_string(), |s| s.root().display().to_string());
+
+    column![
+        text("Local vCard folder").size(14),
+        text(
+            "A directory of .vcf files — what vdirsyncer, khard, Radicale and KDE's \
+             directory address books all read and write."
+        )
+        .size(12),
+        checkbox(integration.vdir_enabled)
+            .label("Read contacts from a local vCard folder")
+            .on_toggle(Message::ToggleVdir)
+            .size(15)
+            .text_size(13),
+        field(
+            "Folder",
+            input(
+                "~/.local/share/contacts",
+                &state.draft_vdir_path,
+                Message::VdirPathChanged,
+            ),
+        ),
+        text(format!("Auto-detected: {discovered}"))
+            .size(11)
+            .color(iced::Color::from_rgb(0.62, 0.62, 0.66)),
+    ]
+    .spacing(8)
+    .into()
 }
 
 /// Blocked numbers, listed so a rule can actually be found and removed.

@@ -191,6 +191,18 @@ impl SipsterApp {
                     })
                     .collect();
                 sm.set_carddav_accounts(c_clients);
+
+                // The local vCard folder, configured or auto-detected.
+                if config.integration.vdir_enabled {
+                    sm.set_vdir(
+                        config
+                            .integration
+                            .vdir_path
+                            .clone()
+                            .map(sipster_integrations::VdirStore::new)
+                            .or_else(sipster_integrations::VdirStore::discover),
+                    );
+                }
                 sm
             },
             devices: DeviceSelection {
@@ -854,7 +866,7 @@ impl SipsterApp {
         Task::none()
     }
 
-    /// The `CardDAV` account list.
+    /// The `CardDAV` account list and the local vCard folder.
     fn on_carddav_settings(&mut self, msg: settings::Message) -> Task<Message> {
         use settings::Message as S;
         match msg {
@@ -945,9 +957,49 @@ impl SipsterApp {
                     .retain(|b| b.number != number);
                 self.persist();
             }
+            other => return self.on_vdir_settings(other),
+        }
+        Task::none()
+    }
+
+    /// The local vCard folder — the nearest thing Linux has to a shared
+    /// contact store, and the one provider that needs no account at all.
+    fn on_vdir_settings(&mut self, msg: settings::Message) -> Task<Message> {
+        use settings::Message as S;
+        match msg {
+            S::ToggleVdir(enabled) => {
+                self.config.integration.vdir_enabled = enabled;
+                self.apply_vdir();
+                self.persist();
+                return Task::done(Message::Contacts(contacts::Message::SyncPressed));
+            }
+            S::VdirPathChanged(path) => {
+                self.settings.draft_vdir_path.clone_from(&path);
+                let trimmed = path.trim();
+                self.config.integration.vdir_path = (!trimmed.is_empty())
+                    .then(|| std::path::PathBuf::from(expand_home(trimmed)));
+                self.apply_vdir();
+                self.persist();
+            }
             other => return self.on_google_settings(other),
         }
         Task::none()
+    }
+
+    /// Points the sync manager at the configured vCard folder, or the
+    /// auto-detected one when no path is set.
+    fn apply_vdir(&mut self) {
+        let store = if self.config.integration.vdir_enabled {
+            self.config
+                .integration
+                .vdir_path
+                .clone()
+                .map(sipster_integrations::VdirStore::new)
+                .or_else(sipster_integrations::VdirStore::discover)
+        } else {
+            None
+        };
+        self.sync_manager.set_vdir(store);
     }
 
     /// Fills the Google client id/secret from the JSON Google hands out.
@@ -1604,6 +1656,19 @@ fn display_name(remote: &str) -> Option<String> {
     let name = name.trim().trim_matches('"').trim();
     (!name.is_empty() && name != sipster_integrations::caller_number(raw))
         .then(|| name.to_string())
+}
+
+/// Expands a leading `~/` so a typed path behaves the way a shell would.
+fn expand_home(path: &str) -> String {
+    path.strip_prefix("~/").map_or_else(
+        || path.to_string(),
+        |rest| {
+            std::env::var("HOME").map_or_else(
+                |_| path.to_string(),
+                |home| format!("{home}/{rest}"),
+            )
+        },
+    )
 }
 
 fn registration_status(state: &RegistrationState) -> String {

@@ -415,6 +415,8 @@ impl std::fmt::Debug for IntegrationSettings {
             .field("fritzbox", &self.fritzbox)
             .field("google_accounts", &self.google_accounts)
             .field("carddav_accounts", &self.carddav_accounts)
+            .field("vdir_enabled", &self.vdir_enabled)
+            .field("vdir_path", &self.vdir_path)
             .field("blocked_numbers", &self.blocked_numbers.len())
             .field("default_block_action", &self.default_block_action)
             .finish()
@@ -443,6 +445,13 @@ pub struct IntegrationSettings {
     pub google_accounts: Vec<GoogleAccountConfig>,
     /// `CardDAV` / vCard servers.
     pub carddav_accounts: Vec<CardDavAccountConfig>,
+    /// Read contacts from a local directory of `.vcf` files.
+    ///
+    /// The nearest thing Linux has to a shared contact store: the convention
+    /// used by vdirsyncer, khard, Radicale and KDE's directory address books.
+    /// `None` for the path means "look in the usual places".
+    pub vdir_enabled: bool,
+    pub vdir_path: Option<std::path::PathBuf>,
     /// Numbers blocked from calling in.
     pub blocked_numbers: Vec<BlockedNumber>,
     /// Default action applied when blocking a number.
@@ -456,6 +465,8 @@ impl Default for IntegrationSettings {
             fritzbox: FritzBoxSettings::default(),
             google_accounts: Vec::new(),
             carddav_accounts: Vec::new(),
+            vdir_enabled: true,
+            vdir_path: None,
             blocked_numbers: Vec::new(),
             default_block_action: BlockAction::default(),
         }

@@ -114,6 +114,11 @@ must not be broken casually.
 
 ## Build & Release
 
+- The build box needs `pipewire-alsa` installed, not just `libasound2-dev`. Without it cpal
+  enumerates a different set of audio devices inside the container than on the host — no
+  `pipewire` entry — which made an audio-device measurement taken in the box wrong about
+  what users actually see. Anything that inspects devices must be checked on the host, or
+  in a box with the plugin.
 - Builds run inside the **`build-box` distrobox** (Debian), which carries the cross toolchains and
   `alsa`/pkg-config for every target. `cargo build` on the bare host is expected to fail; that is
   not a bug.

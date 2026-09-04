@@ -96,71 +96,9 @@ impl GoogleContactsClient {
 
             if let Some(connections) = body.get("connections").and_then(|c| c.as_array()) {
                 for person in connections {
-                    let name = person
-                        .get("names")
-                        .and_then(|n| n.as_array())
-                        .and_then(|arr| arr.first())
-                        .and_then(|obj| obj.get("displayName"))
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default()
-                        .trim();
-
-                    if name.is_empty() {
-                        continue;
+                    if let Some(contact) = self.parse_person(person) {
+                        contacts.push(contact);
                     }
-
-                    let resource_name = person
-                        .get("resourceName")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or_default();
-
-                    let mut numbers = Vec::new();
-                    if let Some(phones) = person.get("phoneNumbers").and_then(|p| p.as_array()) {
-                        for phone in phones {
-                            if let Some(val) = phone.get("value").and_then(|v| v.as_str()) {
-                                let val = val.trim();
-                                if !val.is_empty() {
-                                    let phone_type = phone
-                                        .get("type")
-                                        .and_then(|t| t.as_str())
-                                        .unwrap_or("other");
-
-                                    let number_type = match phone_type.to_lowercase().as_str() {
-                                        "mobile" | "cell" => NumberType::Mobile,
-                                        "work" => NumberType::Work,
-                                        "home" => NumberType::Home,
-                                        "fax" => NumberType::Fax,
-                                        other => NumberType::Other(other.to_string()),
-                                    };
-
-                                    numbers.push(PhoneNumber {
-                                        number: val.to_string(),
-                                        number_type,
-                                        priority: if numbers.is_empty() { 1 } else { 2 },
-                                    });
-                                }
-                            }
-                        }
-                    }
-
-                    let mut emails = Vec::new();
-                    if let Some(email_arr) = person.get("emailAddresses").and_then(|e| e.as_array()) {
-                        for email in email_arr {
-                            if let Some(val) = email.get("value").and_then(|v| v.as_str()) {
-                                emails.push(val.trim().to_string());
-                            }
-                        }
-                    }
-
-                    contacts.push(Contact {
-                        id: format!("google-{}-{resource_name}", self.account_id),
-                        name: name.to_string(),
-                        numbers,
-                        emails,
-                        source: RecordSource::Google {
-                            email: self.email.clone(),
-                        },
-                    });
                 }
             }
 
@@ -176,6 +114,74 @@ impl GoogleContactsClient {
 
         info!(count = contacts.len(), email = %self.email, "synced Google contacts");
         Ok(contacts)
+    }
+
+    fn parse_person(&self, person: &serde_json::Value) -> Option<Contact> {
+        let name = person
+            .get("names")
+            .and_then(|n| n.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|obj| obj.get("displayName"))
+            .and_then(|v| v.as_str())
+            .unwrap_or_default()
+            .trim();
+
+        if name.is_empty() {
+            return None;
+        }
+
+        let resource_name = person
+            .get("resourceName")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+
+        let mut numbers = Vec::new();
+        if let Some(phones) = person.get("phoneNumbers").and_then(|p| p.as_array()) {
+            for phone in phones {
+                if let Some(val) = phone.get("value").and_then(|v| v.as_str()) {
+                    let val = val.trim();
+                    if !val.is_empty() {
+                        let phone_type = phone
+                            .get("type")
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("other");
+
+                        let number_type = match phone_type.to_lowercase().as_str() {
+                            "mobile" | "cell" => NumberType::Mobile,
+                            "work" => NumberType::Work,
+                            "home" => NumberType::Home,
+                            "fax" => NumberType::Fax,
+                            other => NumberType::Other(other.to_string()),
+                        };
+
+                        numbers.push(PhoneNumber {
+                            number: val.to_string(),
+                            number_type,
+                            priority: if numbers.is_empty() { 1 } else { 2 },
+                        });
+                    }
+                }
+            }
+        }
+
+        let mut emails = Vec::new();
+        if let Some(email_arr) = person.get("emailAddresses").and_then(|e| e.as_array()) {
+            for email in email_arr {
+                if let Some(val) = email.get("value").and_then(|v| v.as_str()) {
+                    emails.push(val.trim().to_string());
+                }
+            }
+        }
+
+        Some(Contact {
+            id: format!("google-{}-{resource_name}", self.account_id),
+            name: name.to_string(),
+            numbers,
+            emails,
+            source: RecordSource::Google {
+                email: self.email.clone(),
+            },
+        })
     }
 
     /// Spins up a local redirect listener on `127.0.0.1:8765`, generates the Google OAuth URL,

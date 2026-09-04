@@ -92,31 +92,8 @@ impl SyncManager {
             merged.extend(local_contacts);
         }
 
-        // 2. FRITZ!Box contacts
-        if let Some(client) = self.fritz_client.clone() {
-            if let Ok(Ok(fritz_contacts)) = tokio::task::spawn_blocking(move || client.fetch_contacts()).await {
-                info!(count = fritz_contacts.len(), "fetched contacts from FRITZ!Box");
-                merged.extend(fritz_contacts);
-            }
-        }
-
-        // 3. Google Contacts accounts
-        for google_client in self.google_clients.clone() {
-            let g_email = google_client.email.clone();
-            if let Ok(Ok(google_contacts)) = tokio::task::spawn_blocking(move || google_client.fetch_contacts()).await {
-                info!(count = google_contacts.len(), email = %g_email, "fetched contacts from Google");
-                merged.extend(google_contacts);
-            }
-        }
-
-        // 4. CardDAV accounts
-        for carddav_client in self.carddav_clients.clone() {
-            let label = carddav_client.config.url.clone();
-            if let Ok(Ok(carddav_contacts)) = tokio::task::spawn_blocking(move || carddav_client.fetch_contacts()).await {
-                info!(count = carddav_contacts.len(), url = %label, "fetched contacts from CardDAV");
-                merged.extend(carddav_contacts);
-            }
-        }
+        // 2. Remote providers
+        merged.extend(self.fetch_remote_contacts().await);
 
         merged.sort_by_key(|a| a.name.to_lowercase());
         merged.dedup_by(|a, b| a.name.eq_ignore_ascii_case(&b.name) && a.primary_number() == b.primary_number());
@@ -124,6 +101,36 @@ impl SyncManager {
         let mut lock = self.cached_contacts.write().await;
         (*lock).clone_from(&merged);
         merged
+    }
+
+    #[allow(clippy::cognitive_complexity)]
+    async fn fetch_remote_contacts(&self) -> Vec<Contact> {
+        let mut remote = Vec::new();
+
+        if let Some(client) = self.fritz_client.clone() {
+            if let Ok(Ok(fritz_contacts)) = tokio::task::spawn_blocking(move || client.fetch_contacts()).await {
+                info!(count = fritz_contacts.len(), "fetched contacts from FRITZ!Box");
+                remote.extend(fritz_contacts);
+            }
+        }
+
+        for google_client in self.google_clients.clone() {
+            let g_email = google_client.email.clone();
+            if let Ok(Ok(google_contacts)) = tokio::task::spawn_blocking(move || google_client.fetch_contacts()).await {
+                info!(count = google_contacts.len(), email = %g_email, "fetched contacts from Google");
+                remote.extend(google_contacts);
+            }
+        }
+
+        for carddav_client in self.carddav_clients.clone() {
+            let label = carddav_client.config.url.clone();
+            if let Ok(Ok(carddav_contacts)) = tokio::task::spawn_blocking(move || carddav_client.fetch_contacts()).await {
+                info!(count = carddav_contacts.len(), url = %label, "fetched contacts from CardDAV");
+                remote.extend(carddav_contacts);
+            }
+        }
+
+        remote
     }
 
     /// Refreshes call history from all active providers and merges them chronologically.

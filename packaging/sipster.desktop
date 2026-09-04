@@ -8,5 +8,5 @@ Icon=sipster
 Terminal=false
 Categories=Network;Telephony;
 Keywords=SIP;VoIP;phone;softphone;telephony;FritzBox;
-MimeType=x-scheme-handler/tel;x-scheme-handler/sip;x-scheme-handler/callto;
+MimeType=x-scheme-handler/tel;x-scheme-handler/sip;x-scheme-handler/sips;x-scheme-handler/callto;x-scheme-handler/sipster;
 StartupWMClass=sipster

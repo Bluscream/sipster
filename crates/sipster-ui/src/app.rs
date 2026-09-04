@@ -455,6 +455,13 @@ impl SipsterApp {
                 self.config.ui.show_banner = on;
                 self.persist();
             }
+            S::RegisterUriSchemes(on) => {
+                self.config.ui.register_uri_schemes = on;
+                self.persist();
+                if on {
+                    crate::register_desktop_uri_schemes();
+                }
+            }
 
             S::Close => {
                 if let Some(id) = self.settings_window.take() {

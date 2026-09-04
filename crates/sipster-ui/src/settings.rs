@@ -86,6 +86,7 @@ pub enum Message {
     DtmfFeedback(bool),
     CallChimes(bool),
     ShowBanner(bool),
+    RegisterUriSchemes(bool),
 
     Close,
 }
@@ -188,6 +189,7 @@ pub fn view<'a>(
         audio_section(state, devices),
         appearance_section(ui),
         sounds_section(ui),
+        integration_section(ui),
         about_section(config_path),
     ]
     .spacing(26)
@@ -452,6 +454,23 @@ fn sounds_section(ui: &UiSettings) -> Element<'_, Message> {
         ]
         .spacing(9)
         .into(),
+    )
+}
+
+fn integration_section(ui: &UiSettings) -> Element<'_, Message> {
+    let cb: Element<'_, Message> = checkbox(ui.register_uri_schemes)
+        .label("Set Sipster as default handler for telephony & SIP links")
+        .on_toggle(Message::RegisterUriSchemes)
+        .size(15)
+        .text_size(13)
+        .into();
+
+    section(
+        "Desktop Integration",
+        Some("Handles tel:, sip:, sips:, callto:, and sipster: links clicked on your desktop."),
+        column![cb]
+            .spacing(9)
+            .into(),
     )
 }
 

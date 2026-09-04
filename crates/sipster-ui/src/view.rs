@@ -1,22 +1,35 @@
 //! Pure rendering: turns [`SipsterApp`] state into an Iced widget tree.
 
 use iced::widget::{button, column, container, image, row, text, text_input, Space};
-use iced::{Alignment, Element, Length};
+use iced::{Alignment, Element, Length, Padding};
 use sipster_core::{CallState, RegistrationState};
 
 use crate::app::{Message, SipsterApp};
 
 pub fn root(app: &SipsterApp) -> Element<'_, Message> {
-    let main_content = container(
-        column![body(app)]
-            .align_x(Alignment::Center)
-            .spacing(0)
-            .max_width(320),
-    )
-    .center_x(Length::Fill)
-    .center_y(Length::Fill)
-    .width(Length::Fill)
-    .height(Length::Fill);
+    let mut main_column = column![body(app)]
+        .align_x(Alignment::Center)
+        .spacing(0)
+        .max_width(320);
+
+    let main_content = if app.ui().show_banner {
+        container(main_column)
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .width(Length::Fill)
+            .height(Length::Fill)
+    } else {
+        main_column = main_column.padding(Padding {
+            top: 14.0,
+            right: 0.0,
+            bottom: 0.0,
+            left: 0.0,
+        });
+        container(main_column)
+            .center_x(Length::Fill)
+            .width(Length::Fill)
+            .height(Length::Fill)
+    };
 
     let statusbar = statusbar(app);
 

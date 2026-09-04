@@ -49,9 +49,10 @@ impl Command {
     pub fn from_uri(uri: &str) -> Option<Self> {
         let uri = uri.trim();
         let (scheme, rest) = uri.split_once(':')?;
+        let scheme_lower = scheme.to_ascii_lowercase();
         if !matches!(
-            scheme.to_ascii_lowercase().as_str(),
-            "tel" | "sip" | "sips" | "callto"
+            scheme_lower.as_str(),
+            "tel" | "sip" | "sips" | "callto" | "sipster"
         ) {
             return None;
         }
@@ -62,9 +63,19 @@ impl Command {
         let rest = rest.split(['?', '#']).next().unwrap_or(rest);
         let decoded = percent_decode(rest);
 
-        let target = if scheme.eq_ignore_ascii_case("sip") || scheme.eq_ignore_ascii_case("sips") {
+        let target = if scheme_lower == "sip" || scheme_lower == "sips" {
             // Keep SIP URIs intact so they route as entered.
-            format!("{}:{}", scheme.to_ascii_lowercase(), decoded)
+            format!("{scheme_lower}:{decoded}")
+        } else if scheme_lower == "sipster" {
+            // sipster:123 or sipster://user@domain or sipster:sip:user@domain
+            let inner = decoded.trim();
+            if inner.starts_with("sip:") || inner.starts_with("sips:") || inner.starts_with("tel:") {
+                inner.to_string()
+            } else if inner.contains('@') || inner.contains(':') {
+                format!("sip:{inner}")
+            } else {
+                inner.chars().filter(|c| c.is_ascii_digit() || matches!(c, '+' | '*' | '#')).collect()
+            }
         } else {
             // tel:/callto: carry dialable digits; strip RFC 3966 separators.
             let digits: String = decoded
@@ -315,6 +326,14 @@ mod tests {
     fn keeps_sip_uris_intact() {
         assert_eq!(
             Command::from_uri("sip:bob@example.com"),
+            Some(Command::Call { target: "sip:bob@example.com".into() })
+        );
+        assert_eq!(
+            Command::from_uri("sipster:611"),
+            Some(Command::Call { target: "611".into() })
+        );
+        assert_eq!(
+            Command::from_uri("sipster://bob@example.com"),
             Some(Command::Call { target: "sip:bob@example.com".into() })
         );
     }

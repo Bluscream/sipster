@@ -294,3 +294,36 @@ pub(crate) fn take_primary_state() -> Option<PrimaryState> {
 pub(crate) fn take_tray() -> Option<tray::Handle> {
     TRAY.get()?.lock().ok()?.take()
 }
+
+/// Registers Sipster as the default handler for telephony & SIP URI schemes on the desktop.
+pub(crate) fn register_desktop_uri_schemes() {
+    #[cfg(target_os = "linux")]
+    {
+        tokio::spawn(async {
+            const SCHEMES: &[&str] = &[
+                "x-scheme-handler/tel",
+                "x-scheme-handler/sip",
+                "x-scheme-handler/sips",
+                "x-scheme-handler/callto",
+                "x-scheme-handler/sipster",
+            ];
+            for scheme in SCHEMES {
+                let status = tokio::process::Command::new("xdg-mime")
+                    .args(["default", "sipster.desktop", scheme])
+                    .status()
+                    .await;
+                match status {
+                    Ok(s) if s.success() => {
+                        tracing::info!(scheme, "registered sipster.desktop as default handler");
+                    }
+                    Ok(s) => {
+                        tracing::warn!(scheme, exit_code = ?s.code(), "xdg-mime default failed");
+                    }
+                    Err(e) => {
+                        tracing::warn!(scheme, error = %e, "could not run xdg-mime");
+                    }
+                }
+            }
+        });
+    }
+}

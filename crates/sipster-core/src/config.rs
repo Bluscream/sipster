@@ -220,6 +220,8 @@ pub struct UiSettings {
     pub call_chimes: bool,
     /// Show the wordmark above the dialpad.
     pub show_banner: bool,
+    /// Register and set as default handler for tel:, sip:, sips:, callto:, and sipster: URI schemes.
+    pub register_uri_schemes: bool,
 }
 
 impl Default for UiSettings {
@@ -231,6 +233,7 @@ impl Default for UiSettings {
             dtmf_feedback: true,
             call_chimes: true,
             show_banner: true,
+            register_uri_schemes: false,
         }
     }
 }

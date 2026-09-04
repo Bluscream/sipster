@@ -69,14 +69,15 @@ const HELP: &str = "\
 Sipster — a desktop SIP softphone
 
 Usage:
-  sipster [OPTIONS] [tel:|sip:|sips:|callto: URI]
+  sipster [OPTIONS] [tel:|sip:|sips:|callto:|sipster: URI]
 
 Only one copy of Sipster runs at a time. Starting it again forwards the
 requested action to the running copy and exits, so these flags double as a
 remote control:
 
 Actions:
-  -c, --call <TARGET>     Dial a number, extension or SIP URI
+  -c, --call <TARGET>     Call a number, extension or SIP URI immediately
+  -d, --dial <TARGET>     Pre-fill number in the dial box and focus the window
   -a, --answer            Answer the ringing call
       --hangup            Hang up the active call, or decline a ringing one
       --show              Raise and focus the window

@@ -136,11 +136,12 @@ impl Command {
     ///
     /// Supports:
     /// - `--call <TARGET>` or `-c <TARGET>`
+    /// - `--dial <TARGET>` or `-d <TARGET>`
     /// - `--answer` or `-a`
     /// - `--hangup`
     /// - `--show`
     /// - `--quit` or `-q`
-    /// - A bare `tel:`, `sip:`, `sips:` or `callto:` URI
+    /// - A bare `tel:`, `sip:`, `sips:`, `callto:` or `sipster:` URI
     pub fn from_args<I, T>(args: I) -> Option<Self>
     where
         I: IntoIterator<Item = T>,
@@ -160,6 +161,16 @@ impl Command {
                         }
                     }
                 }
+                "--dial" | "-d" => {
+                    if let Some(target) = iter.next() {
+                        let t = target.as_ref().trim();
+                        if !t.is_empty() {
+                            return Some(Self::Dial {
+                                target: t.to_string(),
+                            });
+                        }
+                    }
+                }
                 "--answer" | "-a" => return Some(Self::Answer),
                 "--hangup" => return Some(Self::Hangup),
                 "--show" => return Some(Self::Show),
@@ -168,6 +179,14 @@ impl Command {
                     let target = arg_ref.trim_start_matches("--call=").trim();
                     if !target.is_empty() {
                         return Some(Self::Call {
+                            target: target.to_string(),
+                        });
+                    }
+                }
+                _ if arg_ref.starts_with("--dial=") => {
+                    let target = arg_ref.trim_start_matches("--dial=").trim();
+                    if !target.is_empty() {
+                        return Some(Self::Dial {
                             target: target.to_string(),
                         });
                     }
@@ -456,6 +475,18 @@ mod tests {
         assert_eq!(
             Command::from_args(["-c", "123"]),
             Some(Command::Call { target: "123".into() })
+        );
+        assert_eq!(
+            Command::from_args(["--dial", "611"]),
+            Some(Command::Dial { target: "611".into() })
+        );
+        assert_eq!(
+            Command::from_args(["--dial=**611"]),
+            Some(Command::Dial { target: "**611".into() })
+        );
+        assert_eq!(
+            Command::from_args(["-d", "123"]),
+            Some(Command::Dial { target: "123".into() })
         );
         assert_eq!(Command::from_args(["--answer"]), Some(Command::Answer));
         assert_eq!(Command::from_args(["--hangup"]), Some(Command::Hangup));

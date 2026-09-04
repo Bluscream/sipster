@@ -5,6 +5,8 @@
 //! anything reusable by another frontend belongs in `sipster-core`.
 
 mod app;
+mod calls;
+mod contacts;
 mod engine_bridge;
 mod settings;
 mod sound;
@@ -199,6 +201,24 @@ pub(crate) fn settings_window_settings() -> iced::window::Settings {
     iced::window::Settings {
         size: iced::Size::new(600.0, 700.0),
         min_size: Some(iced::Size::new(420.0, 360.0)),
+        ..main_window_settings()
+    }
+}
+
+/// Settings for the contacts window.
+pub(crate) fn contacts_window_settings() -> iced::window::Settings {
+    iced::window::Settings {
+        size: iced::Size::new(480.0, 600.0),
+        min_size: Some(iced::Size::new(360.0, 400.0)),
+        ..main_window_settings()
+    }
+}
+
+/// Settings for the call history window.
+pub(crate) fn calls_window_settings() -> iced::window::Settings {
+    iced::window::Settings {
+        size: iced::Size::new(520.0, 600.0),
+        min_size: Some(iced::Size::new(360.0, 400.0)),
         ..main_window_settings()
     }
 }

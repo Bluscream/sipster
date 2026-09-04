@@ -11,6 +11,10 @@ use sipster_core::{
     CallEvent, CallId, CallState, Config, RegistrationState, SipAccount, ThemeChoice,
 };
 
+use sipster_integrations::{CallRecord, CallType, RecordSource, SyncManager};
+
+use crate::calls;
+use crate::contacts;
 use crate::engine_bridge::{self, EngineHandle};
 use crate::settings;
 use crate::sound;
@@ -50,6 +54,11 @@ pub struct SipsterApp {
     main_window: Option<window::Id>,
     settings_window: Option<window::Id>,
     settings: settings::State,
+    contacts_window: Option<window::Id>,
+    contacts: contacts::State,
+    calls_window: Option<window::Id>,
+    calls: calls::State,
+    sync_manager: SyncManager,
     /// Persisted preferences. The in-memory copy is authoritative; the file is
     /// rewritten whenever it changes.
     config: Config,
@@ -84,6 +93,12 @@ pub enum Message {
     SettingsOpened(window::Id),
     Settings(settings::Message),
     DevicesLoaded(Vec<sipster_core::audio::Device>, Vec<sipster_core::audio::Device>),
+    // Contacts window:
+    ContactsOpened(window::Id),
+    Contacts(contacts::Message),
+    // Call list window:
+    CallsOpened(window::Id),
+    Calls(calls::Message),
     WindowClosed(window::Id),
     // Async results:
     Dialed(Result<CallId, String>),
@@ -125,6 +140,11 @@ impl SipsterApp {
             main_window: Some(main_id),
             settings_window: None,
             settings: settings::State::default(),
+            contacts_window: None,
+            contacts: contacts::State::default(),
+            calls_window: None,
+            calls: calls::State::default(),
+            sync_manager: SyncManager::new(),
             devices: DeviceSelection {
                 input: config.audio.input.clone(),
                 output: config.audio.output.clone(),
@@ -143,6 +163,10 @@ impl SipsterApp {
     pub fn title(&self, window: window::Id) -> String {
         if Some(window) == self.settings_window {
             "Sipster — Settings".into()
+        } else if Some(window) == self.contacts_window {
+            "Sipster — Contacts".into()
+        } else if Some(window) == self.calls_window {
+            "Sipster — Call History".into()
         } else {
             "Sipster".into()
         }
@@ -258,17 +282,15 @@ impl SipsterApp {
             Message::HangupPressed => self.hangup(),
             Message::AnswerPressed => self.answer(),
             Message::DeclinePressed => self.decline(),
-            Message::ContactsPressed => {
-                self.status = "Contact sync planned".into();
-                Task::none()
-            }
-            Message::CallListPressed => {
-                self.status = "Call list sync planned".into();
-                Task::none()
-            }
+            Message::ContactsPressed => self.open_contacts(),
+            Message::CallListPressed => self.open_calls(),
             Message::OpenSettings
             | Message::SettingsOpened(_)
             | Message::DevicesLoaded(..)
+            | Message::ContactsOpened(_)
+            | Message::Contacts(_)
+            | Message::CallsOpened(_)
+            | Message::Calls(_)
             | Message::WindowClosed(_)
             | Message::Settings(_) => self.on_window_message(message),
             Message::Dialed(Err(e)) => {
@@ -301,15 +323,18 @@ impl SipsterApp {
             )
             .map(Message::Settings);
         }
+        if Some(window) == self.contacts_window {
+            return contacts::view(&self.contacts).map(Message::Contacts);
+        }
+        if Some(window) == self.calls_window {
+            return calls::view(&self.calls).map(Message::Calls);
+        }
         view::root(self)
     }
 
-    // ── settings ─────────────────────────────────────────────────────────────
+    // ── windows ───────────────────────────────────────────────────────────────
 
-    /// Window lifecycle and everything the settings window sends.
-    ///
-    /// Split out of `update` purely to keep that dispatcher readable; the
-    /// match there routes this whole family here in one arm.
+    /// Window lifecycle and everything auxiliary windows send.
     fn on_window_message(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::OpenSettings => self.open_settings(),
@@ -327,9 +352,23 @@ impl SipsterApp {
                 self.settings.devices_loaded = true;
                 Task::none()
             }
+            Message::ContactsOpened(id) => {
+                self.contacts_window = Some(id);
+                Task::none()
+            }
+            Message::Contacts(msg) => self.on_contacts(msg),
+            Message::CallsOpened(id) => {
+                self.calls_window = Some(id);
+                Task::none()
+            }
+            Message::Calls(msg) => self.on_calls(msg),
             Message::WindowClosed(id) => {
                 if Some(id) == self.settings_window {
                     self.settings_window = None;
+                } else if Some(id) == self.contacts_window {
+                    self.contacts_window = None;
+                } else if Some(id) == self.calls_window {
+                    self.calls_window = None;
                 } else if Some(id) == self.main_window {
                     // Daemon mode outlives its windows, so closing the dialer
                     // has to be an explicit quit rather than a hide.
@@ -385,6 +424,106 @@ impl SipsterApp {
         });
 
         Task::batch([open.map(Message::SettingsOpened), load_devices])
+    }
+
+    /// Opens the contacts window, or focuses it if already open.
+    fn open_contacts(&mut self) -> Task<Message> {
+        if let Some(id) = self.contacts_window {
+            return window::gain_focus(id);
+        }
+
+        let (id, open) = window::open(crate::contacts_window_settings());
+        self.contacts_window = Some(id);
+
+        let sync_mgr = self.sync_manager.clone();
+        let load_contacts = Task::future(async move {
+            let contacts = sync_mgr.sync_contacts().await;
+            Message::Contacts(contacts::Message::ContactsLoaded(contacts))
+        });
+
+        self.contacts.loading = true;
+        Task::batch([open.map(Message::ContactsOpened), load_contacts])
+    }
+
+    fn on_contacts(&mut self, msg: contacts::Message) -> Task<Message> {
+        match msg {
+            contacts::Message::SearchChanged(val) => {
+                self.contacts.search = val;
+                Task::none()
+            }
+            contacts::Message::SyncPressed => {
+                self.contacts.loading = true;
+                let sync_mgr = self.sync_manager.clone();
+                Task::future(async move {
+                    let contacts = sync_mgr.sync_contacts().await;
+                    Message::Contacts(contacts::Message::ContactsLoaded(contacts))
+                })
+            }
+            contacts::Message::ContactsLoaded(contacts) => {
+                self.contacts.contacts = contacts;
+                self.contacts.loading = false;
+                Task::none()
+            }
+            contacts::Message::DialContact(target) => {
+                self.dial_number = target;
+                let dial_task = self.dial();
+                if let Some(id) = self.main_window {
+                    Task::batch([window::gain_focus(id), dial_task])
+                } else {
+                    dial_task
+                }
+            }
+        }
+    }
+
+    /// Opens the call history window, or focuses it if already open.
+    fn open_calls(&mut self) -> Task<Message> {
+        if let Some(id) = self.calls_window {
+            return window::gain_focus(id);
+        }
+
+        let (id, open) = window::open(crate::calls_window_settings());
+        self.calls_window = Some(id);
+
+        let sync_mgr = self.sync_manager.clone();
+        let load_calls = Task::future(async move {
+            let calls = sync_mgr.sync_calls().await;
+            Message::Calls(calls::Message::CallsLoaded(calls))
+        });
+
+        self.calls.loading = true;
+        Task::batch([open.map(Message::CallsOpened), load_calls])
+    }
+
+    fn on_calls(&mut self, msg: calls::Message) -> Task<Message> {
+        match msg {
+            calls::Message::SearchChanged(val) => {
+                self.calls.search = val;
+                Task::none()
+            }
+            calls::Message::SyncPressed => {
+                self.calls.loading = true;
+                let sync_mgr = self.sync_manager.clone();
+                Task::future(async move {
+                    let calls = sync_mgr.sync_calls().await;
+                    Message::Calls(calls::Message::CallsLoaded(calls))
+                })
+            }
+            calls::Message::CallsLoaded(calls) => {
+                self.calls.calls = calls;
+                self.calls.loading = false;
+                Task::none()
+            }
+            calls::Message::DialNumber(target) => {
+                self.dial_number = target;
+                let dial_task = self.dial();
+                if let Some(id) = self.main_window {
+                    Task::batch([window::gain_focus(id), dial_task])
+                } else {
+                    dial_task
+                }
+            }
+        }
     }
 
     fn on_settings(&mut self, msg: settings::Message) -> Task<Message> {
@@ -589,22 +728,8 @@ impl SipsterApp {
                 }
             }
             Command::OpenSettings => self.open_settings(),
-            Command::OpenContacts => {
-                self.status = "Contact sync planned".into();
-                if let Some(id) = self.main_window {
-                    window::gain_focus(id)
-                } else {
-                    Task::none()
-                }
-            }
-            Command::OpenCallList => {
-                self.status = "Call list sync planned".into();
-                if let Some(id) = self.main_window {
-                    window::gain_focus(id)
-                } else {
-                    Task::none()
-                }
-            }
+            Command::OpenContacts => self.open_contacts(),
+            Command::OpenCallList => self.open_calls(),
             Command::Quit => iced::exit(),
         }
     }
@@ -619,22 +744,8 @@ impl SipsterApp {
                 }
             }
             tray::Request::OpenSettings => self.open_settings(),
-            tray::Request::OpenCallList => {
-                self.status = "Call list sync planned".into();
-                if let Some(id) = self.main_window {
-                    window::gain_focus(id)
-                } else {
-                    Task::none()
-                }
-            }
-            tray::Request::OpenContacts => {
-                self.status = "Contact sync planned".into();
-                if let Some(id) = self.main_window {
-                    window::gain_focus(id)
-                } else {
-                    Task::none()
-                }
-            }
+            tray::Request::OpenCallList => self.open_calls(),
+            tray::Request::OpenContacts => self.open_contacts(),
             tray::Request::Answer => self.answer(),
             tray::Request::Hangup => {
                 if self.incoming.is_some() {
@@ -657,6 +768,18 @@ impl SipsterApp {
                 if self.config.ui.notifications {
                     sound::notify_incoming(&remote_uri);
                 }
+                // Record incoming call in local history
+                self.sync_manager.record_local_call(CallRecord {
+                    id: format!("local-in-{id}"),
+                    call_type: CallType::Incoming,
+                    remote_number: remote_uri.clone(),
+                    remote_name: None,
+                    local_party: self.account_info.clone(),
+                    timestamp: chrono_now_iso(),
+                    duration_seconds: 0,
+                    source: RecordSource::Local,
+                });
+
                 // Assigning drops any previous ringtone, so a second inbound
                 // call cannot leave two rings overlapping.
                 self.ringtone = self.config.ui.ringtone.then(sound::start_ringing);
@@ -667,13 +790,32 @@ impl SipsterApp {
                 self.apply_state(id, state);
             }
             CallEvent::Terminated { id, reason } => {
-                if self.active.as_ref().is_some_and(|c| c.id == id) {
-                    self.active = None;
+                if let Some(active) = self.active.take().filter(|c| c.id == id) {
                     self.chime(sound::call_ended);
+                    // Update/record local termination if desired
+                    self.sync_manager.record_local_call(CallRecord {
+                        id: format!("local-term-{id}"),
+                        call_type: CallType::Outgoing,
+                        remote_number: active.remote,
+                        remote_name: None,
+                        local_party: self.account_info.clone(),
+                        timestamp: chrono_now_iso(),
+                        duration_seconds: 0,
+                        source: RecordSource::Local,
+                    });
                 }
-                if self.incoming.as_ref().is_some_and(|c| c.id == id) {
-                    self.incoming = None;
+                if let Some(incoming) = self.incoming.take().filter(|c| c.id == id) {
                     self.ringtone = None;
+                    self.sync_manager.record_local_call(CallRecord {
+                        id: format!("local-missed-{id}"),
+                        call_type: CallType::Missed,
+                        remote_number: incoming.remote,
+                        remote_name: None,
+                        local_party: self.account_info.clone(),
+                        timestamp: chrono_now_iso(),
+                        duration_seconds: 0,
+                        source: RecordSource::Local,
+                    });
                 }
                 self.status = format!("Call ended: {reason}");
             }
@@ -718,6 +860,18 @@ impl SipsterApp {
         self.chime(sound::call_started);
         let engine = engine.clone();
         let target = self.dial_number.clone();
+
+        self.sync_manager.record_local_call(CallRecord {
+            id: format!("local-out-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()),
+            call_type: CallType::Outgoing,
+            remote_number: target.clone(),
+            remote_name: None,
+            local_party: self.account_info.clone(),
+            timestamp: chrono_now_iso(),
+            duration_seconds: 0,
+            source: RecordSource::Local,
+        });
+
         self.status = format!("Dialing {target}…");
         Task::future(async move { Message::Dialed(engine.dial(&target).await.map_err(|e| e.to_string())) })
     }
@@ -785,4 +939,21 @@ fn call_status(state: CallState) -> String {
         CallState::Active => "In call".into(),
         CallState::Terminated => "Call ended".into(),
     }
+}
+
+fn chrono_now_iso() -> String {
+    let now = std::time::SystemTime::now();
+    let duration = now.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
+    let secs = duration.as_secs();
+    // Format simple readable timestamp YYYY-MM-DD HH:MM:SS from unix secs
+    let s = secs % 60;
+    let m = (secs / 60) % 60;
+    let h = (secs / 3600) % 24;
+    let days = secs / 86400;
+    // Approximate calendar date
+    let year = 1970 + days / 365;
+    let day_of_year = days % 365;
+    let month = (day_of_year / 30) + 1;
+    let day = (day_of_year % 30) + 1;
+    format!("{year:04}-{month:02}-{day:02} {h:02}:{m:02}:{s:02}")
 }

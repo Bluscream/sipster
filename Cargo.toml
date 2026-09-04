@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/sipster-core",
+    "crates/sipster-integrations",
     "crates/sipster-ui",
     "crates/sipster-tests",
 ]

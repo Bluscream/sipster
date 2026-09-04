@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/sipster.png" alt="Sipster" width="128">
+<img src="assets/logo.png" alt="Sipster" width="128">
 
 # Sipster
 

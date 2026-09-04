@@ -127,7 +127,7 @@ build_appimage() {
     install -m755 "${PKG_DIR}/AppRun"                               "${appdir}/AppRun"
     install -m644 "${PKG_DIR}/sipster.desktop"                      "${appdir}/sipster.desktop"
     # The icon lives in assets/ with the rest of the project's imagery.
-    install -m644 "${ASSET_DIR}/sipster.png"                        "${appdir}/sipster.png"
+    install -m644 "${ASSET_DIR}/logo.png"                           "${appdir}/sipster.png"
 
     mkdir -p "${DIST_DIR}"
     # ARCH: required when appimagetool cannot infer the target arch.

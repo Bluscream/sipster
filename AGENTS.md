@@ -81,8 +81,8 @@ must not be broken casually.
 
 ## Assets
 
-- `assets/` holds every image the project ships or displays: `sipster.png` (the app icon
-  the AppImage installs) and `screenshots/`. It is a normal tracked directory — the old
+- `assets/` holds every image the project ships or displays: `logo.png` (the app icon
+  the AppImage installs), `banner.png`, and `screenshots/`. It is a normal tracked directory — the old
   orphan `assets` branch is gone; do not recreate that pattern.
 - `crates/sipster-ui/assets/icons/` holds the sized PNGs that are `include_bytes!`'d into
   the binary for the tray and window icon. Those are code inputs, not documentation assets.

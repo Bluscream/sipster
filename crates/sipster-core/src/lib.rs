@@ -16,7 +16,7 @@ pub mod ipc;
 pub mod net;
 
 pub use call::{CallDirection, CallEvent, CallId, CallState, RegistrationState};
-pub use config::{Config, SipAccount, Transport};
+pub use config::{AudioSettings, Config, SipAccount, ThemeChoice, Transport, UiSettings};
 pub use engine::SipEngine;
 pub use error::{Error, Result};
 pub use instance::Guard;

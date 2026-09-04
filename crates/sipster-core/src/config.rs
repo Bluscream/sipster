@@ -147,11 +147,179 @@ fn has_port(host: &str) -> bool {
     )
 }
 
+/// Which colour theme the UI should use.
+///
+/// A closed set rather than a free string so an unreadable value cannot end up
+/// in the file; the UI maps each to an `iced::Theme`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+pub enum ThemeChoice {
+    #[default]
+    Dark,
+    Light,
+    Dracula,
+    Nord,
+    SolarizedDark,
+    GruvboxDark,
+    CatppuccinMocha,
+    TokyoNight,
+}
+
+impl ThemeChoice {
+    /// Every choice, for populating a picker.
+    pub const ALL: [Self; 8] = [
+        Self::Dark,
+        Self::Light,
+        Self::Dracula,
+        Self::Nord,
+        Self::SolarizedDark,
+        Self::GruvboxDark,
+        Self::CatppuccinMocha,
+        Self::TokyoNight,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Dark => "Dark",
+            Self::Light => "Light",
+            Self::Dracula => "Dracula",
+            Self::Nord => "Nord",
+            Self::SolarizedDark => "Solarized Dark",
+            Self::GruvboxDark => "Gruvbox Dark",
+            Self::CatppuccinMocha => "Catppuccin Mocha",
+            Self::TokyoNight => "Tokyo Night",
+        }
+    }
+}
+
+impl std::fmt::Display for ThemeChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
+/// Presentation and local-feedback preferences. None of this reaches the wire.
+///
+/// The bool count trips `struct_excessive_bools`, whose usual remedy — folding
+/// them into an enum or a state machine — does not apply: these are genuinely
+/// independent on/off preferences, and each one is a checkbox in the settings
+/// window and a self-describing key in the TOML file. Grouping them would make
+/// both worse.
+#[allow(clippy::struct_excessive_bools)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct UiSettings {
+    pub theme: ThemeChoice,
+    /// Ring the speaker while an inbound call is pending.
+    pub ringtone: bool,
+    /// Raise a desktop notification for an inbound call.
+    pub notifications: bool,
+    /// Local DTMF beep when a dialpad key is pressed. Not sent to the peer.
+    pub dtmf_feedback: bool,
+    /// Short chimes when a call starts and ends.
+    pub call_chimes: bool,
+    /// Show the wordmark above the dialpad.
+    pub show_banner: bool,
+}
+
+impl Default for UiSettings {
+    fn default() -> Self {
+        Self {
+            theme: ThemeChoice::default(),
+            ringtone: true,
+            notifications: true,
+            dtmf_feedback: true,
+            call_chimes: true,
+            show_banner: true,
+        }
+    }
+}
+
+/// Capture and playback device selection. `None` means "system default".
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AudioSettings {
+    pub input: Option<String>,
+    pub output: Option<String>,
+}
+
 /// Top-level config. A file holds zero or more accounts; the UI edits this.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
     pub accounts: Vec<SipAccount>,
+    #[serde(default)]
+    pub ui: UiSettings,
+    #[serde(default)]
+    pub audio: AudioSettings,
+}
+
+impl Config {
+    /// `$XDG_CONFIG_HOME/sipster/sipster.toml`, falling back to `$HOME/.config`
+    /// and finally to the working directory.
+    pub fn default_path() -> std::path::PathBuf {
+        if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+            return Path::new(&xdg).join("sipster/sipster.toml");
+        }
+        if let Some(home) = std::env::var_os("HOME") {
+            return Path::new(&home).join(".config/sipster/sipster.toml");
+        }
+        std::path::PathBuf::from("sipster.toml")
+    }
+
+    /// Loads the config file, falling back to the environment for the account.
+    ///
+    /// The file wins: once the settings window has written one, it is the
+    /// source of truth. `SIPSTER_*`/`SIP_*` variables only supply the account
+    /// when the file has none, which is what makes first run work with nothing
+    /// but environment variables.
+    pub fn load_or_env(path: impl AsRef<Path>) -> Result<Self> {
+        let mut config = Self::load(path)?;
+        if config.accounts.is_empty() {
+            if let Ok(from_env) = Self::from_env() {
+                config.accounts = from_env.accounts;
+            }
+        }
+        Ok(config)
+    }
+
+    /// Writes the config as TOML, creating parent directories as needed.
+    ///
+    /// The write is atomic (temp file plus rename) so an interrupted save
+    /// cannot truncate a working config, and the file is `0600` because it
+    /// holds an account password.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the directory cannot be created or the file cannot be written.
+    pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
+        let path = path.as_ref();
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+
+        let text = toml::to_string_pretty(self)
+            .map_err(|e| Error::Config(format!("could not encode config: {e}")))?;
+
+        let temp = path.with_extension("toml.tmp");
+        std::fs::write(&temp, text)?;
+        restrict_permissions(&temp)?;
+        std::fs::rename(&temp, path)?;
+        Ok(())
+    }
+}
+
+/// Makes the config readable only by its owner. No-op off Unix.
+#[cfg(unix)]
+fn restrict_permissions(path: &Path) -> Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn restrict_permissions(_path: &Path) -> Result<()> {
+    Ok(())
 }
 
 impl Config {
@@ -202,6 +370,6 @@ impl Config {
             expires: get("EXPIRES").and_then(|e| e.parse().ok()).unwrap_or_else(default_expires),
             local_port: get("LOCAL_PORT").and_then(|p| p.parse().ok()).unwrap_or_else(default_port),
         };
-        Ok(Self { accounts: vec![account] })
+        Ok(Self { accounts: vec![account], ..Self::default() })
     }
 }

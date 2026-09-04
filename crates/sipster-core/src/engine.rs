@@ -88,8 +88,22 @@ pub struct SipEngine {
     control: Arc<EndpointControl>,
     event_tx: broadcast::Sender<CallEvent>,
     registry: Arc<Mutex<Registry>>,
-    devices: Arc<DeviceSelection>,
+    /// Swappable so the settings window can change devices without a restart.
+    /// Read-and-cloned at each attach; never held across an await.
+    devices: Devices,
     pump: JoinHandle<()>,
+}
+
+/// The device selection shared between the engine and its event pump.
+pub(crate) type Devices = Arc<std::sync::RwLock<DeviceSelection>>;
+
+/// Reads the current selection. Recovers from a poisoned lock rather than
+/// panicking: a failed audio attach elsewhere must not disable audio forever.
+pub(crate) fn current(devices: &Devices) -> DeviceSelection {
+    devices
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
 }
 
 impl SipEngine {
@@ -103,7 +117,7 @@ impl SipEngine {
 
         let (event_tx, _) = broadcast::channel(64);
         let registry = Arc::new(Mutex::new(Registry::default()));
-        let devices = Arc::new(DeviceSelection::default());
+        let devices: Devices = Arc::new(std::sync::RwLock::new(DeviceSelection::default()));
         let pump = spawn_pump(events, registry.clone(), event_tx.clone(), devices.clone());
 
         Ok(Self {
@@ -123,6 +137,63 @@ impl SipEngine {
 
     pub fn account(&self) -> &SipAccount {
         &self.account
+    }
+
+    /// The devices calls currently use.
+    pub fn devices(&self) -> DeviceSelection {
+        current(&self.devices)
+    }
+
+    /// Switches microphone/speaker without restarting.
+    ///
+    /// Calls started afterwards pick the new devices up automatically. Calls
+    /// already up are re-bound here, because a settings change the user cannot
+    /// hear until the next call is not a settings change they will believe in.
+    ///
+    /// # Errors
+    ///
+    /// Never returns `Err` today; re-binding failures are logged per call and
+    /// leave that call on its previous devices rather than dropping it.
+    pub async fn set_devices(&self, selection: DeviceSelection) -> Result<()> {
+        {
+            let mut guard = self
+                .devices
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if *guard == selection {
+                return Ok(());
+            }
+            *guard = selection;
+        }
+        info!("audio devices changed; re-binding active calls");
+        self.rebind_active_audio().await;
+        Ok(())
+    }
+
+    /// Drops and re-creates the OS audio binding for every established call.
+    async fn rebind_active_audio(&self) {
+        let selection = current(&self.devices);
+
+        // Collect handles under the lock, then open devices without holding it.
+        let calls: Vec<(CallId, EndpointCall)> = {
+            let reg = self.registry.lock().await;
+            reg.tracked
+                .iter()
+                .filter_map(|(id, tracked)| match tracked {
+                    Tracked::Active(call) => Some((*id, call.clone())),
+                    Tracked::Incoming(_) => None,
+                })
+                .collect()
+        };
+
+        for (id, call) in calls {
+            // Drop the old binding first: the previous device must be released
+            // before the new one is opened, or an exclusive device would fail.
+            self.registry.lock().await.audio.remove(&id);
+            if let Some(bound) = audio::warn_on_failure(audio::attach(&call, &selection).await) {
+                self.registry.lock().await.audio.insert(id, bound);
+            }
+        }
     }
 
     /// Register with the configured registrar, emitting registration state.
@@ -207,7 +278,8 @@ impl SipEngine {
                     .map_err(|e| Error::Config(format!("answer failed: {e}")))?;
                 // Bind mic/speaker before announcing the call as active, so the
                 // user is not told they are connected while still silent.
-                let bound = audio::warn_on_failure(audio::attach(&call, &self.devices).await);
+                let selection = current(&self.devices);
+                let bound = audio::warn_on_failure(audio::attach(&call, &selection).await);
                 let mut reg = self.registry.lock().await;
                 reg.by_rvoip.insert(call.id().to_string(), id);
                 reg.tracked.insert(id, Tracked::Active(call));
@@ -266,7 +338,7 @@ fn spawn_pump(
     mut events: EndpointEvents,
     registry: Arc<Mutex<Registry>>,
     tx: broadcast::Sender<CallEvent>,
-    devices: Arc<DeviceSelection>,
+    devices: Devices,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
         loop {
@@ -293,7 +365,7 @@ async fn translate(
     event: EndpointEvent,
     registry: &Arc<Mutex<Registry>>,
     tx: &broadcast::Sender<CallEvent>,
-    devices: &DeviceSelection,
+    devices: &Devices,
 ) {
     match event {
         EndpointEvent::IncomingCall(incoming) => {
@@ -352,7 +424,7 @@ async fn translate(
 async fn attach_audio_if_missing(
     rvoip_id: &str,
     registry: &Arc<Mutex<Registry>>,
-    devices: &DeviceSelection,
+    devices: &Devices,
 ) {
     // Clone the handle and release the lock before awaiting the device open,
     // which is slow and must not block the event pump's registry.
@@ -373,7 +445,8 @@ async fn attach_audio_if_missing(
     let Some((id, call)) = call else {
         return;
     };
-    if let Some(bound) = audio::warn_on_failure(audio::attach(&call, devices).await) {
+    let selection = current(devices);
+    if let Some(bound) = audio::warn_on_failure(audio::attach(&call, &selection).await) {
         registry.lock().await.audio.insert(id, bound);
     }
 }

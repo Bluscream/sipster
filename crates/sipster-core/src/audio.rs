@@ -48,7 +48,7 @@ pub async fn attach(call: &EndpointCall, devices: &DeviceSelection) -> Result<Ca
 }
 
 /// Which devices to use. `None` means "system default".
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct DeviceSelection {
     pub input: Option<String>,
     pub output: Option<String>,

@@ -22,7 +22,7 @@ serde_json.workspace = true
 anyhow.workspace = true
 
 # Pure Rust GUI Framework (Iced)
-iced = { version = "0.14", features = ["tokio", "svg", "advanced"] }
+iced = { version = "0.14", features = ["tokio", "svg", "image", "advanced"] }
 
 # System tray — StatusNotifierItem via ksni (independent background thread via blocking/async-io)
 ksni = { version = "0.3", default-features = false, features = ["async-io", "blocking"] }

@@ -12,9 +12,11 @@ place and take calls from your PC.
 [![License: Unlicense](https://img.shields.io/badge/license-Unlicense-blue.svg)](UNLICENSE)
 [![Rust 1.89+](https://img.shields.io/badge/rust-1.89%2B-orange.svg)](https://www.rust-lang.org)
 
-<img src="assets/screenshots/main.png" alt="Sipster dialpad, registered" width="300">
-&nbsp;&nbsp;
-<img src="assets/screenshots/in_call.png" alt="Sipster during a call" width="300">
+<img src="assets/screenshots/main.png" alt="Sipster dialpad, registered" width="270">
+&nbsp;
+<img src="assets/screenshots/in_call.png" alt="Sipster during a call" width="270">
+&nbsp;
+<img src="assets/screenshots/settings.png" alt="Sipster settings window" width="330">
 
 </div>
 
@@ -41,6 +43,11 @@ demonstrably work — see [Not yet](#not-yet) for the rest.
   port 5060.
 - **Remote control and URI handling.** `sipster --call 611`, a `tel:` link
   clicked in a browser, and a shell script all take the same path.
+- **Settings window**, opened from the wordmark or the ⚙ button. Account,
+  audio devices, theme and sound preferences are all editable **while the app
+  runs** — theme, device and sound changes take effect on the spot, and an
+  account change re-registers without a restart. Everything is written to
+  `sipster.toml` as you change it.
 - **AppImage** packaging for x86-64 Linux, plus plain binaries for Linux
   aarch64/i686/armv7 and Windows x86-64/x86.
 
@@ -48,15 +55,13 @@ demonstrably work — see [Not yet](#not-yet) for the rest.
 
 Named here so nobody has to discover them the hard way:
 
-- **No settings UI.** Accounts are configured by environment variable or a TOML
-  file (below); there is no in-app account editor yet.
 - **No DTMF during a call.** The dialpad plays a local feedback tone and edits
   the number field. It does not send RFC 4733 or in-band digits to the peer, so
   it cannot drive a phone menu mid-call.
 - **No hold or transfer.**
-- **No contact or call-list sync.** The ☰ and ☏ buttons are placeholders. Sync
-  from the Fritz!Box phonebook and call history (TR-064), Google Contacts, KDE
-  and Home Assistant is the next major goal.
+- **No contact or call-list sync.** The ☏ button is a placeholder. Sync from
+  the Fritz!Box phonebook and call history (TR-064), Google Contacts, KDE and
+  Home Assistant is the next major goal.
 - **UDP only.** The config format reserves a `transport` field, but TCP and TLS
   are not implemented.
 - **No Windows-on-ARM build.** `aarch64-pc-windows-msvc` does not currently
@@ -93,8 +98,14 @@ present, and are skipped when they are not.
 
 ## Configure
 
-Sipster reads its account from the environment first, then from
-`$XDG_CONFIG_HOME/sipster/sipster.toml`.
+Most people will not need this section: open **Settings** from the window and
+edit everything there.
+
+Underneath, Sipster reads `$XDG_CONFIG_HOME/sipster/sipster.toml`, falling back
+to `SIPSTER_*`/`SIP_*` environment variables when that file has no account —
+which is what makes first run work with nothing but environment variables. Once
+Settings writes the file, the file wins. It is written `0600`, because it holds
+the account password.
 
 The names mirror the Fritz!Box "telephony device" dialog, so you can copy the
 values across without translating them. In particular, `SIPSTER_USERNAME` is
@@ -134,7 +145,23 @@ password  = "…"
 expires   = 600
 ```
 
-Only the first account is used today.
+Only the first account is used today. The `[ui]` and `[audio]` tables are
+written by the settings window:
+
+```toml
+[ui]
+theme = "dark"          # dark, light, dracula, nord, solarized-dark,
+                        # gruvbox-dark, catppuccin-mocha, tokyo-night
+ringtone = true
+notifications = true
+dtmf_feedback = true    # local beep only; not sent to the peer
+call_chimes = true
+show_banner = true
+
+[audio]
+input = "…"             # omit for the system default
+output = "…"
+```
 
 </details>
 
@@ -156,6 +183,8 @@ sipster --help
 Register Sipster as your desktop's handler for `tel:`, `sip:` and `callto:`
 links by installing `packaging/sipster.desktop` into
 `~/.local/share/applications/`.
+
+Click the **Sipster** wordmark, or the ⚙ button, to open Settings.
 
 Set `RUST_LOG` for detail, e.g. `RUST_LOG=sipster_core=trace`, and
 `--log-file <path>` to send logs to a file instead of stderr.

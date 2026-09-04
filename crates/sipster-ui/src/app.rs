@@ -3,11 +3,16 @@
 //! All telephony work is delegated to [`SipEngine`]; this module only tracks
 //! what to display and turns button presses into engine calls.
 
+use iced::window;
 use iced::{Subscription, Task, Theme};
+use sipster_core::audio::DeviceSelection;
 use sipster_core::ipc::Command;
-use sipster_core::{CallEvent, CallId, CallState, RegistrationState};
+use sipster_core::{
+    CallEvent, CallId, CallState, Config, RegistrationState, SipAccount, ThemeChoice,
+};
 
 use crate::engine_bridge::{self, EngineHandle};
+use crate::settings;
 use crate::sound;
 use crate::tray;
 use crate::view;
@@ -39,6 +44,19 @@ pub struct SipsterApp {
     tray: Option<tray::Handle>,
     /// Live while an inbound call is ringing; dropping it silences the ring.
     ringtone: Option<sound::Ringtone>,
+
+    /// The dialer. Closing it quits; the settings window alone must not keep a
+    /// daemon-mode app alive with nothing visible to close.
+    main_window: Option<window::Id>,
+    settings_window: Option<window::Id>,
+    settings: settings::State,
+    /// Persisted preferences. The in-memory copy is authoritative; the file is
+    /// rewritten whenever it changes.
+    config: Config,
+    config_path: String,
+    /// Mirror of the engine's device selection, so the picker can render
+    /// before an engine exists.
+    devices: DeviceSelection,
 }
 
 #[derive(Debug, Clone)]
@@ -59,31 +77,67 @@ pub enum Message {
     HangupPressed,
     AnswerPressed,
     DeclinePressed,
-    ContactsPressed,
     CallListPressed,
+    // Settings window:
+    OpenSettings,
+    SettingsOpened(window::Id),
+    Settings(settings::Message),
+    DevicesLoaded(Vec<sipster_core::audio::Device>, Vec<sipster_core::audio::Device>),
+    WindowClosed(window::Id),
     // Async results:
     Dialed(Result<CallId, String>),
     ActionDone(Result<(), String>),
 }
 
 impl SipsterApp {
-    pub fn new() -> (Self, Task<Message>) {
+    /// Boots the app and opens the dialer window.
+    ///
+    /// Daemon mode starts with no windows at all, so the main one is opened
+    /// here rather than declared as application settings.
+    pub fn boot() -> (Self, Task<Message>) {
+        let config_path = Config::default_path();
+        // A broken config file must not stop the app from starting; fall back
+        // to defaults and say so in the status line.
+        let (config, load_error) = match Config::load_or_env(&config_path) {
+            Ok(config) => (config, None),
+            Err(e) => (Config::default(), Some(e.to_string())),
+        };
+
+        let (main_id, open) = window::open(crate::main_window_settings());
+
         let app = Self {
             engine: None,
             pending_command: None,
             registration: RegistrationState::Unregistered,
             account_info: None,
             dial_number: String::new(),
-            status: "Ready".into(),
+            status: load_error.map_or_else(|| "Ready".into(), |e| format!("Config error: {e}")),
             active: None,
             incoming: None,
             tray: crate::take_tray(),
             ringtone: None,
+            main_window: Some(main_id),
+            settings_window: None,
+            settings: settings::State::default(),
+            devices: DeviceSelection {
+                input: config.audio.input.clone(),
+                output: config.audio.output.clone(),
+            },
+            config_path: config_path.display().to_string(),
+            config,
         };
-        (app, Task::none())
+        (app, open.map(Message::SettingsOpened).chain(Task::none()))
     }
 
-    // Signature is dictated by iced::application(..).subscription(..).
+    pub fn title(&self, window: window::Id) -> String {
+        if Some(window) == self.settings_window {
+            "Sipster — Settings".into()
+        } else {
+            "Sipster".into()
+        }
+    }
+
+    // Signature is dictated by iced::daemon(..).subscription(..).
     #[allow(clippy::unused_self)]
     pub fn subscription(&self) -> Subscription<Message> {
         // engine_bridge::run is a fn()-pointer; it grabs the IPC receiver
@@ -93,13 +147,25 @@ impl SipsterApp {
         // Poll the tray channel every 100 ms.
         let tray_sub = iced::time::every(std::time::Duration::from_millis(100))
             .map(|_| Message::TrayTick);
-        Subscription::batch([engine_sub, tray_sub])
+        Subscription::batch([engine_sub, tray_sub, window::close_events().map(Message::WindowClosed)])
     }
 
-    // Signature is dictated by iced::application(..).theme(..).
-    #[allow(clippy::unused_self)]
-    pub fn theme(&self) -> Theme {
-        Theme::Dark
+    // Signature is dictated by iced::daemon(..).theme(..).
+    pub fn theme(&self, _window: window::Id) -> Theme {
+        match self.config.ui.theme {
+            ThemeChoice::Dark => Theme::Dark,
+            ThemeChoice::Light => Theme::Light,
+            ThemeChoice::Dracula => Theme::Dracula,
+            ThemeChoice::Nord => Theme::Nord,
+            ThemeChoice::SolarizedDark => Theme::SolarizedDark,
+            ThemeChoice::GruvboxDark => Theme::GruvboxDark,
+            ThemeChoice::CatppuccinMocha => Theme::CatppuccinMocha,
+            ThemeChoice::TokyoNight => Theme::TokyoNight,
+        }
+    }
+
+    pub fn ui(&self) -> &sipster_core::UiSettings {
+        &self.config.ui
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -111,6 +177,7 @@ impl SipsterApp {
                 } else {
                     format!("{} at {}:{}", acc.username, acc.registrar, acc.port)
                 });
+                self.settings.load_account(self.engine_account_of(&engine));
                 self.engine = Some(engine);
                 self.status = "Ready".into();
                 if let Some(cmd) = self.pending_command.take() {
@@ -144,7 +211,9 @@ impl SipsterApp {
             }
             Message::DialPad(d) => {
                 self.dial_number.push(d);
-                sound::dtmf(d);
+                if self.config.ui.dtmf_feedback {
+                    sound::dtmf(d);
+                }
                 Task::none()
             }
             Message::Backspace => {
@@ -159,14 +228,15 @@ impl SipsterApp {
             Message::HangupPressed => self.hangup(),
             Message::AnswerPressed => self.answer(),
             Message::DeclinePressed => self.decline(),
-            Message::ContactsPressed => {
-                self.status = "Contacts sync (TR-064 / KDE) planned".into();
-                Task::none()
-            }
             Message::CallListPressed => {
                 self.status = "Call list sync planned".into();
                 Task::none()
             }
+            Message::OpenSettings
+            | Message::SettingsOpened(_)
+            | Message::DevicesLoaded(..)
+            | Message::WindowClosed(_)
+            | Message::Settings(_) => self.on_window_message(message),
             Message::Dialed(Err(e)) => {
                 self.status = format!("Call failed: {e}");
                 Task::none()
@@ -184,8 +254,230 @@ impl SipsterApp {
         }
     }
 
-    pub fn view(&self) -> iced::Element<'_, Message> {
+    pub fn view(&self, window: window::Id) -> iced::Element<'_, Message> {
+        if Some(window) == self.settings_window {
+            let account = self.engine.as_ref().map(|e| e.account());
+            return settings::view(
+                &self.settings,
+                &self.config.ui,
+                &self.devices,
+                account,
+                &self.config_path,
+            )
+            .map(Message::Settings);
+        }
         view::root(self)
+    }
+
+    // ── settings ─────────────────────────────────────────────────────────────
+
+    /// Window lifecycle and everything the settings window sends.
+    ///
+    /// Split out of `update` purely to keep that dispatcher readable; the
+    /// match there routes this whole family here in one arm.
+    fn on_window_message(&mut self, message: Message) -> Task<Message> {
+        match message {
+            Message::OpenSettings => self.open_settings(),
+            Message::SettingsOpened(id) => {
+                // The boot task routes the dialer's own id through here, so
+                // only adopt one if we are not already tracking a main window.
+                if self.main_window.is_none() {
+                    self.main_window = Some(id);
+                }
+                Task::none()
+            }
+            Message::DevicesLoaded(inputs, outputs) => {
+                self.settings.inputs = inputs;
+                self.settings.outputs = outputs;
+                self.settings.devices_loaded = true;
+                Task::none()
+            }
+            Message::WindowClosed(id) => {
+                if Some(id) == self.settings_window {
+                    self.settings_window = None;
+                } else if Some(id) == self.main_window {
+                    // Daemon mode outlives its windows, so closing the dialer
+                    // has to be an explicit quit rather than a hide.
+                    return iced::exit();
+                }
+                Task::none()
+            }
+            Message::Settings(msg) => self.on_settings(msg),
+            // The dispatcher in `update` only routes the arms above here.
+            _ => Task::none(),
+        }
+    }
+
+    #[allow(clippy::unused_self)]
+    fn engine_account_of<'a>(&self, engine: &'a EngineHandle) -> &'a SipAccount {
+        engine.account()
+    }
+
+    /// Opens the settings window, or focuses it if it is already open.
+    fn open_settings(&mut self) -> Task<Message> {
+        if let Some(id) = self.settings_window {
+            return window::gain_focus(id);
+        }
+
+        if let Some(engine) = &self.engine {
+            let account = engine.account().clone();
+            self.settings.load_account(&account);
+        }
+        self.settings.notice = None;
+        self.settings.error = None;
+
+        let (id, open) = window::open(crate::settings_window_settings());
+        self.settings_window = Some(id);
+
+        // Device enumeration goes through cpal and can take a moment; keep it
+        // off the UI thread so the window paints straight away.
+        let load_devices = Task::future(async {
+            let devices = tokio::task::spawn_blocking(|| {
+                (
+                    sipster_core::audio::input_devices(),
+                    sipster_core::audio::output_devices(),
+                )
+            })
+            .await
+            .unwrap_or_default();
+            Message::DevicesLoaded(devices.0, devices.1)
+        });
+
+        Task::batch([open.map(Message::SettingsOpened), load_devices])
+    }
+
+    fn on_settings(&mut self, msg: settings::Message) -> Task<Message> {
+        use settings::Message as S;
+
+        // Any edit clears the last confirmation so stale feedback is not shown
+        // next to a field the user is still changing.
+        self.settings.notice = None;
+
+        match msg {
+            S::Label(v) => self.settings.label = v,
+            S::Registrar(v) => self.settings.registrar = v,
+            S::Port(v) => self.settings.port = v,
+            S::Username(v) => self.settings.username = v,
+            S::AuthUser(v) => self.settings.auth_user = v,
+            S::Password(v) => self.settings.password = v,
+            S::Expires(v) => self.settings.expires = v,
+            S::LocalPort(v) => self.settings.local_port = v,
+            S::RevealPassword(v) => self.settings.reveal_password = v,
+
+            S::RevertAccount => {
+                if let Some(engine) = &self.engine {
+                    let account = engine.account().clone();
+                    self.settings.load_account(&account);
+                }
+                self.settings.error = None;
+            }
+            S::ApplyAccount => return self.apply_account(),
+
+            S::InputDevice(choice) => {
+                self.devices.input = choice.id;
+                return self.apply_devices();
+            }
+            S::OutputDevice(choice) => {
+                self.devices.output = choice.id;
+                return self.apply_devices();
+            }
+
+            S::Theme(theme) => {
+                self.config.ui.theme = theme;
+                self.persist();
+            }
+            S::Ringtone(on) => {
+                self.config.ui.ringtone = on;
+                // Turning the ringtone off during a ringing call should stop
+                // the noise now, not after the caller gives up.
+                if !on {
+                    self.ringtone = None;
+                }
+                self.persist();
+            }
+            S::Notifications(on) => {
+                self.config.ui.notifications = on;
+                self.persist();
+            }
+            S::DtmfFeedback(on) => {
+                self.config.ui.dtmf_feedback = on;
+                self.persist();
+            }
+            S::CallChimes(on) => {
+                self.config.ui.call_chimes = on;
+                self.persist();
+            }
+            S::ShowBanner(on) => {
+                self.config.ui.show_banner = on;
+                self.persist();
+            }
+
+            S::Close => {
+                if let Some(id) = self.settings_window.take() {
+                    return window::close(id);
+                }
+            }
+        }
+        Task::none()
+    }
+
+    /// Commits the account draft: rebuild the engine, then save.
+    fn apply_account(&mut self) -> Task<Message> {
+        let transport = self
+            .engine
+            .as_ref()
+            .map_or(sipster_core::Transport::Udp, |e| e.account().transport);
+
+        let account = match self.settings.to_account(transport) {
+            Ok(account) => account,
+            Err(e) => {
+                self.settings.error = Some(e);
+                return Task::none();
+            }
+        };
+
+        self.settings.error = None;
+        self.settings.notice = Some("Reconnecting…".into());
+        self.status = "Applying account settings…".into();
+
+        // Persist first: if the reconnect fails the user still has the values
+        // they typed, and can fix them without retyping everything.
+        self.config.accounts = vec![account.clone()];
+        self.persist();
+
+        // The bridge owns engine lifetime, so ask it to rebuild rather than
+        // swapping the handle from under the running event loop.
+        engine_bridge::reconfigure(account);
+        Task::none()
+    }
+
+    /// Pushes the device selection into the running engine and saves it.
+    fn apply_devices(&mut self) -> Task<Message> {
+        self.config.audio.input = self.devices.input.clone();
+        self.config.audio.output = self.devices.output.clone();
+        self.persist();
+
+        let Some(engine) = self.engine.clone() else {
+            return Task::none();
+        };
+        let selection = self.devices.clone();
+        Task::future(async move {
+            Message::ActionDone(engine.set_devices(selection).await.map_err(|e| e.to_string()))
+        })
+    }
+
+    /// Writes the config file, reporting failures in the settings window.
+    fn persist(&mut self) {
+        match self.config.save(&self.config_path) {
+            Ok(()) => {
+                self.settings.error = None;
+                self.settings.notice = Some("Saved".into());
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "could not save settings");
+                self.settings.error = Some(format!("Could not save: {e}"));
+            }
+        }
     }
 
     fn handle_ipc(&mut self, cmd: Command) -> Task<Message> {
@@ -229,10 +521,12 @@ impl SipsterApp {
                 self.registration = state;
             }
             CallEvent::IncomingCall { id, remote_uri, .. } => {
-                sound::notify_incoming(&remote_uri);
+                if self.config.ui.notifications {
+                    sound::notify_incoming(&remote_uri);
+                }
                 // Assigning drops any previous ringtone, so a second inbound
                 // call cannot leave two rings overlapping.
-                self.ringtone = Some(sound::start_ringing());
+                self.ringtone = self.config.ui.ringtone.then(sound::start_ringing);
                 self.incoming = Some(IncomingCall { id, remote: remote_uri });
                 self.status = "Incoming call…".into();
             }
@@ -242,7 +536,7 @@ impl SipsterApp {
             CallEvent::Terminated { id, reason } => {
                 if self.active.as_ref().is_some_and(|c| c.id == id) {
                     self.active = None;
-                    sound::call_ended();
+                    self.chime(sound::call_ended);
                 }
                 if self.incoming.as_ref().is_some_and(|c| c.id == id) {
                     self.incoming = None;
@@ -254,6 +548,13 @@ impl SipsterApp {
         self.sync_tray_state();
         Task::none()
     }
+    /// Plays a call chime, unless the user turned chimes off.
+    fn chime(&self, play: fn()) {
+        if self.config.ui.call_chimes {
+            play();
+        }
+    }
+
     fn sync_tray_state(&self) {
         let Some(tray) = &self.tray else { return };
         let state = if self.incoming.is_some() {
@@ -281,7 +582,7 @@ impl SipsterApp {
         let (Some(engine), false) = (&self.engine, self.dial_number.is_empty()) else {
             return Task::none();
         };
-        sound::call_started();
+        self.chime(sound::call_started);
         let engine = engine.clone();
         let target = self.dial_number.clone();
         self.status = format!("Dialing {target}…");
@@ -292,7 +593,7 @@ impl SipsterApp {
         let (Some(engine), Some(call)) = (&self.engine, self.active.take()) else {
             return Task::none();
         };
-        sound::call_ended();
+        self.chime(sound::call_ended);
         let engine = engine.clone();
         let id = call.id;
         self.status = "Hanging up…".into();

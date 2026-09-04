@@ -1,6 +1,6 @@
 //! Pure rendering: turns [`SipsterApp`] state into an Iced widget tree.
 
-use iced::widget::{button, column, container, row, text, text_input, Space};
+use iced::widget::{button, column, container, image, row, text, text_input, Space};
 use iced::{Alignment, Element, Length};
 use sipster_core::{CallState, RegistrationState};
 
@@ -97,6 +97,63 @@ fn parse_caller_display(raw: &str) -> (String, String) {
     (raw.to_string(), String::new())
 }
 
+/// The wordmark above the number field, which doubles as the settings button.
+///
+/// There is no menu bar and no room for a gear in the 320 px dialer, so the
+/// banner carries the affordance. It is a borderless button so it still reads
+/// as a logo rather than a control.
+fn banner() -> Element<'static, Message> {
+    let Some(handle) = banner_handle() else {
+        // Undecodable artwork must not cost us the settings entry point.
+        return secondary_button('⚙', Message::OpenSettings);
+    };
+
+    button(
+        image(handle.clone())
+            .width(Length::Fixed(196.0))
+            .content_fit(iced::ContentFit::Contain),
+    )
+    .on_press(Message::OpenSettings)
+    .padding(0)
+    .style(|_theme, _status| button::Style {
+        background: None,
+        ..button::Style::default()
+    })
+    .into()
+}
+
+/// The wordmark, embedded so the binary stays self-contained.
+const BANNER: &[u8] = include_bytes!("../assets/banner.png");
+
+/// The banner as a decoded, cached image handle.
+///
+/// Both details here are load-bearing, and getting either wrong makes the
+/// banner vanish whenever the settings window is open:
+///
+/// - **Built once.** Every `Handle` constructor assigns `Id::unique()`, so
+///   calling one inside `view` mints a brand-new id on every frame and the
+///   renderer's cache can never hit.
+/// - **Decoded here, not by the renderer.** `Handle::from_bytes` defers PNG
+///   decoding to a background worker. `iced_wgpu` clears its image `hits` set
+///   on every present, so a second window's frame evicts this image, and the
+///   re-decode is asynchronous — the dialer draws nothing while it waits, then
+///   loses the entry again on the settings window's next frame. Handing over
+///   finished RGBA skips that path entirely.
+fn banner_handle() -> Option<&'static image::Handle> {
+    static HANDLE: std::sync::OnceLock<Option<image::Handle>> = std::sync::OnceLock::new();
+
+    HANDLE
+        .get_or_init(|| {
+            let decoded = ::image::load_from_memory(BANNER)
+                .inspect_err(|e| tracing::warn!(error = %e, "could not decode the banner"))
+                .ok()?
+                .to_rgba8();
+            let (width, height) = (decoded.width(), decoded.height());
+            Some(image::Handle::from_rgba(width, height, decoded.into_raw()))
+        })
+        .as_ref()
+}
+
 fn dialer(app: &SipsterApp) -> Element<'_, Message> {
     let number_input = text_input("Number or extension…", &app.dial_number)
         .on_input(Message::DialInputChanged)
@@ -119,25 +176,27 @@ fn dialer(app: &SipsterApp) -> Element<'_, Message> {
     };
 
     let action_row = row![
-        secondary_button('☰', Message::ContactsPressed),
+        secondary_button('⚙', Message::OpenSettings),
         action,
         secondary_button('☏', Message::CallListPressed),
     ]
     .align_y(Alignment::Center)
     .spacing(8);
 
-    column![
-        number_input,
-        Space::new().height(4),
-        call_line,
-        Space::new().height(4),
-        dialpad(),
-        Space::new().height(10),
-        action_row,
-    ]
-    .align_x(Alignment::Center)
-    .spacing(4)
-    .into()
+    let mut layout = column![].align_x(Alignment::Center).spacing(4);
+    if app.ui().show_banner {
+        layout = layout.push(banner()).push(Space::new().height(2));
+    }
+
+    layout
+        .push(number_input)
+        .push(Space::new().height(4))
+        .push(call_line)
+        .push(Space::new().height(4))
+        .push(dialpad())
+        .push(Space::new().height(10))
+        .push(action_row)
+        .into()
 }
 
 fn state_label(state: CallState) -> &'static str {

@@ -35,7 +35,9 @@ must not be broken casually.
      codecs, audio I/O, call state machine, config, single-instance IPC and CLI parsing.
      Provider-agnostic: no Fritz!Box specifics here.
    - `crates/sipster-ui`: Iced desktop GUI, system tray, local feedback sounds. Presentation
-     only — if another frontend would want it, it belongs in core instead.
+     only — if another frontend would want it, it belongs in core instead. Runs as an
+     `iced::daemon`, not an `application`, because the settings window is a second real
+     window; the dialer is opened in `boot` and closing it exits explicitly.
    - `crates/sipster-tests`: integration, end-to-end and PBX scenario tests.
    - `crates/sipster-integrations` (**planned, does not exist yet**): contact and call-list
      providers (Fritz!Box TR-064, Google, KDE, Home Assistant). Talks HTTP/DBus, never SIP.
@@ -88,7 +90,16 @@ must not be broken casually.
   the binary for the tray and window icon. Those are code inputs, not documentation assets.
 - **App-id invariant:** the Wayland `application_id` in `sipster-ui/src/main.rs` (`APP_ID`),
   the `packaging/sipster.desktop` filename, and its `StartupWMClass` must all read
-  `sipster`. If they diverge the window falls back to a generic placeholder icon.
+  `sipster`. If they diverge the window falls back to a generic placeholder icon. Every
+  window must carry it — build new ones from `main_window_settings()` rather than
+  `window::Settings::default()`, or that window alone gets the placeholder.
+- **Images and multiple windows.** Build an `iced::widget::image::Handle` **once** and
+  reuse it, with pixels you decoded yourself (`from_rgba`). Every `Handle` constructor
+  assigns `Id::unique()`, so constructing one inside `view` defeats the renderer's cache
+  entirely; and `iced_wgpu` clears its image `hits` set on every present, so with a second
+  window open the other window's frame evicts the image and `from_bytes`' asynchronous
+  re-decode never wins the race — the image silently renders blank. `crates/sipster-ui/src/view.rs`
+  documents the working pattern.
 
 ## Build & Release
 

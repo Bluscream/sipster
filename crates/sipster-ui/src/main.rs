@@ -6,6 +6,7 @@
 
 mod app;
 mod engine_bridge;
+mod settings;
 mod sound;
 mod tray;
 mod view;
@@ -116,10 +117,27 @@ pub fn main() -> iced::Result {
     // Not having a tray is fine — plenty of desktops have none.
     TRAY.set(std::sync::Mutex::new(tray::spawn())).ok();
 
+    // Daemon rather than application: the settings window is a second real
+    // window, which `iced::application` cannot host. Daemon mode starts with
+    // no windows, so SipsterApp::boot opens the dialer, and closing the dialer
+    // exits explicitly (see Message::WindowClosed) instead of leaving an
+    // invisible process behind.
+    iced::daemon(SipsterApp::boot, SipsterApp::update, SipsterApp::view)
+        .title(SipsterApp::title)
+        .subscription(SipsterApp::subscription)
+        .theme(SipsterApp::theme)
+        .run()
+}
+
+/// Settings for the dialer window, opened by [`SipsterApp::boot`].
+///
+/// Taller than the old 480 to make room for the wordmark above the number
+/// field without squeezing the dialpad.
+pub(crate) fn main_window_settings() -> iced::window::Settings {
     #[allow(unused_mut)] // only Linux mutates the platform-specific settings
     let mut window = iced::window::Settings {
-        size: iced::Size::new(320.0, 480.0),
-        min_size: Some(iced::Size::new(280.0, 440.0)),
+        size: iced::Size::new(320.0, 560.0),
+        min_size: Some(iced::Size::new(300.0, 520.0)),
         icon: tray::window_icon(),
         ..iced::window::Settings::default()
     };
@@ -136,13 +154,21 @@ pub fn main() -> iced::Result {
     {
         APP_ID.clone_into(&mut window.platform_specific.application_id);
     }
+    window
+}
 
-    iced::application(SipsterApp::new, SipsterApp::update, SipsterApp::view)
-        .title("Sipster")
-        .subscription(SipsterApp::subscription)
-        .theme(SipsterApp::theme)
-        .window(window)
-        .run()
+/// Settings for the settings window.
+///
+/// It carries the same app id as the dialer. Without it winit falls back to
+/// the binary name (`sipster-linux-x86_64` from the release artifact), so the
+/// window gets a generic placeholder icon and the compositor treats it as a
+/// different application.
+pub(crate) fn settings_window_settings() -> iced::window::Settings {
+    iced::window::Settings {
+        size: iced::Size::new(600.0, 700.0),
+        min_size: Some(iced::Size::new(420.0, 360.0)),
+        ..main_window_settings()
+    }
 }
 
 /// Becomes the primary instance, or forwards this invocation's command to the

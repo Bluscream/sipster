@@ -10,7 +10,7 @@ dist/
 *.local
 
 # Reference projects (cloned upstream repos)
-.references/
+.references*
 
 # IDE and Editor configurations
 .vscode/

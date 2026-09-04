@@ -60,15 +60,7 @@ impl SipsterApp {
                     self.hangup()
                 }
             }
-            Command::Show => {
-                if let Some(id) = self.main_window {
-                    window::gain_focus(id)
-                } else {
-                    let (id, open) = window::open(crate::main_window_settings());
-                    self.main_window = Some(id);
-                    Task::batch([open.map(Message::MainOpened), window::gain_focus(id)])
-                }
-            }
+            Command::Show => self.show_main_window(),
             Command::OpenSettings => self.open_settings(),
             // An explicit "open" from outside the app means a window,
             // whatever the button had cycled to.
@@ -84,17 +76,68 @@ impl SipsterApp {
         }
     }
 
+    /// Brings the dialer back, from the tray or a `sipster://show` command.
+    ///
+    /// "Show" covers three states, and only one of them is a plain raise:
+    ///
+    /// - **Closed to tray.** There is no window, so one is opened. The focus
+    ///   request is chained rather than batched, because it means nothing
+    ///   until the window exists.
+    /// - **Buried behind other windows.** Asking for focus is all a client
+    ///   can do; whether it is granted is the compositor's call.
+    /// - **Minimized.** This one cannot be fixed by asking. `xdg_toplevel` has
+    ///   a `set_minimized` request and no matching unset, so under Wayland
+    ///   *no* client can restore its own window — `gain_focus` and
+    ///   `minimize(false)` are both silently no-ops, which is exactly what
+    ///   "clicking the tray does nothing" looked like. Nor can it be detected:
+    ///   `is_minimized` comes back `None` for the same reason. So focus is
+    ///   requested and then checked, and [`SipsterApp::on_show_fallback`]
+    ///   rebuilds the window when the request went nowhere.
+    pub(super) fn show_main_window(&mut self) -> Task<Message> {
+        let Some(id) = self.main_window else {
+            let (id, open) = window::open(crate::main_window_settings());
+            self.main_window = Some(id);
+            return open.map(Message::MainOpened).chain(window::gain_focus(id));
+        };
+
+        // Ask nicely first, then check whether it worked: `is_minimized`
+        // cannot be used to decide up front, because Wayland has no way to
+        // report it either and it comes back `None`.
+        Task::batch([
+            window::gain_focus(id),
+            Task::future(async move {
+                tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+                Message::ShowFallback(id)
+            }),
+        ])
+    }
+
+    /// Rebuilds the dialer when asking for focus did not bring it back.
+    ///
+    /// A window that is merely behind another usually takes focus, so this
+    /// does nothing. A minimized one cannot — see
+    /// [`SipsterApp::show_main_window`] — and a replacement is the only way to
+    /// get it on screen again.
+    ///
+    /// The old window is closed *first* and the new one opened from the close
+    /// event. Opening the replacement while the original was still up killed
+    /// the Wayland event loop outright ("error dispatching event loop"), which
+    /// took the whole app with it. `main_window` is cleared here so the close
+    /// is not mistaken for the user closing the dialer, which would otherwise
+    /// quit with close-to-tray switched off.
+    pub(super) fn on_show_fallback(&mut self, id: window::Id) -> Task<Message> {
+        if self.main_window != Some(id) || self.main_focused {
+            return Task::none();
+        }
+        tracing::info!("focus request did not land; rebuilding the dialer window");
+        self.main_window = None;
+        self.reopening_main = true;
+        window::close(id)
+    }
+
     pub(super) fn handle_tray(&mut self, req: tray::Request) -> Task<Message> {
         match req {
-            tray::Request::Show => {
-                if let Some(id) = self.main_window {
-                    window::gain_focus(id)
-                } else {
-                    let (id, open) = window::open(crate::main_window_settings());
-                    self.main_window = Some(id);
-                    Task::batch([open.map(Message::MainOpened), window::gain_focus(id)])
-                }
-            }
+            tray::Request::Show => self.show_main_window(),
             tray::Request::OpenSettings => self.open_settings(),
             tray::Request::OpenCallList => self.show_calls_window(),
             tray::Request::OpenContacts => self.show_contacts_window(),

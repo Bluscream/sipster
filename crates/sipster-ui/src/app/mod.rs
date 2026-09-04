@@ -75,6 +75,12 @@ pub struct SipsterApp {
     calls: calls::State,
     /// Where the history list currently lives.
     calls_at: pane::Placement,
+    /// Whether the dialer currently has focus. Tracked because Wayland offers
+    /// no way to ask whether a window is minimized.
+    main_focused: bool,
+    /// Set while a minimized dialer is being replaced. See
+    /// [`SipsterApp::on_show_fallback`].
+    reopening_main: bool,
     /// The dialer window's current width, so a docked pane can lay itself out
     /// to fit. Kept from resize events because iced's layout width is not
     /// otherwise readable from `view`.
@@ -109,6 +115,8 @@ pub enum Message {
     DeclinePressed,
     ContactsPressed,
     WindowResized(window::Id, iced::Size),
+    MainFocusChanged(window::Id, bool),
+    ShowFallback(window::Id),
     CallListPressed,
     MainOpened(window::Id),
     // Settings window:
@@ -169,6 +177,8 @@ impl SipsterApp {
             calls_window: None,
             calls_at: pane::Placement::default(),
             main_width: pane::DIALER_WIDTH,
+            main_focused: true,
+            reopening_main: false,
             calls: calls::State::default(),
             sync_manager: build_sync_manager(&config),
             devices: DeviceSelection {
@@ -246,6 +256,11 @@ impl SipsterApp {
             key_sub,
             window::close_events().map(Message::WindowClosed),
             window::resize_events().map(|(id, size)| Message::WindowResized(id, size)),
+            window::events().filter_map(|(id, event)| match event {
+                window::Event::Focused => Some(Message::MainFocusChanged(id, true)),
+                window::Event::Unfocused => Some(Message::MainFocusChanged(id, false)),
+                _ => None,
+            }),
         ])
     }
 
@@ -265,6 +280,15 @@ impl SipsterApp {
 
     pub fn ui(&self) -> &sipster_core::UiSettings {
         &self.config.ui
+    }
+
+    /// Drains one pending tray request per tick (non-blocking).
+    fn on_tray_tick(&mut self) -> Task<Message> {
+        let Some(req) = self.tray.as_ref().and_then(crate::tray::Handle::poll) else {
+            return Task::none();
+        };
+        tracing::debug!(?req, "tray request");
+        self.handle_tray(req)
     }
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
@@ -291,11 +315,7 @@ impl SipsterApp {
             Message::Call(event) => self.on_call_event(event),
             Message::Ipc(cmd) => self.on_ipc(cmd),
             Message::TrayTick => {
-                // Drain one pending tray request per tick (non-blocking).
-                if let Some(req) = self.tray.as_ref().and_then(crate::tray::Handle::poll) {
-                    return self.handle_tray(req);
-                }
-                Task::none()
+                self.on_tray_tick()
             }
             Message::DialInputChanged(v) => {
                 self.on_dial_input_changed(v);
@@ -331,6 +351,8 @@ impl SipsterApp {
             | Message::Calls(_)
             | Message::WindowClosed(_)
             | Message::WindowResized(..)
+            | Message::MainFocusChanged(..)
+            | Message::ShowFallback(_)
             | Message::Settings(_) => self.on_window_message(message),
             Message::Dialed(Err(e)) => {
                 self.status = format!("Call failed: {e}");
@@ -436,6 +458,13 @@ impl SipsterApp {
                 Task::none()
             }
             Message::Calls(msg) => self.on_calls(msg),
+            Message::MainFocusChanged(id, focused) => {
+                if Some(id) == self.main_window {
+                    self.main_focused = focused;
+                }
+                Task::none()
+            }
+            Message::ShowFallback(id) => self.on_show_fallback(id),
             Message::WindowResized(id, size) => {
                 if Some(id) == self.main_window {
                     self.main_width = size.width;
@@ -443,6 +472,17 @@ impl SipsterApp {
                 Task::none()
             }
             Message::WindowClosed(id) => {
+                // A dialer we closed ourselves to get around a minimized
+                // window; put the replacement up now the old one is gone.
+                if self.reopening_main && self.main_window.is_none() {
+                    self.reopening_main = false;
+                    let (new_id, open) = window::open(crate::main_window_settings());
+                    self.main_window = Some(new_id);
+                    self.main_focused = true;
+                    return open
+                        .map(Message::MainOpened)
+                        .chain(window::gain_focus(new_id));
+                }
                 if Some(id) == self.settings_window {
                     self.settings_window = None;
                 } else if Some(id) == self.contacts_window {

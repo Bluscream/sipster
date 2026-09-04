@@ -11,6 +11,7 @@ mod engine_bridge;
 mod settings;
 mod sound;
 mod tray;
+mod ui;
 mod view;
 
 use std::sync::OnceLock;

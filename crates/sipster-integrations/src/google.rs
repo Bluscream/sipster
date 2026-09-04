@@ -8,6 +8,28 @@ use tracing::info;
 
 use crate::model::{Contact, NumberType, PhoneNumber, RecordSource};
 
+/// How long to wait for the user to finish signing in before giving up.
+const AUTH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
+
+const FAILURE_PAGE: &str = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n    <!DOCTYPE html><html><body style='font-family:sans-serif;text-align:center;padding:50px;'>    <h2>Sign-in was not completed</h2><p>You can close this tab and try again in Sipster.</p>    </body></html>";
+
+/// Opens `url` in the user's default browser.
+fn open_in_browser(url: &str) -> std::io::Result<()> {
+    #[cfg(target_os = "linux")]
+    let program = "xdg-open";
+    #[cfg(target_os = "macos")]
+    let program = "open";
+    #[cfg(target_os = "windows")]
+    let program = "explorer";
+
+    std::process::Command::new(program)
+        .arg(url)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .map(|_| ())
+}
+
 // There are deliberately no built-in OAuth credentials.
 //
 // The pair previously hard-coded here could not have worked: the "secret"
@@ -235,15 +257,77 @@ impl GoogleContactsClient {
         })
     }
 
-    /// Spins up a local redirect listener on `127.0.0.1:8765`, generates the Google OAuth URL,
-    /// and waits for the browser redirect callback to obtain the authorization code.
-    pub fn listen_for_auth_code(port: u16) -> Result<(String, String), String> {
-        let listener = TcpListener::bind(format!("127.0.0.1:{port}"))
-            .map_err(|e| format!("could not bind redirect listener on port {port}: {e}"))?;
+    /// Runs the whole desktop OAuth flow and returns `(email, refresh_token)`.
+    ///
+    /// Opens the consent page in the user's browser, waits for Google to
+    /// redirect back to a local listener, exchanges the code, and reads the
+    /// account's address. The caller only has to supply its own client
+    /// credentials.
+    ///
+    /// # Errors
+    ///
+    /// Reports a missing client id, a browser that never came back within
+    /// [`AUTH_TIMEOUT`], or any rejection from Google.
+    pub fn authorize(
+        client_id: &str,
+        client_secret: &str,
+        port: u16,
+    ) -> Result<(String, String), String> {
+        if client_id.trim().is_empty() || client_secret.trim().is_empty() {
+            return Err("enter your Google OAuth client id and secret first".into());
+        }
 
-        let (mut stream, _) = listener
-            .accept()
-            .map_err(|e| format!("failed to accept redirect connection: {e}"))?;
+        let redirect_uri = format!("http://127.0.0.1:{port}");
+        let listener = TcpListener::bind(format!("127.0.0.1:{port}"))
+            .map_err(|e| format!("could not listen on port {port}: {e}"))?;
+
+        // Open the consent page only once the listener is up, so the redirect
+        // cannot arrive before anything is waiting for it.
+        let auth_url = Self::build_auth_url(client_id, &redirect_uri);
+        if let Err(e) = open_in_browser(&auth_url) {
+            return Err(format!(
+                "could not open a browser ({e}). Visit this URL manually:\n{auth_url}"
+            ));
+        }
+
+        let code = Self::wait_for_code(&listener)?;
+        let token = Self::exchange_auth_code(&code, &redirect_uri, client_id, client_secret)?;
+        let refresh_token = token
+            .refresh_token
+            .ok_or("Google returned no refresh token; remove Sipster from your account's third-party access and try again")?;
+        let email = Self::fetch_user_email(&token.access_token)?;
+        Ok((email, refresh_token))
+    }
+
+    /// Waits for the browser redirect and extracts the authorization code.
+    fn wait_for_code(listener: &TcpListener) -> Result<String, String> {
+        // Without a deadline this blocked forever when the user closed the tab
+        // or never completed consent, pinning the worker thread for the rest of
+        // the session.
+        listener
+            .set_nonblocking(false)
+            .map_err(|e| format!("could not configure the redirect listener: {e}"))?;
+
+        let deadline = std::time::Instant::now() + AUTH_TIMEOUT;
+        listener
+            .set_nonblocking(true)
+            .map_err(|e| format!("could not configure the redirect listener: {e}"))?;
+
+        let (mut stream, _) = loop {
+            match listener.accept() {
+                Ok(accepted) => break accepted,
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    if std::time::Instant::now() >= deadline {
+                        return Err("timed out waiting for the Google sign-in to finish".into());
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(200));
+                }
+                Err(e) => return Err(format!("failed to accept redirect connection: {e}")),
+            }
+        };
+        stream
+            .set_nonblocking(false)
+            .map_err(|e| format!("could not read the redirect: {e}"))?;
 
         let mut reader = BufReader::new(&mut stream);
         let mut request_line = String::new();
@@ -260,6 +344,12 @@ impl GoogleContactsClient {
             return Err("no authorization code found in redirect URL".into());
         };
 
+        // Google reports consent failures in the query string too.
+        if request_line.contains("error=") {
+            let _ = stream.write_all(FAILURE_PAGE.as_bytes());
+            return Err("Google sign-in was denied or cancelled".into());
+        }
+
         // Send a friendly success response back to browser
         let html_body = "<!DOCTYPE html><html><body style='font-family:sans-serif;text-align:center;padding:50px;'>\
             <h2>Sipster &mdash; Google Account Connected!</h2>\
@@ -271,9 +361,7 @@ impl GoogleContactsClient {
             html_body
         );
         let _ = stream.write_all(http_response.as_bytes());
-
-        let redirect_uri = format!("http://127.0.0.1:{port}");
-        Ok((code, redirect_uri))
+        Ok(code)
     }
 
     /// Exchanges the authorization code for access and refresh tokens.

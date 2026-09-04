@@ -1,25 +1,62 @@
-//! Call list window: state, messages, settings, and rendering.
+//! Call history window: state, messages and rendering.
+//!
+//! Shows history and nothing else. Local-history and call-blocking preferences
+//! used to be configured from a modal in here; they are settings, so they live
+//! in Settings › Integrations with the rest.
 
-use iced::widget::{button, checkbox, column, container, pick_list, row, scrollable, text, text_input, Space};
+use iced::widget::{column, container, row, scrollable, text, text_input, Space};
 use iced::{Alignment, Element, Length, Padding};
-use sipster_core::{BlockAction, IntegrationSettings};
-use sipster_integrations::{CallRecord, CallType};
+use sipster_core::BlockAction;
+use sipster_integrations::{normalize_number, number_contains, CallRecord, CallType};
+
+use crate::ui;
+
+/// Which direction of call the list is showing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Filter {
+    #[default]
+    All,
+    Incoming,
+    Outgoing,
+    Missed,
+}
+
+impl Filter {
+    pub const ALL: [Self; 4] = [Self::All, Self::Incoming, Self::Outgoing, Self::Missed];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "All",
+            Self::Incoming => "Incoming",
+            Self::Outgoing => "Outgoing",
+            Self::Missed => "Missed",
+        }
+    }
+
+    fn accepts(self, call: &CallRecord) -> bool {
+        match self {
+            Self::All => true,
+            Self::Incoming => matches!(call.call_type, CallType::Incoming),
+            Self::Outgoing => matches!(call.call_type, CallType::Outgoing),
+            // Rejected calls are ones that never got through either, so they
+            // belong with missed rather than in no filter at all.
+            Self::Missed => matches!(call.call_type, CallType::Missed | CallType::Rejected),
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub enum Message {
     SearchChanged(String),
+    FilterChanged(Filter),
     SyncPressed,
     CallsLoaded(Vec<CallRecord>),
+    /// Selects a record, or clears the selection when it is already current.
+    Select(String),
     DialNumber(String),
-
-    // In-window Settings & Call Blocking:
-    ToggleSettingsModal,
-    ToggleLocalHistory(bool),
-    DefaultBlockActionChanged(BlockAction),
+    AddContact(String, Option<String>),
     ClearHistoryPressed,
-    UnblockNumber(String),
 
-    // Block number prompt:
     BlockNumberPrompt(String, Option<String>),
     ConfirmBlockNumber(String, Option<String>, BlockAction),
     CancelBlockPrompt,
@@ -28,100 +65,120 @@ pub enum Message {
 #[derive(Debug, Clone, Default)]
 pub struct State {
     pub search: String,
+    pub filter: Filter,
     pub calls: Vec<CallRecord>,
     pub loading: bool,
-    pub show_settings_modal: bool,
+    pub selected: Option<String>,
     pub block_prompt: Option<(String, Option<String>)>,
 }
 
-pub fn view<'a>(state: &'a State, settings: &'a IntegrationSettings) -> Element<'a, Message> {
-    if let Some((number, name)) = &state.block_prompt {
-        return block_number_modal(number, name.as_deref());
-    }
-
-    if state.show_settings_modal {
-        return settings_modal(settings);
-    }
-
-    let title = text("Call History").size(22);
-    let count_text = text(format!("{} entries", state.calls.len()))
-        .size(13)
-        .color(iced::Color::from_rgb(0.6, 0.6, 0.6));
-
-    let settings_btn = button(text("⚙ Settings").size(13))
-        .on_press(Message::ToggleSettingsModal)
-        .padding([6, 12]);
-
-    let sync_btn = button(text(if state.loading { "Syncing…" } else { "⟳ Sync" }).size(13))
-        .on_press_maybe(if state.loading { None } else { Some(Message::SyncPressed) })
-        .padding([6, 12]);
-
-    let top_bar = row![
-        column![title, count_text].spacing(2),
-        Space::new().width(Length::Fill),
-        settings_btn,
-        Space::new().width(4),
-        sync_btn,
-    ]
-    .align_y(Alignment::Center);
-
-    let search_bar = text_input("Search call history by name or number…", &state.search)
-        .on_input(Message::SearchChanged)
-        .padding(10)
-        .size(15);
-
-    let search_term = state.search.trim().to_lowercase();
-    let filtered: Vec<&CallRecord> = state
-        .calls
-        .iter()
-        .filter(|c| {
-            if search_term.is_empty() {
-                return true;
-            }
-            c.remote_number.contains(&search_term)
-                || c.remote_name
-                    .as_deref()
-                    .is_some_and(|n| n.to_lowercase().contains(&search_term))
-        })
-        .collect();
-
-    let list_content: Element<'_, Message> = if state.loading && state.calls.is_empty() {
-        container(text("Syncing call list from local storage & FRITZ!Box…").size(14))
-            .center_x(Length::Fill)
-            .center_y(Length::Fill)
-            .into()
-    } else if filtered.is_empty() {
-        container(
-            text(if state.search.is_empty() {
-                "No calls recorded yet."
-            } else {
-                "No matching calls found."
-            })
-            .size(14)
-            .color(iced::Color::from_rgb(0.6, 0.6, 0.6)),
-        )
-        .center_x(Length::Fill)
-        .center_y(Length::Fill)
-        .into()
-    } else {
-        let mut list_col = column![].spacing(6);
-        for call in filtered {
-            list_col = list_col.push(call_card(call));
+impl State {
+    pub fn toggle(&mut self, id: &str) {
+        if self.selected.as_deref() == Some(id) {
+            self.selected = None;
+        } else {
+            self.selected = Some(id.to_string());
         }
-        scrollable(list_col).into()
+    }
+
+    fn matching(&self) -> Vec<&CallRecord> {
+        let needle = self.search.trim().to_lowercase();
+        let digits = normalize_number(&needle);
+
+        self.calls
+            .iter()
+            .filter(|call| self.filter.accepts(call))
+            .filter(|call| {
+                if needle.is_empty() {
+                    return true;
+                }
+                if call
+                    .remote_name
+                    .as_deref()
+                    .is_some_and(|n| n.to_lowercase().contains(&needle))
+                {
+                    return true;
+                }
+                !digits.is_empty() && number_contains(&call.remote_number, &digits)
+            })
+            .collect()
+    }
+
+    /// Missed calls, for the badge on the Missed chip.
+    fn missed_count(&self) -> usize {
+        self.calls
+            .iter()
+            .filter(|c| matches!(c.call_type, CallType::Missed))
+            .count()
+    }
+}
+
+pub fn view(state: &State) -> Element<'_, Message> {
+    if let Some((number, name)) = &state.block_prompt {
+        return block_prompt(number, name.as_deref());
+    }
+
+    let matching = state.matching();
+
+    let toolbar = ui::toolbar(
+        "History",
+        format!("{} of {} calls", matching.len(), state.calls.len()),
+        vec![
+            ui::tool_button(
+                "Clear",
+                (!state.calls.is_empty()).then_some(Message::ClearHistoryPressed),
+            ),
+            ui::tool_button(
+                if state.loading { "Syncing…" } else { "Sync" },
+                (!state.loading).then_some(Message::SyncPressed),
+            ),
+        ],
+    );
+
+    let missed = state.missed_count();
+    let mut chips = row![].spacing(4).align_y(Alignment::Center);
+    for filter in Filter::ALL {
+        // The missed count is the one number worth surfacing without a click.
+        let label = if matches!(filter, Filter::Missed) && missed > 0 {
+            format!("Missed ({missed})")
+        } else {
+            filter.label().to_string()
+        };
+        chips = chips.push(ui::chip_owned(
+            label,
+            state.filter == filter,
+            Message::FilterChanged(filter),
+        ));
+    }
+
+    let search = text_input("Search by name or number", &state.search)
+        .on_input(Message::SearchChanged)
+        .padding(8)
+        .size(14);
+
+    let body: Element<'_, Message> = if state.loading && state.calls.is_empty() {
+        ui::empty_state("Syncing…", "Reading local history and the router call list.")
+    } else if state.calls.is_empty() {
+        ui::empty_state(
+            "No calls yet",
+            "Calls you place and receive appear here once history is enabled.",
+        )
+    } else if matching.is_empty() {
+        ui::empty_state("No matches", "Nothing here matches that search or filter.")
+    } else {
+        let mut list = column![].width(Length::Fill);
+        for (index, call) in matching.iter().enumerate() {
+            if index > 0 {
+                list = list.push(ui::separator());
+            }
+            list = list.push(call_row(call, state.selected.as_deref()));
+        }
+        scrollable(list).height(Length::Fill).into()
     };
 
-    let content = column![
-        top_bar,
-        Space::new().height(8),
-        search_bar,
-        Space::new().height(12),
-        list_content,
-    ]
-    .spacing(6)
-    .padding(Padding::new(16.0))
-    .width(Length::Fill)
-    .height(Length::Fill);
+    let content = column![toolbar, chips, search, body]
+        .spacing(10)
+        .padding(Padding::new(16.0));
 
     container(content)
         .width(Length::Fill)
@@ -129,225 +186,209 @@ pub fn view<'a>(state: &'a State, settings: &'a IntegrationSettings) -> Element<
         .into()
 }
 
-fn call_card(call: &CallRecord) -> Element<'_, Message> {
-    let (icon, color) = match call.call_type {
-        CallType::Incoming => ("↙", iced::Color::from_rgb(0.2, 0.75, 0.35)),
-        CallType::Outgoing => ("↗", iced::Color::from_rgb(0.3, 0.6, 0.95)),
-        CallType::Missed => ("✕", iced::Color::from_rgb(0.85, 0.25, 0.25)),
-        CallType::Rejected => ("⊘", iced::Color::from_rgb(0.85, 0.5, 0.2)),
+fn call_row<'a>(call: &'a CallRecord, selected: Option<&str>) -> Element<'a, Message> {
+    let is_selected = selected == Some(call.id.as_str());
+
+    // Typographic arrows rather than emoji, so weight and baseline match the
+    // surrounding text on any system font.
+    let (marker, marker_color) = match call.call_type {
+        CallType::Incoming => ("↙", iced::Color::from_rgb(0.35, 0.75, 0.45)),
+        CallType::Outgoing => ("↗", iced::Color::from_rgb(0.45, 0.6, 0.9)),
+        CallType::Missed => ("↙", iced::Color::from_rgb(0.92, 0.35, 0.35)),
+        CallType::Rejected => ("⊘", iced::Color::from_rgb(0.75, 0.55, 0.3)),
     };
 
-    let icon_text = text(icon).size(18).color(color);
+    let title = call
+        .remote_name
+        .clone()
+        .unwrap_or_else(|| call.remote_number.clone());
 
-    let display_title = if let Some(name) = &call.remote_name {
-        if name.trim().is_empty() {
-            call.remote_number.clone()
-        } else {
-            format!("{name} ({})", call.remote_number)
-        }
-    } else {
-        call.remote_number.clone()
-    };
+    let mut detail = call.timestamp.clone();
+    if call.duration_seconds > 0 {
+        detail.push_str("  ·  ");
+        detail.push_str(&format_duration(call.duration_seconds));
+    }
+    if call.remote_name.is_some() {
+        detail.push_str("  ·  ");
+        detail.push_str(&call.remote_number);
+    }
 
-    let title_line = text(display_title).size(15);
-    let details_line = text(format!(
-        "{} • {} • {} • {}",
-        call.call_type,
-        call.timestamp,
-        format_duration(call.duration_seconds),
-        call.source
-    ))
-    .size(12)
-    .color(iced::Color::from_rgb(0.55, 0.55, 0.55));
-
-    let dial_target = call.remote_number.clone();
-    let call_btn = button(text("📞 Call").size(12))
-        .on_press(Message::DialNumber(dial_target.clone()))
-        .padding([4, 10]);
-
-    let block_btn = button(text("⊘ Block").size(12))
-        .on_press(Message::BlockNumberPrompt(dial_target, call.remote_name.clone()))
-        .padding([4, 8]);
-
-    let card_content = row![
-        icon_text,
-        Space::new().width(10),
-        column![title_line, details_line].spacing(2),
+    let summary = row![
+        text(marker).size(15).color(marker_color).width(Length::Fixed(18.0)),
+        column![text(title).size(14), ui::caption(detail)].spacing(1),
         Space::new().width(Length::Fill),
-        call_btn,
-        Space::new().width(4),
-        block_btn,
     ]
     .align_y(Alignment::Center)
-    .padding(10);
+    .spacing(8)
+    .into();
 
-    container(card_content)
-        .width(Length::Fill)
-        .style(|theme: &iced::Theme| {
-            let palette = theme.extended_palette();
-            container::Style {
-                background: Some(palette.background.weak.color.into()),
-                border: iced::border::rounded(6),
-                ..container::Style::default()
-            }
-        })
+    let expanded = is_selected.then(|| {
+        row![
+            ui::row_action("Call back", Message::DialNumber(call.remote_number.clone())),
+            ui::row_action(
+                "Add contact",
+                Message::AddContact(call.remote_number.clone(), call.remote_name.clone()),
+            ),
+            ui::row_action_danger(
+                "Block",
+                Message::BlockNumberPrompt(call.remote_number.clone(), call.remote_name.clone()),
+            ),
+            Space::new().width(Length::Fill),
+            ui::caption(call.source.to_string()),
+        ]
+        .align_y(Alignment::Center)
+        .spacing(6)
+        .padding(Padding::from([4, 0]))
+        .into()
+    });
+
+    ui::list_row(summary, expanded, is_selected, Message::Select(call.id.clone()))
+}
+
+/// `0:42`, `12:05`, `1:02:03`.
+fn format_duration(seconds: u32) -> String {
+    let (h, m, s) = (seconds / 3600, (seconds % 3600) / 60, seconds % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m}:{s:02}")
+    }
+}
+
+fn block_prompt<'a>(number: &'a str, name: Option<&'a str>) -> Element<'a, Message> {
+    let who = name.map_or_else(|| number.to_string(), |n| format!("{n} ({number})"));
+
+    let content = column![
+        text("Block this caller?").size(18),
+        ui::caption(who),
+        Space::new().height(10),
+        text("Reject answers with SIP 603 immediately. Mute lets it ring silently, with no notification.")
+            .size(12),
+        Space::new().height(12),
+        row![
+            ui::tool_button("Cancel", Some(Message::CancelBlockPrompt)),
+            Space::new().width(Length::Fill),
+            ui::tool_button(
+                "Mute",
+                Some(Message::ConfirmBlockNumber(
+                    number.to_string(),
+                    name.map(str::to_string),
+                    BlockAction::Mute,
+                )),
+            ),
+            ui::tool_button(
+                "Reject",
+                Some(Message::ConfirmBlockNumber(
+                    number.to_string(),
+                    name.map(str::to_string),
+                    BlockAction::Reject,
+                )),
+            ),
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center),
+    ]
+    .spacing(4)
+    .padding(Padding::new(20.0))
+    .max_width(420);
+
+    container(content)
+        .center_x(Length::Fill)
+        .center_y(Length::Fill)
         .into()
 }
 
-fn settings_modal(settings: &IntegrationSettings) -> Element<'_, Message> {
-    let title = text("Call History & Blocking Settings").size(20);
+#[cfg(test)]
+mod tests {
+    use super::{format_duration, Filter, State};
+    use sipster_integrations::{CallRecord, CallType, RecordSource};
 
-    // 1. History settings
-    let history_toggle = checkbox(settings.local_history_enabled)
-        .label("Record in-app call history to local storage")
-        .on_toggle(Message::ToggleLocalHistory)
-        .size(15);
-
-    let clear_btn = button(text("🗑 Clear Local Call History").size(13))
-        .on_press(Message::ClearHistoryPressed)
-        .padding([6, 12]);
-
-    let history_sec = column![
-        text("Call History Storage").size(16),
-        history_toggle,
-        Space::new().height(4),
-        clear_btn,
-    ].spacing(8);
-
-    // 2. Blocked numbers list
-    let mut blocked_rows = column![].spacing(6);
-    if settings.blocked_numbers.is_empty() {
-        blocked_rows = blocked_rows.push(
-            text("No phone numbers blocked yet.")
-                .size(13)
-                .color(iced::Color::from_rgb(0.6, 0.6, 0.6))
-        );
-    } else {
-        for b in &settings.blocked_numbers {
-            let num = b.number.clone();
-            let b_row = row![
-                text(format!("⊘ {} ({})", b.number, b.action)).size(13),
-                Space::new().width(Length::Fill),
-                button(text("Unblock").size(12))
-                    .on_press(Message::UnblockNumber(num))
-                    .padding([2, 8]),
-            ].align_y(Alignment::Center);
-            blocked_rows = blocked_rows.push(b_row);
+    fn record(id: &str, call_type: CallType, number: &str, name: Option<&str>) -> CallRecord {
+        CallRecord {
+            id: id.into(),
+            call_type,
+            remote_number: number.into(),
+            remote_name: name.map(str::to_string),
+            local_party: None,
+            timestamp: "2026-09-04T10:00:00Z".into(),
+            duration_seconds: 42,
+            source: RecordSource::Local,
         }
     }
 
-    let default_action_picker = row![
-        text("Default action for blocked calls:").size(13),
-        Space::new().width(8),
-        pick_list(
-            &BlockAction::ALL[..],
-            Some(settings.default_block_action),
-            Message::DefaultBlockActionChanged
-        ),
-    ].align_y(Alignment::Center);
-
-    let blocking_sec = column![
-        text("Call Blocking Rules").size(16),
-        default_action_picker,
-        Space::new().height(4),
-        blocked_rows,
-    ].spacing(8);
-
-    let done_btn = button(text("Done").size(14))
-        .on_press(Message::ToggleSettingsModal)
-        .padding([6, 20]);
-
-    let card = column![
-        title,
-        Space::new().height(6),
-        history_sec,
-        Space::new().height(8),
-        blocking_sec,
-        Space::new().height(12),
-        row![Space::new().width(Length::Fill), done_btn],
-    ]
-    .spacing(12)
-    .padding(20)
-    .max_width(500);
-
-    let scroller = scrollable(card).width(Length::Fill).height(Length::Fill);
-
-    container(container(scroller).style(|theme: &iced::Theme| {
-        let palette = theme.extended_palette();
-        container::Style {
-            background: Some(palette.background.base.color.into()),
-            border: iced::border::rounded(8),
-            ..container::Style::default()
+    fn state() -> State {
+        State {
+            calls: vec![
+                record("1", CallType::Incoming, "+49301234567", Some("Alice")),
+                record("2", CallType::Outgoing, "**610", None),
+                record("3", CallType::Missed, "+49309999999", None),
+                record("4", CallType::Rejected, "+49308888888", None),
+            ],
+            ..State::default()
         }
-    }))
-    .center_x(Length::Fill)
-    .center_y(Length::Fill)
-    .padding(16)
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .into()
-}
-
-fn block_number_modal<'a>(number: &'a str, name: Option<&'a str>) -> Element<'a, Message> {
-    let title = text("Block Phone Number").size(20);
-    let prompt_msg = text(format!(
-        "Select an action for calls incoming from {}{}:",
-        name.unwrap_or(""),
-        if name.is_some() { format!(" ({number})") } else { number.to_string() }
-    ))
-    .size(14);
-
-    let reject_btn = button(text("Reject (Instant SIP 603)").size(13))
-        .on_press(Message::ConfirmBlockNumber(number.to_string(), name.map(String::from), BlockAction::Reject))
-        .padding([8, 14]);
-
-    let mute_btn = button(text("Mute (Silent Ring)").size(13))
-        .on_press(Message::ConfirmBlockNumber(number.to_string(), name.map(String::from), BlockAction::Mute))
-        .padding([8, 14]);
-
-    let cancel_btn = button(text("Cancel").size(13))
-        .on_press(Message::CancelBlockPrompt)
-        .padding([8, 14]);
-
-    let card = column![
-        title,
-        Space::new().height(6),
-        prompt_msg,
-        Space::new().height(16),
-        row![reject_btn, Space::new().width(10), mute_btn, Space::new().width(Length::Fill), cancel_btn].align_y(Alignment::Center),
-    ]
-    .spacing(10)
-    .padding(20)
-    .max_width(460);
-
-    container(container(card).style(|theme: &iced::Theme| {
-        let palette = theme.extended_palette();
-        container::Style {
-            background: Some(palette.background.base.color.into()),
-            border: iced::border::rounded(8),
-            ..container::Style::default()
-        }
-    }))
-    .center_x(Length::Fill)
-    .center_y(Length::Fill)
-    .width(Length::Fill)
-    .height(Length::Fill)
-    .into()
-}
-
-fn format_duration(seconds: u32) -> String {
-    if seconds == 0 {
-        return "0s".into();
     }
-    let mins = seconds / 60;
-    let secs = seconds % 60;
-    if mins >= 60 {
-        let hrs = mins / 60;
-        let rem_mins = mins % 60;
-        format!("{hrs}h {rem_mins}m {secs}s")
-    } else if mins > 0 {
-        format!("{mins}m {secs}s")
-    } else {
-        format!("{secs}s")
+
+    #[test]
+    fn the_all_filter_shows_everything() {
+        assert_eq!(state().matching().len(), 4);
+    }
+
+    #[test]
+    fn filters_by_direction() {
+        let mut s = state();
+        s.filter = Filter::Incoming;
+        assert_eq!(s.matching().len(), 1);
+        s.filter = Filter::Outgoing;
+        assert_eq!(s.matching().len(), 1);
+    }
+
+    /// A rejected call never connected either, so it belongs under Missed
+    /// rather than being reachable from no filter at all.
+    #[test]
+    fn missed_includes_rejected() {
+        let mut s = state();
+        s.filter = Filter::Missed;
+        assert_eq!(s.matching().len(), 2);
+    }
+
+    /// The badge counts genuinely missed calls, not rejected ones the user
+    /// chose to block.
+    #[test]
+    fn the_missed_badge_excludes_rejected() {
+        assert_eq!(state().missed_count(), 1);
+    }
+
+    #[test]
+    fn search_and_filter_combine() {
+        let mut s = state();
+        s.filter = Filter::Incoming;
+        s.search = "alice".into();
+        assert_eq!(s.matching().len(), 1);
+        s.search = "bob".into();
+        assert!(s.matching().is_empty());
+    }
+
+    #[test]
+    fn searches_numbers_written_with_separators() {
+        let mut s = state();
+        s.search = "030 1234".into();
+        assert_eq!(s.matching().len(), 1);
+    }
+
+    #[test]
+    fn durations_render_in_the_usual_shapes() {
+        assert_eq!(format_duration(42), "0:42");
+        assert_eq!(format_duration(725), "12:05");
+        assert_eq!(format_duration(3723), "1:02:03");
+        assert_eq!(format_duration(0), "0:00");
+    }
+
+    #[test]
+    fn selecting_the_open_row_closes_it() {
+        let mut s = state();
+        s.toggle("1");
+        assert_eq!(s.selected.as_deref(), Some("1"));
+        s.toggle("1");
+        assert_eq!(s.selected, None);
     }
 }

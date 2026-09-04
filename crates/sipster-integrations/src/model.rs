@@ -172,6 +172,30 @@ pub fn normalize_number(raw: &str) -> String {
         .collect()
 }
 
+/// Whether `number` contains the partial `needle` a user typed into a search
+/// box.
+///
+/// Plain substring is not enough: a number saved as `+49301234567` does not
+/// contain the nationally-written `030123`, because the trunk `0` replaces the
+/// country code. Retrying without the trunk prefix makes the two spellings
+/// find each other, which is what someone typing a number off a business card
+/// expects.
+#[must_use]
+pub fn number_contains(number: &str, needle: &str) -> bool {
+    let haystack = normalize_number(number);
+    let needle = normalize_number(needle);
+    if needle.is_empty() || haystack.is_empty() {
+        return false;
+    }
+    if haystack.contains(&needle) {
+        return true;
+    }
+    // National form typed against an international stored number.
+    needle
+        .strip_prefix('0')
+        .is_some_and(|national| !national.is_empty() && haystack.contains(national))
+}
+
 /// Digits a number must have before national/international suffix matching is
 /// allowed. Below this, short internal extensions would collide.
 const MIN_SIGNIFICANT: usize = 6;
@@ -269,9 +293,108 @@ mod tests {
     }
 
     #[test]
+    fn search_finds_a_number_in_either_spelling() {
+        use super::number_contains;
+        assert!(number_contains("+49301234567", "030 123"));
+        assert!(number_contains("+49301234567", "0301"));
+        assert!(number_contains("+49301234567", "3012"));
+        assert!(number_contains("**610", "610"));
+        assert!(!number_contains("+49301234567", "999"));
+        assert!(!number_contains("+49301234567", ""));
+        assert!(!number_contains("", "030"));
+    }
+
+    #[test]
     fn normalization_keeps_meaningful_symbols() {
         assert_eq!(normalize_number("+49 (30) 12-34"), "+493012 34".replace(' ', ""));
         assert_eq!(normalize_number("**610"), "**610");
         assert_eq!(normalize_number("abc"), "");
+    }
+}
+
+/// A comparable instant for a [`CallRecord`] timestamp.
+///
+/// Records arrive in two shapes and must interleave correctly: local history
+/// writes ISO-8601 (`2026-09-04T10:00:00Z`), while the FRITZ!Box call list
+/// writes German short form (`31.07.26 16:06`). Sorting the raw strings put
+/// 31.03 above 30.07 — every "31st" ahead of every "30th", regardless of month
+/// — so the list was not in date order at all.
+///
+/// Returns `(year, month, day, hour, minute)`; unparseable input sorts oldest
+/// rather than jumping to the top.
+#[must_use]
+pub fn timestamp_key(raw: &str) -> (i32, u32, u32, u32, u32) {
+    let raw = raw.trim();
+
+    // ISO-8601: 2026-09-04T10:00:00Z
+    if let Some((date, time)) = raw.split_once(['T', ' ']) {
+        let iso: Vec<&str> = date.split('-').collect();
+        if iso.len() == 3 && iso[0].len() == 4 {
+            if let (Ok(y), Ok(m), Ok(d)) =
+                (iso[0].parse::<i32>(), iso[1].parse::<u32>(), iso[2].parse::<u32>())
+            {
+                let (hh, mm) = parse_hh_mm(time);
+                return (y, m, d, hh, mm);
+            }
+        }
+
+        // German short form: 31.07.26 16:06
+        let de: Vec<&str> = date.split('.').collect();
+        if de.len() == 3 {
+            if let (Ok(d), Ok(m), Ok(y)) =
+                (de[0].parse::<u32>(), de[1].parse::<u32>(), de[2].parse::<i32>())
+            {
+                // Two-digit years are this century; the router has no others.
+                let year = if y < 100 { 2000 + y } else { y };
+                let (hh, mm) = parse_hh_mm(time);
+                return (year, m, d, hh, mm);
+            }
+        }
+    }
+
+    (0, 0, 0, 0, 0)
+}
+
+fn parse_hh_mm(time: &str) -> (u32, u32) {
+    let mut parts = time.trim().split(':');
+    let hh = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let mm = parts.next().and_then(|v| v.parse().ok()).unwrap_or(0);
+    (hh, mm)
+}
+
+#[cfg(test)]
+mod timestamp_tests {
+    use super::timestamp_key;
+
+    #[test]
+    fn parses_both_shapes_the_providers_produce() {
+        assert_eq!(timestamp_key("2026-09-04T10:30:00Z"), (2026, 9, 4, 10, 30));
+        assert_eq!(timestamp_key("31.07.26 16:06"), (2026, 7, 31, 16, 6));
+    }
+
+    /// The bug this exists to prevent: sorting the raw strings put every 31st
+    /// ahead of every 30th, so history was not in date order.
+    #[test]
+    fn orders_by_date_not_by_leading_digits() {
+        let july_31 = timestamp_key("31.07.26 16:06");
+        let august_30 = timestamp_key("30.08.26 09:00");
+        assert!(august_30 > july_31, "August must sort after July");
+
+        let march_31 = timestamp_key("31.03.26 09:16");
+        assert!(july_31 > march_31, "July must sort after March");
+    }
+
+    #[test]
+    fn the_two_formats_interleave() {
+        let local = timestamp_key("2026-07-31T17:00:00Z");
+        let router = timestamp_key("31.07.26 16:06");
+        assert!(local > router, "a later local call must sort after a router one");
+    }
+
+    #[test]
+    fn unparseable_timestamps_sort_oldest() {
+        assert_eq!(timestamp_key("who knows"), (0, 0, 0, 0, 0));
+        assert_eq!(timestamp_key(""), (0, 0, 0, 0, 0));
+        assert!(timestamp_key("31.07.26 16:06") > timestamp_key("nonsense"));
     }
 }

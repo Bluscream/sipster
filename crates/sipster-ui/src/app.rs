@@ -372,14 +372,15 @@ impl SipsterApp {
                 account,
                 &self.config_path,
                 self.config.needs_setup(),
+                &self.config.integration,
             )
             .map(Message::Settings);
         }
         if Some(window) == self.contacts_window {
-            return contacts::view(&self.contacts, &self.config.integration).map(Message::Contacts);
+            return contacts::view(&self.contacts).map(Message::Contacts);
         }
         if Some(window) == self.calls_window {
-            return calls::view(&self.calls, &self.config.integration).map(Message::Calls);
+            return calls::view(&self.calls).map(Message::Calls);
         }
         view::root(self)
     }
@@ -503,6 +504,10 @@ impl SipsterApp {
     #[allow(clippy::too_many_lines)]
     fn on_contacts(&mut self, msg: contacts::Message) -> Task<Message> {
         match msg {
+            contacts::Message::Select(id) => {
+                self.contacts.toggle(&id);
+                Task::none()
+            }
             contacts::Message::SearchChanged(val) => {
                 self.contacts.search = val;
                 Task::none()
@@ -614,210 +619,6 @@ impl SipsterApp {
             }
 
             // Providers modal:
-            contacts::Message::ToggleProvidersModal => {
-                self.contacts.show_providers_modal = !self.contacts.show_providers_modal;
-                Task::none()
-            }
-            contacts::Message::FritzHostChanged(v) => {
-                self.config.integration.fritzbox.host = v;
-                self.persist();
-                Task::none()
-            }
-            contacts::Message::FritzPortChanged(v) => {
-                let port = v.parse::<u16>().unwrap_or(49000);
-                self.config.integration.fritzbox.port = port;
-                self.persist();
-                Task::none()
-            }
-            contacts::Message::FritzUserChanged(v) => {
-                self.config.integration.fritzbox.username = v;
-                self.persist();
-                Task::none()
-            }
-            contacts::Message::FritzPassChanged(v) => {
-                self.config.integration.fritzbox.password = v;
-                self.persist();
-                Task::none()
-            }
-            contacts::Message::FritzEnabledToggled(enabled) => {
-                self.config.integration.fritzbox.enabled = enabled;
-                if enabled {
-                    let fb = &self.config.integration.fritzbox;
-                    self.sync_manager.set_fritzbox(Some(FritzConfig {
-                        host: fb.host.clone(),
-                        port: fb.port,
-                        username: fb.username.clone(),
-                        password: fb.password.clone(),
-                    }));
-                } else {
-                    self.sync_manager.set_fritzbox(None);
-                }
-                self.persist();
-                Task::none()
-            }
-
-            // Google account OAuth flow:
-            contacts::Message::ConnectGoogleAccount => {
-                self.contacts.loading = true;
-                Task::future(async move {
-                    let res = tokio::task::spawn_blocking(|| {
-                        sipster_integrations::google::GoogleContactsClient::listen_for_auth_code(8765)
-                    })
-                    .await
-                    .map_err(|e| e.to_string())
-                    .and_then(|r| r);
-                    Message::Contacts(contacts::Message::GoogleAuthFinished(res))
-                })
-            }
-            contacts::Message::GoogleAuthFinished(result) => {
-                self.contacts.loading = false;
-                match result {
-                    Ok((email, refresh_token)) => {
-                        let id = format!(
-                            "google-{}",
-                            std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_millis()
-                        );
-                        self.config.integration.google_accounts.retain(|a| a.email != email);
-                        self.config.integration.google_accounts.push(sipster_core::GoogleAccountConfig {
-                            id: id.clone(),
-                            email: email.clone(),
-                            refresh_token: refresh_token.clone(),
-                            client_id: None,
-                            client_secret: None,
-                            enabled: true,
-                        });
-                        self.persist();
-
-                        // Refresh sync manager's google clients
-                        let g_clients = self
-                            .config
-                            .integration
-                            .google_accounts
-                            .iter()
-                            .filter(|a| a.enabled)
-                            .map(|a| {
-                                GoogleContactsClient::new(
-                                    a.id.clone(),
-                                    a.email.clone(),
-                                    a.refresh_token.clone(),
-                                    a.client_id.clone(),
-                                    a.client_secret.clone(),
-                                )
-                            })
-                            .collect();
-                        self.sync_manager.set_google_accounts(g_clients);
-                        Task::done(Message::Contacts(contacts::Message::SyncPressed))
-                    }
-                    Err(e) => {
-                        self.contacts.error = Some(e);
-                        Task::none()
-                    }
-                }
-            }
-            contacts::Message::RemoveGoogleAccount(account_id) => {
-                self.config.integration.google_accounts.retain(|a| a.id != account_id);
-                self.persist();
-                let g_clients = self
-                    .config
-                    .integration
-                    .google_accounts
-                    .iter()
-                    .filter(|a| a.enabled)
-                    .map(|a| {
-                        GoogleContactsClient::new(
-                            a.id.clone(),
-                            a.email.clone(),
-                            a.refresh_token.clone(),
-                            a.client_id.clone(),
-                            a.client_secret.clone(),
-                        )
-                    })
-                    .collect();
-                self.sync_manager.set_google_accounts(g_clients);
-                Task::done(Message::Contacts(contacts::Message::SyncPressed))
-            }
-
-            // CardDAV accounts:
-            contacts::Message::CardDavUrlChanged(v) => {
-                self.contacts.draft_carddav_url = v;
-                Task::none()
-            }
-            contacts::Message::CardDavUserChanged(v) => {
-                self.contacts.draft_carddav_user = v;
-                Task::none()
-            }
-            contacts::Message::CardDavPassChanged(v) => {
-                self.contacts.draft_carddav_pass = v;
-                Task::none()
-            }
-            contacts::Message::AddCardDavAccount => {
-                let url = self.contacts.draft_carddav_url.trim().to_string();
-                if url.is_empty() {
-                    Task::none()
-                } else {
-                    let id = format!(
-                        "carddav-{}",
-                        std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_millis()
-                    );
-                    self.config.integration.carddav_accounts.push(sipster_core::CardDavAccountConfig {
-                        id,
-                        name: url.clone(),
-                        url: url.clone(),
-                        username: self.contacts.draft_carddav_user.clone(),
-                        password: self.contacts.draft_carddav_pass.clone(),
-                        enabled: true,
-                    });
-                    self.contacts.draft_carddav_url.clear();
-                    self.contacts.draft_carddav_user.clear();
-                    self.contacts.draft_carddav_pass.clear();
-                    self.persist();
-
-                    let c_clients = self
-                        .config
-                        .integration
-                        .carddav_accounts
-                        .iter()
-                        .filter(|a| a.enabled)
-                        .map(|a| {
-                            CardDavClient::new(CardDavConfig {
-                                url: a.url.clone(),
-                                username: a.username.clone(),
-                                password: a.password.clone(),
-                            })
-                        })
-                        .collect();
-                    self.sync_manager.set_carddav_accounts(c_clients);
-                    Task::done(Message::Contacts(contacts::Message::SyncPressed))
-                }
-            }
-            contacts::Message::RemoveCardDavAccount(account_id) => {
-                self.config.integration.carddav_accounts.retain(|a| a.id != account_id);
-                self.persist();
-                let c_clients = self
-                    .config
-                    .integration
-                    .carddav_accounts
-                    .iter()
-                    .filter(|a| a.enabled)
-                    .map(|a| {
-                        CardDavClient::new(CardDavConfig {
-                            url: a.url.clone(),
-                            username: a.username.clone(),
-                            password: a.password.clone(),
-                        })
-                    })
-                    .collect();
-                self.sync_manager.set_carddav_accounts(c_clients);
-                Task::done(Message::Contacts(contacts::Message::SyncPressed))
-            }
-
-            // Call blocking:
             contacts::Message::BlockNumberPrompt(number, name) => {
                 self.contacts.block_prompt = Some((number, name));
                 Task::none()
@@ -883,28 +684,27 @@ impl SipsterApp {
             }
 
             // In-window Settings & Call Blocking:
-            calls::Message::ToggleSettingsModal => {
-                self.calls.show_settings_modal = !self.calls.show_settings_modal;
+            calls::Message::Select(id) => {
+                self.calls.toggle(&id);
                 Task::none()
             }
-            calls::Message::ToggleLocalHistory(enabled) => {
-                self.config.integration.local_history_enabled = enabled;
-                self.persist();
+            calls::Message::FilterChanged(filter) => {
+                self.calls.filter = filter;
                 Task::none()
             }
-            calls::Message::DefaultBlockActionChanged(action) => {
-                self.config.integration.default_block_action = action;
-                self.persist();
-                Task::none()
+            calls::Message::AddContact(number, name) => {
+                // Seed the contact editor from the call and switch to it.
+                self.contacts.edit_draft = Some(contacts::EditContactDraft {
+                    id: None,
+                    name: name.unwrap_or_default(),
+                    phone: number,
+                    email: String::new(),
+                });
+                self.open_contacts()
             }
             calls::Message::ClearHistoryPressed => {
                 let _ = self.sync_manager.local_store().clear_calls();
                 Task::done(Message::Calls(calls::Message::SyncPressed))
-            }
-            calls::Message::UnblockNumber(number) => {
-                self.config.integration.blocked_numbers.retain(|b| b.number != number);
-                self.persist();
-                Task::none()
             }
             calls::Message::BlockNumberPrompt(number, name) => {
                 self.calls.block_prompt = Some((number, name));
@@ -944,6 +744,265 @@ impl SipsterApp {
             added_at: chrono_now_iso(),
         });
         self.persist();
+    }
+
+    /// Contact/history provider configuration and call blocking.
+    ///
+    /// Split out of `on_settings` only to keep that dispatcher readable; these
+    /// arrived together when provider setup moved here out of the Contacts and
+    /// History windows.
+    fn on_provider_settings(&mut self, msg: settings::Message) -> Task<Message> {
+        use settings::Message as S;
+        match msg {
+            S::ToggleProvidersModal => {
+                self.settings.show_providers = !self.settings.show_providers;
+                if self.settings.show_providers {
+                    // Seed the text drafts from the stored config each time the
+                    // panel opens, so it always shows what is actually saved.
+                    self.settings.draft_fritz_port =
+                        self.config.integration.fritzbox.port.to_string();
+                }
+            }
+            S::FritzHostChanged(v) => {
+                self.config.integration.fritzbox.host = v;
+                self.persist();
+            }
+            S::FritzPortChanged(v) => {
+                // Keep what was typed; only commit a value that parses, so
+                // clearing the field to retype does not reset it to the default.
+                if let Ok(port) = v.trim().parse::<u16>() {
+                    self.config.integration.fritzbox.port = port;
+                    self.persist();
+                }
+                self.settings.draft_fritz_port = v;
+            }
+            S::FritzUserChanged(v) => {
+                self.config.integration.fritzbox.username = v;
+                self.persist();
+            }
+            S::FritzPassChanged(v) => {
+                self.config.integration.fritzbox.password = v;
+                self.persist();
+            }
+            S::FritzEnabledToggled(enabled) => {
+                self.config.integration.fritzbox.enabled = enabled;
+                if enabled {
+                    let fb = &self.config.integration.fritzbox;
+                    self.sync_manager.set_fritzbox(Some(FritzConfig {
+                        host: fb.host.clone(),
+                        port: fb.port,
+                        username: fb.username.clone(),
+                        password: fb.password.clone(),
+                    }));
+                } else {
+                    self.sync_manager.set_fritzbox(None);
+                }
+                self.persist();
+            }
+
+            // Google account OAuth flow:
+            S::GoogleClientIdChanged(v) => self.settings.draft_google_client_id = v,
+            S::GoogleClientSecretChanged(v) => self.settings.draft_google_client_secret = v,
+            other => return self.on_carddav_settings(other),
+        }
+        Task::none()
+    }
+
+    /// The `CardDAV` account list.
+    fn on_carddav_settings(&mut self, msg: settings::Message) -> Task<Message> {
+        use settings::Message as S;
+        match msg {
+            S::CardDavUrlChanged(v) => {
+                self.settings.draft_carddav_url = v;
+            }
+            S::CardDavUserChanged(v) => {
+                self.settings.draft_carddav_user = v;
+            }
+            S::CardDavPassChanged(v) => {
+                self.settings.draft_carddav_pass = v;
+            }
+            S::AddCardDavAccount => {
+                let url = self.settings.draft_carddav_url.trim().to_string();
+                if !url.is_empty() {
+                    let id = format!(
+                        "carddav-{}",
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis()
+                    );
+                    self.config.integration.carddav_accounts.push(sipster_core::CardDavAccountConfig {
+                        id,
+                        name: url.clone(),
+                        url: url.clone(),
+                        username: self.settings.draft_carddav_user.clone(),
+                        password: self.settings.draft_carddav_pass.clone(),
+                        enabled: true,
+                    });
+                    self.settings.draft_carddav_url.clear();
+                    self.settings.draft_carddav_user.clear();
+                    self.settings.draft_carddav_pass.clear();
+                    self.persist();
+
+                    let c_clients = self
+                        .config
+                        .integration
+                        .carddav_accounts
+                        .iter()
+                        .filter(|a| a.enabled)
+                        .map(|a| {
+                            CardDavClient::new(CardDavConfig {
+                                url: a.url.clone(),
+                                username: a.username.clone(),
+                                password: a.password.clone(),
+                            })
+                        })
+                        .collect();
+                    self.sync_manager.set_carddav_accounts(c_clients);
+                    return Task::done(Message::Contacts(contacts::Message::SyncPressed));
+                }
+            }
+            S::RemoveCardDavAccount(account_id) => {
+                self.config.integration.carddav_accounts.retain(|a| a.id != account_id);
+                self.persist();
+                let c_clients = self
+                    .config
+                    .integration
+                    .carddav_accounts
+                    .iter()
+                    .filter(|a| a.enabled)
+                    .map(|a| {
+                        CardDavClient::new(CardDavConfig {
+                            url: a.url.clone(),
+                            username: a.username.clone(),
+                            password: a.password.clone(),
+                        })
+                    })
+                    .collect();
+                self.sync_manager.set_carddav_accounts(c_clients);
+                return Task::done(Message::Contacts(contacts::Message::SyncPressed));
+            }
+
+            // Call blocking:
+            S::ToggleLocalHistory(enabled) => {
+                self.config.integration.local_history_enabled = enabled;
+                self.persist();
+            }
+            S::DefaultBlockActionChanged(action) => {
+                self.config.integration.default_block_action = action;
+                self.persist();
+            }
+            S::UnblockNumber(number) => {
+                self.config
+                    .integration
+                    .blocked_numbers
+                    .retain(|b| b.number != number);
+                self.persist();
+            }
+            other => return self.on_google_settings(other),
+        }
+        Task::none()
+    }
+
+    /// The Google account flow, which is long enough to stand on its own.
+    fn on_google_settings(&mut self, msg: settings::Message) -> Task<Message> {
+        use settings::Message as S;
+        match msg {
+            S::ConnectGoogleAccount => {
+                let client_id = self.settings.draft_google_client_id.trim().to_string();
+                let secret = self.settings.draft_google_client_secret.trim().to_string();
+                self.settings.notice = Some("Waiting for Google sign-in in your browser…".into());
+                self.settings.error = None;
+                return Task::future(async move {
+                    let result = tokio::task::spawn_blocking(move || {
+                        GoogleContactsClient::authorize(&client_id, &secret, 8765)
+                    })
+                    .await
+                    .map_err(|e| format!("sign-in task failed: {e}"))
+                    .and_then(|inner| inner);
+                    Message::Settings(S::GoogleAuthFinished(result))
+                });
+            }
+            S::GoogleAuthFinished(result) => {
+                self.contacts.loading = false;
+                match result {
+                    Ok((email, refresh_token)) => {
+                        let id = format!(
+                            "google-{}",
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap_or_default()
+                                .as_millis()
+                        );
+                        self.config.integration.google_accounts.retain(|a| a.email != email);
+                        self.config.integration.google_accounts.push(sipster_core::GoogleAccountConfig {
+                            id: id.clone(),
+                            email: email.clone(),
+                            refresh_token: refresh_token.clone(),
+                            // Stored per account: without them the refresh
+                            // token cannot be exchanged, and there are no
+                            // bundled credentials to fall back on.
+                            client_id: Some(self.settings.draft_google_client_id.trim().to_string()),
+                            client_secret: Some(
+                                self.settings.draft_google_client_secret.trim().to_string(),
+                            ),
+                            enabled: true,
+                        });
+                        self.persist();
+
+                        // Refresh sync manager's google clients
+                        let g_clients = self
+                            .config
+                            .integration
+                            .google_accounts
+                            .iter()
+                            .filter(|a| a.enabled)
+                            .map(|a| {
+                                GoogleContactsClient::new(
+                                    a.id.clone(),
+                                    a.email.clone(),
+                                    a.refresh_token.clone(),
+                                    a.client_id.clone(),
+                                    a.client_secret.clone(),
+                                )
+                            })
+                            .collect();
+                        self.sync_manager.set_google_accounts(g_clients);
+                        return Task::done(Message::Contacts(contacts::Message::SyncPressed));
+                    }
+                    Err(e) => {
+                        self.settings.notice = None;
+                        self.settings.error = Some(e);
+                    }
+                }
+            }
+            S::RemoveGoogleAccount(account_id) => {
+                self.config.integration.google_accounts.retain(|a| a.id != account_id);
+                self.persist();
+                let g_clients = self
+                    .config
+                    .integration
+                    .google_accounts
+                    .iter()
+                    .filter(|a| a.enabled)
+                    .map(|a| {
+                        GoogleContactsClient::new(
+                            a.id.clone(),
+                            a.email.clone(),
+                            a.refresh_token.clone(),
+                            a.client_id.clone(),
+                            a.client_secret.clone(),
+                        )
+                    })
+                    .collect();
+                self.sync_manager.set_google_accounts(g_clients);
+                return Task::done(Message::Contacts(contacts::Message::SyncPressed));
+            }
+
+            // CardDAV accounts:
+            _ => {}
+        }
+        Task::none()
     }
 
     fn on_settings(&mut self, msg: settings::Message) -> Task<Message> {
@@ -1031,6 +1090,7 @@ impl SipsterApp {
                     return window::close(id);
                 }
             }
+            other => return self.on_provider_settings(other),
         }
         Task::none()
     }
@@ -1215,7 +1275,7 @@ impl SipsterApp {
                                 self.sync_manager.record_local_call(CallRecord {
                                     id: format!("local-blocked-{id}"),
                                     call_type: CallType::Rejected,
-                                    remote_number: remote_uri,
+                                    remote_number: dialable(&remote_uri),
                                     remote_name: blocked.name.clone(),
                                     local_party: self.account_info.clone(),
                                     timestamp: chrono_now_iso(),
@@ -1239,7 +1299,7 @@ impl SipsterApp {
                                 self.sync_manager.record_local_call(CallRecord {
                                     id: format!("local-muted-{id}"),
                                     call_type: CallType::Incoming,
-                                    remote_number: remote_uri.clone(),
+                                    remote_number: dialable(&remote_uri),
                                     remote_name: blocked.name.clone(),
                                     local_party: self.account_info.clone(),
                                     timestamp: chrono_now_iso(),
@@ -1262,8 +1322,8 @@ impl SipsterApp {
                     self.sync_manager.record_local_call(CallRecord {
                         id: format!("local-in-{id}"),
                         call_type: CallType::Incoming,
-                        remote_number: remote_uri.clone(),
-                        remote_name: None,
+                        remote_number: dialable(&remote_uri),
+                        remote_name: display_name(&remote_uri),
                         local_party: self.account_info.clone(),
                         timestamp: chrono_now_iso(),
                         duration_seconds: 0,
@@ -1287,7 +1347,7 @@ impl SipsterApp {
                         self.sync_manager.record_local_call(CallRecord {
                             id: format!("local-term-{id}"),
                             call_type: CallType::Outgoing,
-                            remote_number: active.remote,
+                            remote_number: dialable(&active.remote),
                             remote_name: None,
                             local_party: self.account_info.clone(),
                             timestamp: chrono_now_iso(),
@@ -1302,7 +1362,7 @@ impl SipsterApp {
                         self.sync_manager.record_local_call(CallRecord {
                             id: format!("local-missed-{id}"),
                             call_type: CallType::Missed,
-                            remote_number: incoming.remote,
+                            remote_number: dialable(&incoming.remote),
                             remote_name: None,
                             local_party: self.account_info.clone(),
                             timestamp: chrono_now_iso(),
@@ -1417,6 +1477,25 @@ impl SipsterApp {
         }
         self.dial_number = input;
     }
+}
+
+/// The dialable number from a SIP URI.
+///
+/// Local records used to store the whole `From` header —
+/// `"Alice" <sip:611@fritz.box>;tag=179BED3B…` — as the number, which made
+/// history unreadable and meant "Call back" dialled a string containing a
+/// dialog tag.
+fn dialable(remote: &str) -> String {
+    sipster_integrations::caller_number(remote).to_string()
+}
+
+/// The display name from a SIP URI, if it carries one worth showing.
+fn display_name(remote: &str) -> Option<String> {
+    let raw = remote.trim();
+    let name = raw.split_once('<').map(|(name, _)| name)?;
+    let name = name.trim().trim_matches('"').trim();
+    (!name.is_empty() && name != sipster_integrations::caller_number(raw))
+        .then(|| name.to_string())
 }
 
 fn registration_status(state: &RegistrationState) -> String {

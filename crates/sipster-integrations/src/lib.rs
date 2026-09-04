@@ -18,7 +18,8 @@ pub use fritzbox::{FritzBoxClient, FritzConfig, FritzError};
 pub use google::{GoogleContactsClient, GoogleTokenResponse};
 pub use local::{LocalStore, LocalStoreError};
 pub use model::{
-    caller_number, normalize_number, number_matches, CallRecord, CallType, Contact, NumberType,
+    caller_number, normalize_number, number_contains, number_matches, timestamp_key, CallRecord,
+    CallType, Contact, NumberType,
     PhoneNumber, RecordSource,
 };
 
@@ -172,9 +173,12 @@ impl SyncManager {
         // history and from the router stayed in the list twice, because the two
         // copies were never neighbours. Sorting also delivers the newest-first
         // order the call list renders.
+        // Newest first, by parsed date. Comparing the raw strings does not
+        // work: the router writes DD.MM.YY, so lexicographic order put every
+        // 31st ahead of every 30th regardless of month.
         merged.sort_by(|a, b| {
-            b.timestamp
-                .cmp(&a.timestamp)
+            model::timestamp_key(&b.timestamp)
+                .cmp(&model::timestamp_key(&a.timestamp))
                 .then_with(|| a.remote_number.cmp(&b.remote_number))
         });
         merged.dedup_by(|a, b| a.timestamp == b.timestamp && a.remote_number == b.remote_number);

@@ -19,7 +19,7 @@ use iced::widget::{
 };
 use iced::{Alignment, Element, Length};
 use sipster_core::audio::{Device, DeviceSelection};
-use sipster_core::{SipAccount, ThemeChoice, UiSettings};
+use sipster_core::{BlockAction, IntegrationSettings, SipAccount, ThemeChoice, UiSettings};
 
 /// A selectable audio device. `id: None` is the system default.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -89,6 +89,33 @@ pub enum Message {
     RegisterUriSchemes(bool),
     CloseToTray(bool),
 
+    // Integrations. Contact and history providers are account configuration,
+    // so they belong here rather than inside the windows that display their
+    // data — which is where they used to live, splitting account setup across
+    // three windows.
+    ToggleProvidersModal,
+    ToggleLocalHistory(bool),
+    DefaultBlockActionChanged(BlockAction),
+    UnblockNumber(String),
+
+    FritzHostChanged(String),
+    FritzPortChanged(String),
+    FritzUserChanged(String),
+    FritzPassChanged(String),
+    FritzEnabledToggled(bool),
+
+    ConnectGoogleAccount,
+    GoogleAuthFinished(Result<(String, String), String>),
+    RemoveGoogleAccount(String),
+
+    GoogleClientIdChanged(String),
+    GoogleClientSecretChanged(String),
+    CardDavUrlChanged(String),
+    CardDavUserChanged(String),
+    CardDavPassChanged(String),
+    AddCardDavAccount,
+    RemoveCardDavAccount(String),
+
     Close,
 }
 
@@ -108,6 +135,19 @@ pub struct State {
     pub inputs: Vec<Device>,
     pub outputs: Vec<Device>,
     pub devices_loaded: bool,
+
+    /// Whether the provider panel is expanded.
+    pub show_providers: bool,
+    pub draft_carddav_url: String,
+    pub draft_carddav_user: String,
+    pub draft_carddav_pass: String,
+    /// The FRITZ!Box port as typed. Held as text for the same reason the
+    /// account ports are: parsing every keystroke fights the user the moment
+    /// they clear the field to retype it.
+    pub draft_fritz_port: String,
+    /// Google OAuth client credentials, which the user registers themselves.
+    pub draft_google_client_id: String,
+    pub draft_google_client_secret: String,
 
     /// Set when the last apply failed, cleared on the next successful one.
     pub error: Option<String>,
@@ -184,6 +224,7 @@ pub fn view<'a>(
     account: Option<&'a SipAccount>,
     config_path: &'a str,
     first_run: bool,
+    integration: &'a IntegrationSettings,
 ) -> Element<'a, Message> {
     let body = column![
         account_section(state, account, first_run),
@@ -191,6 +232,8 @@ pub fn view<'a>(
         appearance_section(ui),
         sounds_section(ui),
         integration_section(ui),
+        providers_section(state, integration),
+        blocking_section(integration),
         about_section(config_path),
     ]
     .spacing(26)
@@ -479,6 +522,268 @@ fn integration_section(ui: &UiSettings) -> Element<'_, Message> {
         column![tray_cb, uri_cb]
             .spacing(9)
             .into(),
+    )
+}
+
+/// Contact and history providers.
+///
+/// Collapsed by default: most people configure this once, and it is long.
+fn providers_section<'a>(
+    state: &'a State,
+    integration: &'a IntegrationSettings,
+) -> Element<'a, Message> {
+    let summary = format!(
+        "{} FRITZ!Box · {} Google · {} CardDAV",
+        if integration.fritzbox.enabled { "1" } else { "0" },
+        integration.google_accounts.iter().filter(|a| a.enabled).count(),
+        integration.carddav_accounts.iter().filter(|a| a.enabled).count(),
+    );
+
+    let toggle = button(
+        text(if state.show_providers { "Hide" } else { "Configure" }).size(13),
+    )
+    .on_press(Message::ToggleProvidersModal)
+    .padding([5, 11]);
+
+    let header = row![
+        text(summary).size(13),
+        Space::new().width(Length::Fill),
+        toggle,
+    ]
+    .align_y(Alignment::Center);
+
+    let mut content = column![header].spacing(10);
+
+    if state.show_providers {
+        content = content.push(rule::horizontal(1)).push(fritzbox_panel(state, integration));
+        content = content.push(rule::horizontal(1)).push(google_panel(state, integration));
+        content = content.push(rule::horizontal(1)).push(carddav_panel(state, integration));
+    }
+
+    content = content.push(
+        checkbox(integration.local_history_enabled)
+            .label("Record placed and received calls to local history")
+            .on_toggle(Message::ToggleLocalHistory)
+            .size(15)
+            .text_size(13),
+    );
+
+    section(
+        "Integrations",
+        Some("Where contacts and call history come from."),
+        content.into(),
+    )
+}
+
+fn fritzbox_panel<'a>(
+    state: &'a State,
+    integration: &'a IntegrationSettings,
+) -> Element<'a, Message> {
+    let fb = &integration.fritzbox;
+    // Owned: the widget borrows for 'a, and a temporary from to_string() would
+    // not live that long.
+    column![
+        text("FRITZ!Box").size(14),
+        checkbox(fb.enabled)
+            .label("Sync the router phonebook and call list")
+            .on_toggle(Message::FritzEnabledToggled)
+            .size(15)
+            .text_size(13),
+        field("Host", input("fritz.box", &fb.host, Message::FritzHostChanged)),
+        field("Port", port_input(&state.draft_fritz_port)),
+        field("Username", input("", &fb.username, Message::FritzUserChanged)),
+        field(
+            "Password",
+            text_input("", &fb.password)
+                .on_input(Message::FritzPassChanged)
+                .secure(true)
+                .padding(7)
+                .size(14)
+                .into()
+        ),
+    ]
+    .spacing(8)
+    .into()
+}
+
+/// The port field, whose value is an owned string rather than a temporary.
+fn port_input(value: &str) -> Element<'_, Message> {
+    text_input("49000", value)
+        .on_input(Message::FritzPortChanged)
+        .padding(7)
+        .size(14)
+        .into()
+}
+
+fn google_panel<'a>(
+    state: &'a State,
+    integration: &'a IntegrationSettings,
+) -> Element<'a, Message> {
+    let mut content = column![
+        text("Google Contacts").size(14),
+        // Sipster ships no OAuth credentials — see the note in
+        // sipster-integrations::google for why bundling them is neither
+        // possible nor meaningful.
+        text(
+            "Needs your own OAuth client: Google Cloud console › Credentials › \
+             OAuth client ID › Desktop app."
+        )
+        .size(12),
+    ]
+    .spacing(6);
+
+    for account in &integration.google_accounts {
+        content = content.push(
+            row![
+                text(account.email.clone()).size(13),
+                Space::new().width(Length::Fill),
+                button(text("Remove").size(12))
+                    .on_press(Message::RemoveGoogleAccount(account.id.clone()))
+                    .padding([3, 9])
+                    .style(button::danger),
+            ]
+            .align_y(Alignment::Center)
+            .spacing(6),
+        );
+    }
+
+    let ready = !state.draft_google_client_id.trim().is_empty()
+        && !state.draft_google_client_secret.trim().is_empty();
+
+    content
+        .push(field(
+            "Client ID",
+            input(
+                "…apps.googleusercontent.com",
+                &state.draft_google_client_id,
+                Message::GoogleClientIdChanged,
+            ),
+        ))
+        .push(field(
+            "Client secret",
+            text_input("", &state.draft_google_client_secret)
+                .on_input(Message::GoogleClientSecretChanged)
+                .secure(true)
+                .padding(7)
+                .size(14)
+                .into(),
+        ))
+        .push(
+            button(text("Connect a Google account").size(13))
+                .on_press_maybe(ready.then_some(Message::ConnectGoogleAccount))
+                .padding([5, 11]),
+        )
+        .into()
+}
+
+fn carddav_panel<'a>(
+    state: &'a State,
+    integration: &'a IntegrationSettings,
+) -> Element<'a, Message> {
+    let mut content = column![text("CardDAV").size(14)].spacing(6);
+
+    for account in &integration.carddav_accounts {
+        content = content.push(
+            row![
+                column![
+                    text(account.name.clone()).size(13),
+                    text(account.url.clone())
+                        .size(11)
+                        .color(iced::Color::from_rgb(0.62, 0.62, 0.66)),
+                ]
+                .spacing(1),
+                Space::new().width(Length::Fill),
+                button(text("Remove").size(12))
+                    .on_press(Message::RemoveCardDavAccount(account.id.clone()))
+                    .padding([3, 9])
+                    .style(button::danger),
+            ]
+            .align_y(Alignment::Center)
+            .spacing(6),
+        );
+    }
+
+    let can_add = !state.draft_carddav_url.trim().is_empty();
+
+    content
+        .push(field(
+            "URL",
+            input(
+                "https://dav.example.com/addressbooks/me/default/",
+                &state.draft_carddav_url,
+                Message::CardDavUrlChanged,
+            ),
+        ))
+        .push(field(
+            "Username",
+            input("", &state.draft_carddav_user, Message::CardDavUserChanged),
+        ))
+        .push(field(
+            "Password",
+            text_input("", &state.draft_carddav_pass)
+                .on_input(Message::CardDavPassChanged)
+                .secure(true)
+                .padding(7)
+                .size(14)
+                .into(),
+        ))
+        .push(
+            button(text("Add address book").size(13))
+                .on_press_maybe(can_add.then_some(Message::AddCardDavAccount))
+                .padding([5, 11]),
+        )
+        .into()
+}
+
+/// Blocked numbers, listed so a rule can actually be found and removed.
+fn blocking_section(integration: &IntegrationSettings) -> Element<'_, Message> {
+    let action_pick = pick_list(
+        BlockAction::ALL,
+        Some(integration.default_block_action),
+        Message::DefaultBlockActionChanged,
+    )
+    .text_size(13)
+    .padding(7)
+    .width(Length::Fill);
+
+    let mut content = column![field("Default action", action_pick.into())].spacing(8);
+
+    if integration.blocked_numbers.is_empty() {
+        content = content.push(
+            text("Nothing blocked. Block a caller from Contacts or History.")
+                .size(12)
+                .color(iced::Color::from_rgb(0.62, 0.62, 0.66)),
+        );
+    } else {
+        for blocked in &integration.blocked_numbers {
+            let label = blocked.name.clone().map_or_else(
+                || blocked.number.clone(),
+                |name| format!("{name} ({})", blocked.number),
+            );
+            content = content.push(
+                row![
+                    column![
+                        text(label).size(13),
+                        text(blocked.action.label())
+                            .size(11)
+                            .color(iced::Color::from_rgb(0.62, 0.62, 0.66)),
+                    ]
+                    .spacing(1),
+                    Space::new().width(Length::Fill),
+                    button(text("Unblock").size(12))
+                        .on_press(Message::UnblockNumber(blocked.number.clone()))
+                        .padding([3, 9]),
+                ]
+                .align_y(Alignment::Center)
+                .spacing(6),
+            );
+        }
+    }
+
+    section(
+        "Call blocking",
+        Some("Applies to incoming calls, matched on the caller's number."),
+        content.into(),
     )
 }
 

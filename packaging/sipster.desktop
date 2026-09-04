@@ -7,6 +7,6 @@ Exec=sipster %u
 Icon=sipster
 Terminal=false
 Categories=Network;Telephony;
-Keywords=SIP;VoIP;phone;softphone;telephony;FritzBox;
+Keywords=SIP;VoIP;phone;softphone;telephony;
 MimeType=x-scheme-handler/tel;x-scheme-handler/sip;x-scheme-handler/sips;x-scheme-handler/callto;x-scheme-handler/sipster;
 StartupWMClass=sipster

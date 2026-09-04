@@ -538,7 +538,14 @@ impl SipsterApp {
     /// on first run there is no engine, and parking a Quit made an
     /// unconfigured instance impossible to stop with `sipster --quit`.
     fn on_ipc(&mut self, cmd: Command) -> Task<Message> {
-        let needs_engine = !matches!(cmd, Command::Show | Command::Quit);
+        let needs_engine = !matches!(
+            cmd,
+            Command::Show
+                | Command::OpenSettings
+                | Command::OpenContacts
+                | Command::OpenCallList
+                | Command::Quit
+        );
         if needs_engine && self.engine.is_none() {
             self.pending_command = Some(cmd);
             return Task::none();
@@ -550,7 +557,12 @@ impl SipsterApp {
         match cmd {
             Command::Call { target } => {
                 self.dial_number = target;
-                self.dial()
+                let dial_task = self.dial();
+                if let Some(id) = self.main_window {
+                    Task::batch([window::gain_focus(id), dial_task])
+                } else {
+                    dial_task
+                }
             }
             Command::Answer => self.answer(),
             Command::Hangup => {
@@ -560,7 +572,30 @@ impl SipsterApp {
                     self.hangup()
                 }
             }
-            Command::Show => Task::none(),
+            Command::Show => {
+                if let Some(id) = self.main_window {
+                    window::gain_focus(id)
+                } else {
+                    Task::none()
+                }
+            }
+            Command::OpenSettings => self.open_settings(),
+            Command::OpenContacts => {
+                self.status = "Contact sync planned".into();
+                if let Some(id) = self.main_window {
+                    window::gain_focus(id)
+                } else {
+                    Task::none()
+                }
+            }
+            Command::OpenCallList => {
+                self.status = "Call list sync planned".into();
+                if let Some(id) = self.main_window {
+                    window::gain_focus(id)
+                } else {
+                    Task::none()
+                }
+            }
             Command::Quit => iced::exit(),
         }
     }

@@ -36,6 +36,12 @@ pub enum Command {
     Hangup,
     /// Raise and focus the window.
     Show,
+    /// Open the Settings window.
+    OpenSettings,
+    /// Open or navigate to Contacts.
+    OpenContacts,
+    /// Open or navigate to Call List / History.
+    OpenCallList,
     /// Ask the running instance to quit.
     Quit,
 }
@@ -57,6 +63,42 @@ impl Command {
             return None;
         }
 
+        if scheme_lower == "sipster" {
+            let path = rest.trim_start_matches('/');
+            let (action, query) = path.split_once(['?', '#']).unwrap_or((path, ""));
+            let action_lower = action.to_ascii_lowercase();
+
+            return match action_lower.as_str() {
+                "open/settings" | "settings" => Some(Self::OpenSettings),
+                "open/contacts" | "contacts" => Some(Self::OpenContacts),
+                "open/calllist" | "open/history" | "calllist" | "history" => Some(Self::OpenCallList),
+                "hangup" | "end" => Some(Self::Hangup),
+                "answer" => Some(Self::Answer),
+                "show" | "focus" | "" => Some(Self::Show),
+                "quit" => Some(Self::Quit),
+                _ if action_lower.starts_with("dial/") || action_lower.starts_with("call/") => {
+                    let target = &action[5..];
+                    let decoded_target = percent_decode(target);
+                    if decoded_target.trim().is_empty() {
+                        Some(Self::Show)
+                    } else {
+                        Some(Self::Call { target: decoded_target.trim().to_string() })
+                    }
+                }
+                _ => {
+                    // Fallback: if query has target= or action is a dialable number or SIP URI
+                    let candidate = if action.is_empty() { query } else { action };
+                    let decoded = percent_decode(candidate);
+                    let inner = decoded.trim();
+                    if inner.is_empty() {
+                        Some(Self::Show)
+                    } else {
+                        Some(Self::Call { target: inner.to_string() })
+                    }
+                }
+            };
+        }
+
         // `tel://611` and `tel:611` are both seen in the wild.
         let rest = rest.trim_start_matches("//");
         // Drop any query/fragment: `tel:611?call` -> `611`.
@@ -66,16 +108,6 @@ impl Command {
         let target = if scheme_lower == "sip" || scheme_lower == "sips" {
             // Keep SIP URIs intact so they route as entered.
             format!("{scheme_lower}:{decoded}")
-        } else if scheme_lower == "sipster" {
-            // sipster:123 or sipster://user@domain or sipster:sip:user@domain
-            let inner = decoded.trim();
-            if inner.starts_with("sip:") || inner.starts_with("sips:") || inner.starts_with("tel:") {
-                inner.to_string()
-            } else if inner.contains('@') || inner.contains(':') {
-                format!("sip:{inner}")
-            } else {
-                inner.chars().filter(|c| c.is_ascii_digit() || matches!(c, '+' | '*' | '#')).collect()
-            }
         } else {
             // tel:/callto: carry dialable digits; strip RFC 3966 separators.
             let digits: String = decoded
@@ -323,17 +355,21 @@ mod tests {
     }
 
     #[test]
+    fn parses_sipster_app_scheme() {
+        assert_eq!(Command::from_uri("sipster://open/settings"), Some(Command::OpenSettings));
+        assert_eq!(Command::from_uri("sipster://settings"), Some(Command::OpenSettings));
+        assert_eq!(Command::from_uri("sipster://open/contacts"), Some(Command::OpenContacts));
+        assert_eq!(Command::from_uri("sipster://open/calllist"), Some(Command::OpenCallList));
+        assert_eq!(Command::from_uri("sipster://hangup"), Some(Command::Hangup));
+        assert_eq!(Command::from_uri("sipster://answer"), Some(Command::Answer));
+        assert_eq!(Command::from_uri("sipster://show"), Some(Command::Show));
+        assert_eq!(Command::from_uri("sipster://dial/611"), Some(Command::Call { target: "611".into() }));
+    }
+
+    #[test]
     fn keeps_sip_uris_intact() {
         assert_eq!(
             Command::from_uri("sip:bob@example.com"),
-            Some(Command::Call { target: "sip:bob@example.com".into() })
-        );
-        assert_eq!(
-            Command::from_uri("sipster:611"),
-            Some(Command::Call { target: "611".into() })
-        );
-        assert_eq!(
-            Command::from_uri("sipster://bob@example.com"),
             Some(Command::Call { target: "sip:bob@example.com".into() })
         );
     }
@@ -357,6 +393,9 @@ mod tests {
             Command::Answer,
             Command::Hangup,
             Command::Show,
+            Command::OpenSettings,
+            Command::OpenContacts,
+            Command::OpenCallList,
             Command::Quit,
         ] {
             let json = serde_json::to_string(&command).unwrap();

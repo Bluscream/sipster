@@ -39,7 +39,7 @@ impl CardDavClient {
             return Ok(Vec::new());
         }
 
-        let mut req = ureq::get(url);
+        let mut req = crate::http_agent().get(url);
         if !self.config.username.is_empty() {
             let auth = format!("{}:{}", self.config.username, self.config.password);
             let b64 = urlencoding_base64(&auth);

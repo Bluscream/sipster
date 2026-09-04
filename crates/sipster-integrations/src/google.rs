@@ -105,7 +105,8 @@ impl GoogleContactsClient {
                 self.email
             ));
         }
-        let resp = ureq::post("https://oauth2.googleapis.com/token")
+        let resp = crate::http_agent()
+            .post("https://oauth2.googleapis.com/token")
             .send_form(&[
                 ("client_id", self.client_id.as_str()),
                 ("client_secret", self.client_secret.as_str()),
@@ -134,7 +135,8 @@ impl GoogleContactsClient {
                 url.push_str(&urlencoding_simple(token));
             }
 
-            let resp = ureq::get(&url)
+            let resp = crate::http_agent()
+                .get(&url)
                 .set("Authorization", &format!("Bearer {access_token}"))
                 .call()
                 .map_err(|e| format!("People API request failed: {e}"))?;
@@ -281,7 +283,8 @@ impl GoogleContactsClient {
         client_id: &str,
         client_secret: &str,
     ) -> Result<GoogleTokenResponse, String> {
-        let resp = ureq::post("https://oauth2.googleapis.com/token")
+        let resp = crate::http_agent()
+            .post("https://oauth2.googleapis.com/token")
             .send_form(&[
                 ("code", code),
                 ("client_id", client_id),
@@ -300,7 +303,8 @@ impl GoogleContactsClient {
 
     /// Fetches the authenticated user's email address using the access token.
     pub fn fetch_user_email(access_token: &str) -> Result<String, String> {
-        let resp = ureq::get("https://www.googleapis.com/oauth2/v2/userinfo")
+        let resp = crate::http_agent()
+            .get("https://www.googleapis.com/oauth2/v2/userinfo")
             .set("Authorization", &format!("Bearer {access_token}"))
             .call()
             .map_err(|e| format!("failed to fetch user info: {e}"))?;

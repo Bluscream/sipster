@@ -80,7 +80,10 @@ impl FritzBoxClient {
         use std::fmt::Write as _;
         let mut args_xml = String::new();
         for (k, v) in args {
-            let _ = write!(args_xml, "<{k}>{v}</{k}>");
+            // Escaped: argument values are interpolated straight into the SOAP
+            // envelope, so an unescaped '<' or '&' would corrupt the request
+            // (and a crafted value could inject elements).
+            let _ = write!(args_xml, "<{k}>{}</{k}>", escape_xml(v));
         }
 
         let body = format!(
@@ -97,7 +100,8 @@ impl FritzBoxClient {
         let soap_action = format!("{service_type}#{action}");
         let url = format!("http://{}:{}{control_url}", self.config.host, self.config.port);
 
-        let res = ureq::post(&url)
+        let agent = crate::http_agent();
+        let res = agent.post(&url)
             .set("Content-Type", "text/xml; charset=\"utf-8\"")
             .set("SOAPAction", &soap_action)
             .send_string(&body);
@@ -115,7 +119,7 @@ impl FritzBoxClient {
                     &auth_params,
                 );
 
-                let authenticated_req = ureq::post(&url)
+                let authenticated_req = agent.post(&url)
                     .set("Content-Type", "text/xml; charset=\"utf-8\"")
                     .set("SOAPAction", &soap_action)
                     .set("Authorization", &auth_val)
@@ -169,7 +173,7 @@ impl FritzBoxClient {
             let pb_url = extract_xml_tag(&pb_res, "NewPhonebookURL").unwrap_or_default();
 
             if !pb_url.is_empty() {
-                match ureq::get(&pb_url).call() {
+                match crate::http_agent().get(&pb_url).call() {
                     Ok(resp) => {
                         let xml_content = resp.into_string()?;
                         let parsed = parse_phonebook_xml(&xml_content, pbid, &pb_name);
@@ -201,7 +205,7 @@ impl FritzBoxClient {
             });
         };
 
-        let cl_resp = ureq::get(&call_list_url).call()?.into_string()?;
+        let cl_resp = crate::http_agent().get(&call_list_url).call()?.into_string()?;
         Ok(parse_call_list_xml(&cl_resp))
     }
 }
@@ -347,10 +351,83 @@ fn extract_xml_tag(haystack: &str, tag: &str) -> Option<String> {
     let close = format!("</{tag}>");
     let start = haystack.find(&open)?;
     let end = haystack[start + open.len()..].find(&close)?;
-    Some(haystack[start + open.len()..start + open.len() + end].trim().to_string())
+    let raw = &haystack[start + open.len()..start + open.len() + end];
+    Some(unescape_xml(raw.trim()))
+}
+
+/// Escapes the five XML predefined entities.
+fn escape_xml(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    for c in raw.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&apos;"),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
+/// Decodes the five predefined entities plus numeric references.
+///
+/// Without this a contact stored as `M&amp;uuml;ller &amp; Sohn` was shown
+/// verbatim, entities and all, in the contact list and the caller display.
+fn unescape_xml(raw: &str) -> String {
+    if !raw.contains('&') {
+        return raw.to_string();
+    }
+    let mut out = String::with_capacity(raw.len());
+    let mut rest = raw;
+    while let Some(amp) = rest.find('&') {
+        out.push_str(&rest[..amp]);
+        let after = &rest[amp..];
+        let Some(semi) = after.find(';').filter(|end| *end <= 10) else {
+            out.push('&');
+            rest = &after[1..];
+            continue;
+        };
+        let entity = &after[1..semi];
+        match entity {
+            "amp" => out.push('&'),
+            "lt" => out.push('<'),
+            "gt" => out.push('>'),
+            "quot" => out.push('"'),
+            "apos" => out.push('\''),
+            numeric if numeric.starts_with('#') => {
+                if let Some(c) = decode_numeric_entity(numeric) {
+                    out.push(c);
+                } else {
+                    out.push_str(&after[..=semi]);
+                }
+            }
+            _ => out.push_str(&after[..=semi]),
+        }
+        rest = &after[semi + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+fn decode_numeric_entity(entity: &str) -> Option<char> {
+    let digits = entity.strip_prefix('#')?;
+    let code = digits.strip_prefix('x').map_or_else(
+        || digits.parse::<u32>().ok(),
+        |hex| u32::from_str_radix(hex, 16).ok(),
+    )?;
+    char::from_u32(code)
 }
 
 // ── Digest Authentication Helpers ───────────────────────────────────────────
+
+/// A random 16-hex-digit client nonce.
+fn fresh_cnonce() -> String {
+    // uuid v4 is already a dependency and is backed by a CSPRNG; its simple
+    // form gives us 32 hex digits, of which 16 are plenty.
+    uuid::Uuid::new_v4().simple().to_string()[..16].to_string()
+}
 
 fn md5_hex(data: &[u8]) -> String {
     let mut hasher = Md5::new();
@@ -388,7 +465,11 @@ fn build_digest_header(
     if let Some(qop_val) = qop.as_deref() {
         if qop_val.contains("auth") {
             let nc = "00000001";
-            let cnonce = "0a4f113b";
+            // A fresh client nonce per request. The previous constant
+            // ("0a4f113b", straight out of the RFC 2617 example) meant every
+            // request produced an identical digest for a given server nonce,
+            // which is exactly what cnonce exists to prevent.
+            let cnonce = fresh_cnonce();
             let resp = md5_hex(format!("{ha1}:{nonce}:{nc}:{cnonce}:auth:{ha2}").as_bytes());
             return format!(
                 "Digest username=\"{user}\", realm=\"{realm}\", nonce=\"{nonce}\", uri=\"{uri}\", response=\"{resp}\", qop=auth, nc={nc}, cnonce=\"{cnonce}\""
@@ -400,4 +481,103 @@ fn build_digest_header(
     format!(
         "Digest username=\"{user}\", realm=\"{realm}\", nonce=\"{nonce}\", uri=\"{uri}\", response=\"{response}\""
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        escape_xml, fresh_cnonce, parse_call_list_xml, parse_duration_seconds,
+        parse_phonebook_xml, unescape_xml,
+    };
+    use crate::model::{CallType, NumberType};
+
+    #[test]
+    fn parses_a_phonebook_entry_with_typed_numbers() {
+        let xml = r#"<phonebook><contact><person><realName>Alice Smith</realName></person>
+            <telephony><number type="mobile" prio="1">+4915112345</number>
+            <number type="work">03012345</number></telephony>
+            <uniqueid>42</uniqueid></contact></phonebook>"#;
+        let contacts = parse_phonebook_xml(xml, 0, "Main");
+        assert_eq!(contacts.len(), 1);
+        assert_eq!(contacts[0].name, "Alice Smith");
+        assert_eq!(contacts[0].numbers.len(), 2);
+        assert_eq!(contacts[0].numbers[0].number_type, NumberType::Mobile);
+        assert_eq!(contacts[0].numbers[0].priority, 1);
+        assert_eq!(contacts[0].primary_number(), Some("+4915112345"));
+    }
+
+    /// A contact whose name contains an ampersand came back with the raw
+    /// entity in it and was displayed that way.
+    #[test]
+    fn entities_in_names_are_decoded() {
+        let xml = r"<contact><realName>M&#252;ller &amp; Sohn</realName>
+            <number type='work'>123</number><uniqueid>1</uniqueid></contact>";
+        let contacts = parse_phonebook_xml(xml, 0, "Main");
+        assert_eq!(contacts[0].name, "Müller & Sohn");
+    }
+
+    #[test]
+    fn a_contact_without_a_name_is_skipped() {
+        let xml = r"<contact><realName>  </realName><number>123</number></contact>";
+        assert!(parse_phonebook_xml(xml, 0, "Main").is_empty());
+    }
+
+    #[test]
+    fn parses_the_call_list_types() {
+        let xml = r"<root>
+            <Call><Id>1</Id><Type>1</Type><Caller>0301</Caller><Called>620</Called>
+                  <Date>01.01.26 10:00</Date><Duration>0:42</Duration></Call>
+            <Call><Id>2</Id><Type>2</Type><Caller>0302</Caller><Called>620</Called>
+                  <Date>01.01.26 11:00</Date><Duration>0:00</Duration></Call>
+            <Call><Id>3</Id><Type>3</Type><Caller>620</Caller><Called>0303</Called>
+                  <Date>01.01.26 12:00</Date><Duration>1:02:03</Duration></Call>
+            </root>";
+        let calls = parse_call_list_xml(xml);
+        assert_eq!(calls.len(), 3);
+        assert_eq!(calls[0].call_type, CallType::Incoming);
+        assert_eq!(calls[0].duration_seconds, 42);
+        assert_eq!(calls[1].call_type, CallType::Missed);
+        // Outgoing swaps the parties: the remote is who we called.
+        assert_eq!(calls[2].call_type, CallType::Outgoing);
+        assert_eq!(calls[2].remote_number, "0303");
+        assert_eq!(calls[2].duration_seconds, 3723);
+    }
+
+    #[test]
+    fn duration_parsing_handles_both_shapes() {
+        assert_eq!(parse_duration_seconds("0:42"), 42);
+        assert_eq!(parse_duration_seconds("1:02:03"), 3723);
+        assert_eq!(parse_duration_seconds(""), 0);
+        assert_eq!(parse_duration_seconds("nonsense"), 0);
+    }
+
+    /// Values are interpolated into the SOAP envelope, so they must be escaped.
+    #[test]
+    fn xml_escaping_round_trips() {
+        assert_eq!(escape_xml("a&b<c>\"d\""), "a&amp;b&lt;c&gt;&quot;d&quot;");
+        assert_eq!(unescape_xml("a&amp;b&lt;c&gt;"), "a&b<c>");
+        // An unknown entity is left alone rather than mangled.
+        assert_eq!(unescape_xml("100 &unknown; 200"), "100 &unknown; 200");
+        // A bare ampersand is not an entity.
+        assert_eq!(unescape_xml("Tom & Jerry"), "Tom & Jerry");
+    }
+
+    /// A constant client nonce defeats digest replay protection.
+    #[test]
+    fn client_nonces_differ_between_requests() {
+        let (a, b) = (fresh_cnonce(), fresh_cnonce());
+        assert_ne!(a, b);
+        assert_eq!(a.len(), 16);
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    /// Truncation on a multi-byte boundary would panic; names routinely have
+    /// non-ASCII in them.
+    #[test]
+    fn malformed_xml_does_not_panic() {
+        let _ = parse_phonebook_xml("<contact><realName>Ünfinished", 0, "Main");
+        let _ = parse_phonebook_xml("", 0, "Main");
+        let _ = parse_call_list_xml("<Call><Id>1</Id>");
+        let _ = unescape_xml("&#xZZZZ; &# ; &");
+    }
 }

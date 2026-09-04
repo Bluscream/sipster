@@ -22,6 +22,21 @@ pub use model::{
     PhoneNumber, RecordSource,
 };
 
+/// Shared HTTP agent for every provider.
+///
+/// The timeouts are the point. Without them a router or address-book server
+/// that accepts the connection and then stops responding pins a
+/// `spawn_blocking` worker forever; a few failed syncs would exhaust the
+/// blocking pool and every later sync would hang with no error anywhere.
+#[must_use]
+pub fn http_agent() -> ureq::Agent {
+    ureq::AgentBuilder::new()
+        .timeout_connect(std::time::Duration::from_secs(5))
+        .timeout_read(std::time::Duration::from_secs(20))
+        .timeout_write(std::time::Duration::from_secs(10))
+        .build()
+}
+
 /// Central manager coordinating multi-source contact and call history synchronization.
 #[derive(Debug, Clone)]
 pub struct SyncManager {

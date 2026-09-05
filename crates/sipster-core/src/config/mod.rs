@@ -1,3 +1,5 @@
+pub mod secret;
+
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -65,13 +67,15 @@ pub struct SipAccount {
     #[serde(default = "default_port")]
     pub port: u16,
     /// SIP username / internal number registered on the PBX.
+    #[serde(with = "secret")]
     pub username: String,
     /// Authentication user. Optional — defaults to `username`, which is the
     /// common case on a Fritz!Box.
-    #[serde(default)]
+    #[serde(default, with = "secret")]
     pub auth_user: String,
-    /// Account password. Never logged; see `Debug` impl below.
-    #[serde(default)]
+    /// Account password. Never logged; see `Debug` impl below, and stored
+    /// encrypted — see [`secret`].
+    #[serde(default, with = "secret")]
     pub password: String,
     #[serde(default)]
     pub transport: Transport,
@@ -385,9 +389,13 @@ pub struct BlockedNumber {
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GoogleAccountConfig {
     pub id: String,
+    #[serde(with = "secret")]
     pub email: String,
+    #[serde(with = "secret")]
     pub refresh_token: String,
+    #[serde(with = "secret::optional")]
     pub client_id: Option<String>,
+    #[serde(with = "secret::optional")]
     pub client_secret: Option<String>,
     pub enabled: bool,
 }
@@ -398,7 +406,9 @@ pub struct CardDavAccountConfig {
     pub id: String,
     pub name: String,
     pub url: String,
+    #[serde(with = "secret")]
     pub username: String,
+    #[serde(with = "secret")]
     pub password: String,
     pub enabled: bool,
 }
@@ -408,7 +418,9 @@ pub struct CardDavAccountConfig {
 pub struct FritzBoxSettings {
     pub host: String,
     pub port: u16,
+    #[serde(with = "secret")]
     pub username: String,
+    #[serde(with = "secret")]
     pub password: String,
     pub enabled: bool,
 }
@@ -628,6 +640,7 @@ impl Config {
     /// Fails if the directory cannot be created or the file cannot be written.
     pub fn save(&self, path: impl AsRef<Path>) -> Result<()> {
         let path = path.as_ref();
+        secret::use_key_beside(path);
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
@@ -661,6 +674,7 @@ impl Config {
     /// first run is not an error.
     pub fn load(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref();
+        secret::use_key_beside(path);
         match std::fs::read_to_string(path) {
             Ok(text) => toml::from_str(&text)
                 .map_err(|e| Error::Config(format!("{}: {e}", path.display()))),

@@ -385,7 +385,15 @@ impl SipEngine {
         let Some(Tracked::Active(call)) = reg.tracked.get(&id) else {
             return Err(Error::UnknownCall(id));
         };
-        call.transfer(target)
+        // Sent through the REFER builder rather than `transfer()` so a
+        // `Referred-By` can be attached. Without it a FRITZ!Box answers
+        // 429 "Provide Referrer Identity" (RFC 3892) and the transfer never
+        // reaches the other party.
+        let referred_by = format!("<sip:{}@{}>", self.account.effective_auth_user(), self.account.registrar);
+        call.as_session_handle()
+            .refer(target)
+            .with_referred_by(referred_by)
+            .send()
             .await
             .map_err(|e| Error::Sip(format!("could not transfer to {target}: {e}")))
     }

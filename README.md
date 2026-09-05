@@ -49,16 +49,18 @@ This list is deliberately limited to things that demonstrably work — see
   the call is answered.
 - **DTMF** to the far end while a call is up, from the dialpad or the keyboard
   — enough to drive a phone menu. Sent as RFC 4733 events.
-- **Hold and blind transfer**, offered only while there is a call to apply them
-  to. Transfer hands the call to whatever is in the number field.
+- **Hold and resume**, offered only while there is a call to apply them to.
+  Verified against a live call: the button flips only once the far end accepts,
+  so it cannot claim a hold that did not happen.
 - **Per-device audio selection.** Real PipeWire sinks and sources are listed
   under their own names, and switching devices re-routes a call already in
   progress. See [How device selection works](#how-device-selection-works).
 - **Several accounts at once.** Every enabled account registers, and a call is
   answered and hung up on the account it arrived on. One account failing to
   connect does not stop the others.
-- **UDP, TCP or TLS** to the registrar, per account. TLS addresses it as
-  `sips:` on port 5061.
+- **UDP, TCP or TLS** to the registrar, per account. UDP and TCP are verified
+  against a FRITZ!Box; TLS addresses the registrar as `sips:` on port 5061 but
+  is untested — see below.
 - **Call blocking**, with a per-number action and a default for new rules.
 
 ### Contacts and call history
@@ -110,22 +112,27 @@ This list is deliberately limited to things that demonstrably work — see
 
 ### Not yet
 
-Two things are still missing, named here so nobody has to discover them the
-hard way:
+Named here so nobody has to discover them the hard way:
 
-- **No attended transfer.** Transfer is blind: the call is handed over as soon
-  as the far end accepts the REFER, with no consultation call first and no way
-  back if the target does not answer.
+- **Transfer does not work.** The UI and the plumbing are there — `--transfer`,
+  `sipster://transfer/<target>` and a button during a call — but no transfer
+  has ever completed. Against a FRITZ!Box the REFER was first refused with
+  429 "Provide Referrer Identity"; adding the RFC 3892 `Referred-By` header
+  cleared that, and it now fails inside rvoip's state machine before reaching
+  the wire. The target never rings. Attended transfer does not exist at all.
 - **No Akonadi SQL store.** Akonadi address books backed by its own database —
   what an IMAP or Kolab resource writes into — are reachable only through the
   Akonadi protocol, which is a binary protocol of its own with no Rust client,
   so they are not read. The `vcarddir` and `contacts` resources, which are what
   a KDE user normally configures, are file-backed and *are* read.
 
-And one caveat about what has been tested: DTMF, hold and transfer are
-implemented and unit-tested, but have not been exercised against a live call.
-The Windows-on-ARM binary cross-compiles but has never been run — there is no
-ARM Windows machine here to run it on.
+What has and has not been tested: calls, per-device audio routing on both
+ends, hold, resume and DTMF are verified against live calls between three
+instances registered to a FRITZ!Box. Transfer is not — see above. TLS
+registration is implemented but unverified, because the FRITZ!Box tested
+against does not serve SIP-TLS; UDP and TCP are both verified. The
+Windows-on-ARM binary cross-compiles but has never been run, there being no
+ARM Windows machine here.
 
 ## Install
 

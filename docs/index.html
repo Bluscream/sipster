@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sipster - Lightweight Modern SIP Softphone</title>
+  <meta name="description" content="Sipster is a lightweight, modern Rust softphone for desktop. Place and take calls, sync contacts from Google, FRITZ!Box, CardDAV, and desktop address books.">
+  <link rel="stylesheet" href="./style.css">
+  <link rel="icon" type="image/png" href="./assets/logo.png">
+</head>
+<body>
+
+  <header>
+    <div class="nav-container">
+      <a href="./" class="brand">
+        <img src="./assets/logo.png" alt="Sipster Logo">
+        <span>Sipster</span>
+      </a>
+      <nav>
+        <a href="./" class="active">Home</a>
+        <a href="./privacy/">Privacy Policy</a>
+        <a href="./terms/">Terms of Service</a>
+        <a href="https://github.com/Bluscream/sipster" target="_blank" rel="noopener">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <img src="./assets/logo.png" alt="Sipster" class="hero-logo">
+      <h1>Sipster</h1>
+      <p class="tagline">A lightweight, modern, and privacy-focused open-source SIP softphone client for desktop.</p>
+      
+      <div class="cta-buttons">
+        <a href="https://github.com/Bluscream/sipster/releases" class="btn btn-primary" target="_blank" rel="noopener">Download Releases</a>
+        <a href="https://github.com/Bluscream/sipster" class="btn btn-secondary" target="_blank" rel="noopener">View on GitHub</a>
+      </div>
+    </section>
+
+    <section class="overview">
+      <h2>About Sipster</h2>
+      <p>
+        <strong>Sipster</strong> is a native desktop SIP client written in Rust. It lets you register with your VoIP provider or local PBX (such as an AVM Fritz!Box or any standard SIP registrar) to place and receive high-definition phone calls straight from your computer.
+      </p>
+      <p>
+        Designed for speed, low resource usage, and privacy, Sipster connects directly to your SIP servers and synchronizes contacts from sources you configure. It does not transmit your personal data, audio, or credentials to any third-party intermediary servers.
+      </p>
+    </section>
+
+    <div class="feature-grid">
+      <div class="feature-card">
+        <h3>📞 Modern SIP Calling</h3>
+        <p>Full support for inbound and outbound calls, two-way audio with PipeWire / ALSA / WASAPI device selection, early media, DTMF (RFC 4733), hold, call transfer, and custom ringtones.</p>
+      </div>
+      <div class="feature-card">
+        <h3>👥 Integrated Contacts</h3>
+        <p>Sync contacts seamlessly across multiple sources including Google Contacts, FRITZ!Box phonebook, CardDAV servers, Evolution Data Server, KDE Akonadi, and local vCard directories.</p>
+      </div>
+      <div class="feature-card">
+        <h3>🔒 Local & Private</h3>
+        <p>All authentication tokens, SIP passwords, call logs, and synced contacts are stored strictly on your local machine. No external tracking, telemetry, or third-party servers.</p>
+      </div>
+    </div>
+
+    <section class="google-integration">
+      <h2>Google Contacts Integration & Data Usage</h2>
+      <p>
+        Sipster includes optional support for importing your Google Contacts. When you choose to connect your Google account:
+      </p>
+      <ul>
+        <li><strong>OAuth Authentication:</strong> Sipster uses Google's secure OAuth 2.0 flow to request read-only access (<code>https://www.googleapis.com/auth/contacts.readonly</code>) to your contacts.</li>
+        <li><strong>Local Processing:</strong> Contact names and phone numbers are downloaded directly to your local computer to display in the dialer address book and resolve caller IDs.</li>
+        <li><strong>No Third-Party Sharing:</strong> Your Google user data is never uploaded, transferred, or sold to any external servers or third parties.</li>
+      </ul>
+      <div class="notice-box">
+        <p>
+          For complete information on how your data is handled, please review our <a href="./privacy/">Privacy Policy</a> and <a href="./terms/">Terms of Service</a>.
+        </p>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="footer-links">
+      <a href="./">Home</a>
+      <a href="./privacy/">Privacy Policy</a>
+      <a href="./terms/">Terms of Service</a>
+      <a href="https://github.com/Bluscream/sipster">GitHub Repository</a>
+    </div>
+    <p>&copy; Sipster Open Source Project. Released under the Unlicense / Open Source.</p>
+    <p>Maintained by <a href="https://github.com/Bluscream">Bluscream</a></p>
+  </footer>
+
+</body>
+</html>

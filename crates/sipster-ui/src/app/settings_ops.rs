@@ -29,6 +29,18 @@ impl SipsterApp {
         // The provider panels are always on screen now, so their text drafts
         // are seeded when the window opens rather than when a panel expands.
         self.settings.draft_fritz_port = self.config.integration.fritzbox.port.to_string();
+        self.settings.draft_google_client_id = self
+            .config
+            .integration
+            .google_client_id
+            .clone()
+            .unwrap_or_default();
+        self.settings.draft_google_client_secret = self
+            .config
+            .integration
+            .google_client_secret
+            .clone()
+            .unwrap_or_default();
         self.settings.draft_vdir_path = self
             .config
             .integration

@@ -82,8 +82,14 @@ impl SipsterApp {
                     self.import_google_client_json();
                 }
             }
-            S::GoogleClientIdChanged(v) => self.settings.draft_google_client_id = v,
-            S::GoogleClientSecretChanged(v) => self.settings.draft_google_client_secret = v,
+            S::GoogleClientIdChanged(v) => {
+                self.settings.draft_google_client_id = v;
+                self.store_google_client();
+            }
+            S::GoogleClientSecretChanged(v) => {
+                self.settings.draft_google_client_secret = v;
+                self.store_google_client();
+            }
             other => return self.on_carddav_settings(other),
         }
         Task::none()
@@ -257,6 +263,34 @@ impl SipsterApp {
     /// fields are kept, in their own `0600` config. Nothing is copied into the
     /// repository — a client secret in a public repo is a published secret,
     /// which is why none ships with Sipster.
+    /// Saves the typed client into the config, blank meaning "not set".
+    ///
+    /// Written as it is typed rather than on connect, so it survives closing
+    /// the window without signing in — it is a property of the installation,
+    /// not of the sign-in that happens to follow.
+    fn store_google_client(&mut self) {
+        let field = |value: &str| {
+            let value = value.trim();
+            (!value.is_empty()).then(|| value.to_string())
+        };
+        let integration = &mut self.config.integration;
+        integration.google_client_id = field(&self.settings.draft_google_client_id);
+        integration.google_client_secret = field(&self.settings.draft_google_client_secret);
+        self.persist();
+    }
+
+    /// The OAuth client Sipster presents to Google.
+    ///
+    /// One per installation rather than per account: it names the
+    /// application, not the person signing in.
+    fn google_client(&self) -> (Option<String>, Option<String>) {
+        let integration = &self.config.integration;
+        (
+            integration.google_client_id.clone(),
+            integration.google_client_secret.clone(),
+        )
+    }
+
     pub(super) fn import_google_client_json(&mut self) {
         let path = self.settings.draft_google_json_path.trim();
         if path.is_empty() {
@@ -337,18 +371,14 @@ impl SipsterApp {
                             id: id.clone(),
                             email: email.clone(),
                             refresh_token: refresh_token.clone(),
-                            // Stored per account: without them the refresh
-                            // token cannot be exchanged, and there are no
-                            // bundled credentials to fall back on.
-                            client_id: Some(self.settings.draft_google_client_id.trim().to_string()),
-                            client_secret: Some(
-                                self.settings.draft_google_client_secret.trim().to_string(),
-                            ),
                             enabled: true,
                         });
                         self.persist();
 
-                        // Refresh sync manager's google clients
+                        // Refresh sync manager's google clients. One client
+                        // identifies the installation, so every account uses
+                        // the same pair.
+                        let (client_id, client_secret) = self.google_client();
                         let g_clients = self
                             .config
                             .integration
@@ -360,8 +390,8 @@ impl SipsterApp {
                                     a.id.clone(),
                                     a.email.clone(),
                                     a.refresh_token.clone(),
-                                    a.client_id.clone(),
-                                    a.client_secret.clone(),
+                                    client_id.clone(),
+                                    client_secret.clone(),
                                 )
                             })
                             .collect();
@@ -377,6 +407,7 @@ impl SipsterApp {
             S::RemoveGoogleAccount(account_id) => {
                 self.config.integration.google_accounts.retain(|a| a.id != account_id);
                 self.persist();
+                let (client_id, client_secret) = self.google_client();
                 let g_clients = self
                     .config
                     .integration
@@ -388,8 +419,8 @@ impl SipsterApp {
                             a.id.clone(),
                             a.email.clone(),
                             a.refresh_token.clone(),
-                            a.client_id.clone(),
-                            a.client_secret.clone(),
+                            client_id.clone(),
+                            client_secret.clone(),
                         )
                     })
                     .collect();
@@ -419,6 +450,8 @@ pub(super) fn build_sync_manager(config: &Config) -> SyncManager {
                         cert_fingerprint: fb.cert_fingerprint.clone(),
                     }));
             }
+            let client_id = config.integration.google_client_id.clone();
+            let client_secret = config.integration.google_client_secret.clone();
             let g_clients = config
                 .integration
                 .google_accounts
@@ -429,8 +462,8 @@ pub(super) fn build_sync_manager(config: &Config) -> SyncManager {
                         a.id.clone(),
                         a.email.clone(),
                         a.refresh_token.clone(),
-                        a.client_id.clone(),
-                        a.client_secret.clone(),
+                        client_id.clone(),
+                        client_secret.clone(),
                     )
                 })
                 .collect();

@@ -53,10 +53,6 @@ pub struct GoogleAccountConfig {
     pub email: String,
     #[serde(with = "secret")]
     pub refresh_token: String,
-    #[serde(with = "secret::optional")]
-    pub client_id: Option<String>,
-    #[serde(with = "secret::optional")]
-    pub client_secret: Option<String>,
     pub enabled: bool,
 }
 
@@ -143,8 +139,6 @@ impl std::fmt::Debug for GoogleAccountConfig {
             .field("id", &self.id)
             .field("email", &self.email)
             .field("refresh_token", &redacted(&self.refresh_token))
-            .field("client_id", &self.client_id)
-            .field("client_secret", &self.client_secret.as_deref().map(redacted))
             .field("enabled", &self.enabled)
             .finish()
     }
@@ -188,6 +182,12 @@ impl std::fmt::Debug for IntegrationSettings {
         f.debug_struct("IntegrationSettings")
             .field("local_history_enabled", &self.local_history_enabled)
             .field("fritzbox", &self.fritzbox)
+            // The id identifies the application, not the user, so it is shown.
+            .field("google_client_id", &self.google_client_id)
+            .field(
+                "google_client_secret",
+                &self.google_client_secret.as_deref().map(redacted),
+            )
             .field("google_accounts", &self.google_accounts)
             .field("carddav_accounts", &self.carddav_accounts)
             .field("eds_enabled", &self.eds_enabled)
@@ -217,6 +217,17 @@ pub struct IntegrationSettings {
     pub local_history_enabled: bool,
     /// FRITZ!Box router integration.
     pub fritzbox: FritzBoxSettings,
+    /// The OAuth client Sipster identifies itself as to Google.
+    ///
+    /// One per installation, not one per account: it identifies the
+    /// application, not the person. Google calls the second value a secret,
+    /// but for an installed app it is not one — the exchange is protected by
+    /// PKCE, not by keeping this hidden. It is still stored encrypted, since
+    /// it sits in the same file as passwords that are.
+    #[serde(default, with = "secret::optional")]
+    pub google_client_id: Option<String>,
+    #[serde(default, with = "secret::optional")]
+    pub google_client_secret: Option<String>,
     /// Google Contacts accounts.
     pub google_accounts: Vec<GoogleAccountConfig>,
     /// `CardDAV` / vCard servers.
@@ -244,6 +255,8 @@ impl Default for IntegrationSettings {
         Self {
             local_history_enabled: true,
             fritzbox: FritzBoxSettings::default(),
+            google_client_id: None,
+            google_client_secret: None,
             google_accounts: Vec::new(),
             carddav_accounts: Vec::new(),
             eds_enabled: true,

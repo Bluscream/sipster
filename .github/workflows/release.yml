@@ -2,7 +2,7 @@
 #
 # NOTE: this repository does not rely on GitHub Actions for its real builds —
 # releases are produced locally in the `build-box` distrobox via
-# `scripts/build.sh`. Push triggers are therefore disabled and this workflow is
+# `tools/build.sh`. Push triggers are therefore disabled and this workflow is
 # manual-dispatch only. It is kept correct and runnable because it doubles as
 # executable documentation of the release process.
 #
@@ -10,7 +10,7 @@
 #
 # Coverage note: this workflow builds the subset GitHub has runners for
 # (linux x86_64 + aarch64, windows x86_64 + x86). The i686/armv7 Linux builds
-# and the aarch64 Windows build exist only in `scripts/build.sh`, which is why
+# and the aarch64 Windows build exist only in `tools/build.sh`, which is why
 # a real release is cut locally from the build-box.
 
 name: Release
@@ -27,7 +27,7 @@ permissions:
   contents: write
 
 jobs:
-  # The same gate as `./scripts/build.sh check`. A tag that cannot pass it
+  # The same gate as `./tools/build.sh check`. A tag that cannot pass it
   # must not become a release.
   check:
     runs-on: ubuntu-latest
@@ -68,8 +68,8 @@ jobs:
         # `appimage` is a real target in build.sh and produces
         # dist/sipster-linux-x86_64.AppImage
         run: |
-          ./scripts/build.sh x86_64-linux
-          ./scripts/build.sh appimage
+          ./tools/build.sh x86_64-linux
+          ./tools/build.sh appimage
       - uses: actions/upload-artifact@v7
         with:
           name: linux-x86_64

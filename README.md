@@ -356,22 +356,22 @@ the Fritz!Box included — accepts.
 ## Build
 
 Builds run inside the `build-box` distrobox, which carries the cross toolchains,
-`alsa`/pkg-config and the `cmake` that libopus needs. `scripts/build.sh`
+`alsa`/pkg-config and the `cmake` that libopus needs. `tools/build.sh`
 re-enters it for you, so run it from the host:
 
 ```bash
-./scripts/build.sh check           # clippy (warnings denied) + tests
-./scripts/build.sh x86_64-linux    # one target
-./scripts/build.sh appimage        # dist/sipster-linux-x86_64.AppImage
-./scripts/build.sh windows         # x86-64, x86 and ARM64
-./scripts/build.sh all             # every target, plus the AppImage
-./scripts/build.sh run             # run the AppImage without FUSE-mounting it
+./tools/build.sh check           # clippy (warnings denied) + tests
+./tools/build.sh x86_64-linux    # one target
+./tools/build.sh appimage        # dist/sipster-linux-x86_64.AppImage
+./tools/build.sh windows         # x86-64, x86 and ARM64
+./tools/build.sh all             # every target, plus the AppImage
+./tools/build.sh run             # run the AppImage without FUSE-mounting it
 ```
 
 Artifacts land in `dist/` named `sipster-{os}-{arch}.{ext}`.
 
 Note that `check` only covers the host target. It will not catch a Linux-only
-call reaching cross-platform code — run `./scripts/build.sh windows` before
+call reaching cross-platform code — run `./tools/build.sh windows` before
 tagging.
 
 While a game is running the build drops to half the cores at `nice 10` rather
@@ -393,7 +393,7 @@ Two rules matter more than the rest:
    `sipster-core`, provider logic in `sipster-integrations`, and `sipster-ui`
    is presentation only.
 
-`./scripts/build.sh check` must pass — clippy runs with warnings denied.
+`./tools/build.sh check` must pass — clippy runs with warnings denied.
 
 ## License
 

@@ -1,7 +1,7 @@
 //! Lints the translation files.
 //!
 //! A test rather than a script, so it runs with everything else under
-//! `scripts/build.sh check` and cannot be forgotten. It reads the `.yml` files
+//! `tools/build.sh check` and cannot be forgotten. It reads the `.yml` files
 //! as text: the format is one `key: "value"` per line, which this crate owns,
 //! so no YAML dependency is needed to check it.
 //!

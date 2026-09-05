@@ -6,9 +6,9 @@
 # the cross toolchains, alsa/pkg-config and cmake (for libopus). On a bare host
 # this script re-invokes itself inside that container automatically.
 #
-#   ./scripts/build.sh                # every target + AppImage
-#   ./scripts/build.sh x86_64-linux   # one target
-#   ./scripts/build.sh check          # clippy + test gate
+#   ./tools/build.sh                # every target + AppImage
+#   ./tools/build.sh x86_64-linux   # one target
+#   ./tools/build.sh check          # clippy + test gate
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

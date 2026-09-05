@@ -50,7 +50,7 @@ pub async fn attach(call: &EndpointCall, devices: &DeviceSelection) -> Result<Ca
         .map_err(|e| Error::Audio(format!("could not open audio devices: {e}")))?;
     info!("audio devices attached to call");
 
-    route_pipewire(devices).await;
+    route_pipewire(devices);
     Ok(CallAudio { _running: running })
 }
 
@@ -63,33 +63,20 @@ fn cpal_selector(id: &str) -> String {
     }
 }
 
-/// How long to keep looking for our own stream nodes before giving up.
-///
-/// They are created asynchronously once the PCM is open, so the first look
-/// usually finds nothing.
-const ROUTE_ATTEMPTS: u32 = 10;
-const ROUTE_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
-
 /// Moves the call's streams onto the selected `PipeWire` devices, if any.
-async fn route_pipewire(devices: &DeviceSelection) {
-    let capture = devices.input.as_deref().and_then(pipewire::node_name);
-    let playback = devices.output.as_deref().and_then(pipewire::node_name);
+///
+/// Spawned rather than awaited: the call already has audio on the default
+/// device, so the move is a preference, not a prerequisite. Awaiting it held
+/// up call setup by up to a second.
+fn route_pipewire(devices: &DeviceSelection) {
+    let capture = devices.input.as_deref().and_then(pipewire::node_name).map(str::to_owned);
+    let playback = devices.output.as_deref().and_then(pipewire::node_name).map(str::to_owned);
     if capture.is_none() && playback.is_none() {
         return;
     }
-
-    for _ in 0..ROUTE_ATTEMPTS {
-        tokio::time::sleep(ROUTE_INTERVAL).await;
-        if pipewire::streams_exist() {
-            break;
-        }
-    }
-    let (capture, playback) = (capture.map(str::to_owned), playback.map(str::to_owned));
-    // Two short-lived processes; keep them off the async runtime's threads.
-    let _ = tokio::task::spawn_blocking(move || {
-        pipewire::route(capture.as_deref(), playback.as_deref());
-    })
-    .await;
+    tokio::task::spawn_blocking(move || {
+        pipewire::route_when_ready(capture.as_deref(), playback.as_deref());
+    });
 }
 
 /// Which devices to use. `None` means "system default".

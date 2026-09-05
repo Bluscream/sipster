@@ -192,18 +192,6 @@ pub fn devices(direction: Direction) -> Vec<Device> {
     devices
 }
 
-/// Whether this process has any audio streams yet.
-///
-/// The stream nodes appear a moment after the PCM opens, so [`route`] has
-/// nothing to move until this is true.
-#[must_use]
-pub fn streams_exist() -> bool {
-    let nodes = dump();
-    [Direction::Capture, Direction::Playback]
-        .iter()
-        .any(|direction| our_stream(&nodes, *direction).is_some())
-}
-
 /// How the ALSA plugin names this process's streams.
 ///
 /// It builds them as `alsa_playback.<program>` / `alsa_capture.<program>`,
@@ -218,27 +206,51 @@ fn program_name() -> Option<String> {
     )
 }
 
-/// Moves this process's audio streams onto the chosen devices.
+/// Moves this process's audio streams onto the chosen devices, waiting for
+/// them to appear first.
 ///
-/// Called after the call's audio is open, because the stream nodes do not
-/// exist until then. Each is looked up by our own pid and moved with
-/// `target.object`.
+/// Blocking, and meant to be run off the async runtime: every look costs a
+/// `pw-dump`, which on a busy graph is a fat JSON document from a subprocess.
+/// An earlier version polled from inside an `async fn`, which parked a tokio
+/// worker thread on that subprocess up to ten times per call.
 ///
-/// Failure is logged, never returned: the call already has working audio on
-/// the default device, and losing the call over a routing preference would be
-/// the worse outcome.
-pub fn route(capture: Option<&str>, playback: Option<&str>) {
+/// The call already has working audio on the default device by the time this
+/// runs, so nothing here is on the critical path — failure costs the routing
+/// preference, not the call.
+pub fn route_when_ready(capture: Option<&str>, playback: Option<&str>) {
     if capture.is_none() && playback.is_none() {
         return;
     }
-    let nodes = dump();
-    if let Some(target) = capture {
-        move_stream(&nodes, Direction::Capture, target);
+
+    for attempt in 0..ROUTE_ATTEMPTS {
+        // One dump per attempt, reused for both the readiness check and the
+        // move — the two used to cost a dump each.
+        let nodes = dump();
+        let ready = [Direction::Capture, Direction::Playback]
+            .iter()
+            .any(|direction| our_stream(&nodes, *direction).is_some());
+
+        if ready {
+            if let Some(target) = capture {
+                move_stream(&nodes, Direction::Capture, target);
+            }
+            if let Some(target) = playback {
+                move_stream(&nodes, Direction::Playback, target);
+            }
+            return;
+        }
+        // Checked before sleeping, so a stream that is already up is moved at
+        // once rather than after a fixed delay.
+        if attempt + 1 < ROUTE_ATTEMPTS {
+            std::thread::sleep(ROUTE_INTERVAL);
+        }
     }
-    if let Some(target) = playback {
-        move_stream(&nodes, Direction::Playback, target);
-    }
+    tracing::warn!("no audio stream appeared to route; using the default device");
 }
+
+/// How long to wait for our stream nodes to appear, and how often to look.
+const ROUTE_ATTEMPTS: u32 = 10;
+const ROUTE_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// Points our stream for `direction` at the device named `target`.
 fn move_stream(nodes: &[Node], direction: Direction, target: &str) {

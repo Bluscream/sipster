@@ -213,12 +213,12 @@ impl SipEngine {
                 // a RegistrationChanged event, which `translate` forwards.
                 // Claiming success here showed "Registered" for an account
                 // that never authenticated.
-                info!(account = %self.account.label, "REGISTER sent");
+                info!(account = %self.account.label(), "REGISTER sent");
                 Ok(())
             }
             Err(e) => {
                 let reason = e.to_string();
-                warn!(account = %self.account.label, %reason, "registration failed");
+                warn!(account = %self.account.label(), %reason, "registration failed");
                 let _ = self.event_tx.send(CallEvent::Registration(
                     RegistrationState::Failed(reason.clone()),
                 ));
@@ -410,7 +410,7 @@ impl SipEngine {
 impl std::fmt::Debug for SipEngine {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SipEngine")
-            .field("account", &self.account.label)
+            .field("account", &self.account.label())
             .finish_non_exhaustive()
     }
 }

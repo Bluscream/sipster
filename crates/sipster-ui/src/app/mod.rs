@@ -428,12 +428,12 @@ impl SipsterApp {
                 .iter()
                 .enumerate()
                 .map(|(i, account)| {
-                    let name = account.label.trim();
-                    let name = if name.is_empty() { account.username.trim() } else { name };
-                    if name.is_empty() {
+                    // Derived from the account itself; a blank one has nothing
+                    // to derive from yet, so it is numbered until filled in.
+                    if account.registrar.trim().is_empty() {
                         format!("Account {}", i + 1)
                     } else {
-                        name.to_string()
+                        account.label()
                     }
                 })
                 .collect(),
@@ -676,7 +676,6 @@ impl SipsterApp {
         self.settings.notice = None;
 
         match msg {
-            S::Label(v) => self.settings.label = v,
             S::Registrar(v) => self.settings.registrar = v,
             S::Port(v) => self.settings.port = v,
             S::Username(v) => self.settings.username = v,
@@ -1041,10 +1040,7 @@ impl SipsterApp {
     /// Adds a blank account and switches to it.
     fn add_account(&mut self) -> Task<Message> {
         self.stash_draft();
-        self.config.accounts.push(sipster_core::SipAccount {
-            label: format!("Account {}", self.config.accounts.len() + 1),
-            ..sipster_core::SipAccount::default()
-        });
+        self.config.accounts.push(sipster_core::SipAccount::default());
         self.active_account = self.config.accounts.len() - 1;
         let account = self.config.accounts[self.active_account].clone();
         self.settings.load_account(&account);

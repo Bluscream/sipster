@@ -20,6 +20,16 @@
 //!   device. This is what a desktop volume mixer does when you drag a stream
 //!   between outputs, and the session manager honours it at runtime.
 //!
+//! Two details here were found the hard way, and both fail *silently* — the
+//! metadata is accepted and the stream simply does not move:
+//!
+//! - The value must be the target's `object.serial`, not its `node.name`.
+//!   A name is accepted and ignored.
+//! - Our own stream cannot be found by `application.process.id`: `PipeWire`
+//!   leaves that unset for ALSA-plugin clients, so every node reports no pid.
+//!   The ALSA plugin does name them `alsa_playback.<program>` and
+//!   `alsa_capture.<program>`, which is what they are matched on instead.
+//!
 //! So the call still opens the plain `pipewire` PCM through cpal, and the
 //! stream it creates is then moved onto the chosen device.
 
@@ -67,6 +77,17 @@ impl Direction {
         }
     }
 
+    /// How the ALSA plugin prefixes our stream's node name.
+    ///
+    /// Reads the opposite way round to `stream_class`: capture is an *input*
+    /// stream but the plugin calls the node `alsa_capture`.
+    fn stream_prefix(self) -> &'static str {
+        match self {
+            Self::Capture => "alsa_capture",
+            Self::Playback => "alsa_playback",
+        }
+    }
+
     /// The `media.class` our own *stream* carries for this direction.
     ///
     /// These read backwards on purpose: a stream that captures is an input to
@@ -86,6 +107,11 @@ struct Node {
     name: String,
     description: String,
     class: String,
+    /// `PipeWire`'s per-object serial. This, not the name, is what
+    /// `target.object` has to be set to.
+    serial: Option<u64>,
+    /// Unset for ALSA-plugin clients, which is every stream we create — kept
+    /// only because a native client would have it.
     pid: Option<u32>,
 }
 
@@ -140,6 +166,7 @@ fn parse_dump(json: &str) -> Vec<Node> {
                 name,
                 description,
                 class,
+                serial: props.get("object.serial").and_then(serde_json::Value::as_u64),
                 pid: props
                     .get("application.process.id")
                     .and_then(serde_json::Value::as_u64)
@@ -171,10 +198,24 @@ pub fn devices(direction: Direction) -> Vec<Device> {
 /// nothing to move until this is true.
 #[must_use]
 pub fn streams_exist() -> bool {
-    let pid = std::process::id();
-    dump()
+    let nodes = dump();
+    [Direction::Capture, Direction::Playback]
         .iter()
-        .any(|node| node.pid == Some(pid) && node.class.starts_with("Stream/"))
+        .any(|direction| our_stream(&nodes, *direction).is_some())
+}
+
+/// How the ALSA plugin names this process's streams.
+///
+/// It builds them as `alsa_playback.<program>` / `alsa_capture.<program>`,
+/// where `<program>` is the executable's file name.
+fn program_name() -> Option<String> {
+    Some(
+        std::env::current_exe()
+            .ok()?
+            .file_name()?
+            .to_string_lossy()
+            .into_owned(),
+    )
 }
 
 /// Moves this process's audio streams onto the chosen devices.
@@ -201,25 +242,49 @@ pub fn route(capture: Option<&str>, playback: Option<&str>) {
 
 /// Points our stream for `direction` at the device named `target`.
 fn move_stream(nodes: &[Node], direction: Direction, target: &str) {
-    let moved = our_stream(nodes, direction).is_some_and(|id| {
-        // `target.object` is a JSON value, so the node name arrives quoted.
-        run("pw-metadata", &[&id.to_string(), "target.object", &format!("\"{target}\"")])
-            .is_some()
-    });
-    if moved {
-        tracing::info!(target, ?direction, "moved call audio");
-    } else {
-        tracing::warn!(target, ?direction, "could not move call audio; using the default device");
+    match try_move(nodes, direction, target) {
+        Ok(serial) => tracing::info!(target, serial, ?direction, "moved call audio"),
+        Err(why) => tracing::warn!(target, ?direction, why, "could not move call audio"),
     }
 }
 
+/// The move itself, with each way it can fail named.
+fn try_move(nodes: &[Node], direction: Direction, target: &str) -> Result<u64, &'static str> {
+    let stream = our_stream(nodes, direction).ok_or("no stream of ours to move")?;
+    // The session manager matches the target by serial. Given a name it
+    // accepts the metadata and quietly leaves the stream where it was.
+    let serial = device_serial(nodes, direction, target).ok_or("no such device")?;
+
+    run("pw-metadata", &[&stream.to_string(), "target.object", &serial.to_string()])
+        .ok_or("pw-metadata failed")?;
+    Ok(serial)
+}
+
+/// The `object.serial` of the device called `target`.
+fn device_serial(nodes: &[Node], direction: Direction, target: &str) -> Option<u64> {
+    nodes
+        .iter()
+        .find(|node| {
+            node.name == target && direction.device_class().contains(&node.class.as_str())
+        })
+        .and_then(|node| node.serial)
+}
+
 /// The id of this process's stream node for `direction`.
+///
+/// Matched by name, not pid: `PipeWire` leaves `application.process.id` unset
+/// for ALSA-plugin clients, so a pid match never succeeded and every move was
+/// skipped with "no stream of ours".
 fn our_stream(nodes: &[Node], direction: Direction) -> Option<u32> {
+    let expected = program_name().map(|name| format!("{}.{name}", direction.stream_prefix()));
     let pid = std::process::id();
     let class = direction.stream_class();
     nodes
         .iter()
-        .find(|node| node.pid == Some(pid) && node.class == class)
+        .find(|node| {
+            node.class == class
+                && (node.pid == Some(pid) || expected.as_deref() == Some(node.name.as_str()))
+        })
         .map(|node| node.id)
 }
 

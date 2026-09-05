@@ -73,7 +73,6 @@ impl std::fmt::Display for DeviceChoice {
 #[derive(Debug, Clone)]
 pub enum Message {
     // Account draft (applied together).
-    Label(String),
     Registrar(String),
     Port(String),
     Username(String),
@@ -151,7 +150,6 @@ pub enum Message {
 #[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Default)]
 pub struct State {
-    pub label: String,
     pub registrar: String,
     pub port: String,
     pub username: String,
@@ -212,7 +210,6 @@ impl State {
     }
 
     pub fn load_account(&mut self, account: &SipAccount) {
-        self.label.clone_from(&account.label);
         self.registrar.clone_from(&account.registrar);
         self.port = account.port.to_string();
         self.username.clone_from(&account.username);
@@ -228,8 +225,7 @@ impl State {
     /// Whether the draft differs from `account`, so *Apply* can be disabled
     /// when there is nothing to apply.
     pub fn account_is_dirty(&self, account: &SipAccount) -> bool {
-        self.label != account.label
-            || self.registrar != account.registrar
+ self.registrar != account.registrar
             || self.port != account.port.to_string()
             || self.username != account.username
             || self.auth_user != account.auth_user
@@ -249,7 +245,6 @@ impl State {
         let expires = parse_field("Re-register interval", &self.expires)?;
 
         let account = SipAccount {
-            label: self.label.trim().to_string(),
             registrar: self.registrar.trim().to_string(),
             port,
             username: self.username.trim().to_string(),
@@ -564,7 +559,6 @@ fn account_section<'a>(
             .on_toggle(Message::AccountEnabled)
             .size(15)
             .text_size(13),
-        field("Label", hidden("Fritz!Box", &state.label, Message::Label)),
         field(
             "Registrar",
             hidden("fritz.box", &state.registrar, Message::Registrar)
@@ -785,7 +779,6 @@ mod tests {
     #[test]
     fn round_trips_an_account_through_the_form() {
         let account = SipAccount {
-            label: "Home".into(),
             registrar: "fritz.box".into(),
             port: 5070,
             username: "bob".into(),

@@ -49,26 +49,41 @@ export PKG_CONFIG_ALLOW_CROSS=1
 # one is detected the build takes half the cores and runs at a lower priority,
 # trading a slower compile for a playable machine.
 #
-# Detection is deliberately broad rather than a list of titles — anything under
-# Proton/Wine, anything Steam launched, and gamescope all count. VRChat is
-# named explicitly because it is the one that prompted this and it does not
-# always sit under a steamapps path.
+# Detection reads each process's *executable* — its comm and the target of
+# /proc/PID/exe — never its command line. `pgrep -f` was the obvious way to do
+# this and is wrong: the pattern lists game names, so the very shell running
+# `pgrep -f "VRChat|..."` matches itself, and so does any unrelated command
+# that happens to mention one. That threw a permanent false positive and
+# halved every build on an idle machine.
 #
-# Deliberately not matching `.exe`: the Windows cross build has that in its own
-# command line, so the build would throttle itself.
-#
-# This runs inside the build container, which shares the host PID namespace, so
-# host games are visible from here.
-GAME_MARKERS='VRChat|gamescope|steamapps/common|wine64-preloader|wineserver'
+# Deliberately broad about what counts: anything under Proton/Wine, anything
+# launched out of a Steam library, and gamescope.
+GAME_MARKERS='VRChat|gamescope|steamapps/common|wine64-preloader|wineserver|\.exe$'
 
 game_running() {
     [[ -n "${SIPSTER_IGNORE_GAMES:-}" ]] && return 1
-    pgrep -f "${GAME_MARKERS}" >/dev/null 2>&1
+
+    local pid exe comm
+    for pid in /proc/[0-9]*; do
+        pid="${pid#/proc/}"
+        # Our own process tree is never a game, and reading it would
+        # reintroduce the self-match this replaced.
+        [[ "${pid}" == "$$" || "${pid}" == "${PPID}" ]] && continue
+
+        comm="$(cat "/proc/${pid}/comm" 2>/dev/null)" || continue
+        exe="$(readlink "/proc/${pid}/exe" 2>/dev/null)"
+        if [[ "${comm}" =~ ${GAME_MARKERS} || "${exe}" =~ ${GAME_MARKERS} ]]; then
+            GAME_PROCESS="${comm}"
+            return 0
+        fi
+    done
+    return 1
 }
 
 # Cargo's -j and a nice level, empty when the machine is idle.
 CARGO_JOBS=()
 NICE=()
+GAME_PROCESS=""
 if game_running; then
     half=$(( $(nproc) / 2 ))
     (( half < 1 )) && half=1
@@ -79,7 +94,7 @@ fi
 # Announces the throttle once, after the output helpers are defined.
 announce_throttle() {
     if (( ${#CARGO_JOBS[@]} )); then
-        step "game detected — building on ${CARGO_JOBS[1]}/$(nproc) cores at nice 10"
+        step "${GAME_PROCESS} is running — building on ${CARGO_JOBS[1]}/$(nproc) cores at nice 10"
         echo "  (set SIPSTER_IGNORE_GAMES=1 to use the whole machine anyway)"
     fi
 }

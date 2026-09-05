@@ -473,7 +473,7 @@ fn urlencoding_simple(input: &str) -> String {
 
 #[cfg(test)]
 mod auth_cancel_tests {
-    use super::{begin_auth, cancel_pending_auth, GoogleContactsClient};
+    use super::{begin_auth, cancel_pending_auth, cancelled, GoogleContactsClient};
     use std::net::TcpListener;
 
     /// The wait runs on a `spawn_blocking` thread, and dropping a tokio
@@ -482,7 +482,7 @@ mod auth_cancel_tests {
     /// `AUTH_TIMEOUT` after `--quit`, and it had to be killed instead.
     #[test]
     fn cancelling_stops_the_wait_instead_of_running_out_the_timeout() {
-        begin_auth();
+        let generation = begin_auth();
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
 
         std::thread::spawn(|| {
@@ -491,7 +491,7 @@ mod auth_cancel_tests {
         });
 
         let started = std::time::Instant::now();
-        let result = GoogleContactsClient::wait_for_code(&listener);
+        let result = GoogleContactsClient::wait_for_code(&listener, generation);
         let waited = started.elapsed();
 
         assert!(result.is_err(), "no browser ever connected");
@@ -499,6 +499,17 @@ mod auth_cancel_tests {
             waited < std::time::Duration::from_secs(5),
             "gave up after {waited:?}, so cancellation was not observed"
         );
-        begin_auth();
+    }
+
+    /// Clicking Connect again while a flow is pending must abandon the old
+    /// one, or the second flow fights the first for the redirect port.
+    #[test]
+    fn starting_a_second_flow_invalidates_the_first() {
+        let first = begin_auth();
+        let second = begin_auth();
+
+        assert_ne!(first, second, "each flow gets its own generation");
+        assert!(cancelled(first), "the first flow is abandoned");
+        assert!(!cancelled(second), "the newest flow is the live one");
     }
 }

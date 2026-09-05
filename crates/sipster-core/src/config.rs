@@ -59,9 +59,6 @@ impl std::fmt::Display for Transport {
 /// user can copy values across without translation.
 #[derive(Clone, Serialize, Deserialize)]
 pub struct SipAccount {
-    /// Friendly label shown in the UI (e.g. "Fritz!Box Office").
-    #[serde(default = "default_label")]
-    pub label: String,
     /// Registrar host — `fritz.box`, a LAN IP, or a provider domain.
     pub registrar: String,
     /// Registrar port; 5060 for plain UDP.
@@ -91,9 +88,6 @@ pub struct SipAccount {
     pub local_port: u16,
 }
 
-fn default_label() -> String {
-    "Default Account".into()
-}
 
 fn default_port() -> u16 {
     5060
@@ -106,7 +100,6 @@ fn default_expires() -> u32 {
 impl Default for SipAccount {
     fn default() -> Self {
         Self {
-            label: default_label(),
             registrar: String::new(),
             port: default_port(),
             username: String::new(),
@@ -125,7 +118,6 @@ impl Default for SipAccount {
 impl std::fmt::Debug for SipAccount {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SipAccount")
-            .field("label", &self.label)
             .field("registrar", &self.registrar)
             .field("port", &self.port)
             .field("username", &self.username)
@@ -158,6 +150,25 @@ impl SipAccount {
         } else {
             &self.auth_user
         }
+    }
+
+    /// How the account is named in the UI.
+    ///
+    /// Derived rather than stored: a hand-typed label drifts out of date the
+    /// moment the account is edited, and every account already has a unique
+    /// natural name in the values that define it.
+    ///
+    /// `auth_user` is preferred where it is set, because that is the name the
+    /// registrar actually authenticates.
+    #[must_use]
+    pub fn label(&self) -> String {
+        format!(
+            "{}://{}@{}:{}",
+            self.transport.label().to_lowercase(),
+            self.effective_auth_user(),
+            self.registrar,
+            self.port
+        )
     }
 
     /// Builds the registrar as a SIP URI, which is what the engine requires.
@@ -661,6 +672,26 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
+    /// The label is derived so it can never disagree with the account it
+    /// names. `auth_user` wins because that is what the registrar checks.
+    #[test]
+    fn the_label_is_built_from_the_account() {
+        let mut account = super::SipAccount {
+            registrar: "fritz.box".into(),
+            port: 5060,
+            username: "bluscream".into(),
+            ..super::SipAccount::default()
+        };
+        assert_eq!(account.label(), "udp://bluscream@fritz.box:5060");
+
+        account.auth_user = "bluscream2".into();
+        assert_eq!(account.label(), "udp://bluscream2@fritz.box:5060");
+
+        account.transport = super::Transport::Tls;
+        account.port = 5061;
+        assert_eq!(account.label(), "tls://bluscream2@fritz.box:5061");
+    }
+
     /// TLS is addressed as `sips:` and defaults to 5061; the other two share
     /// `sip:` and 5060. Getting this wrong means the registrar is contacted
     /// on the wrong port with the wrong scheme.

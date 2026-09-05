@@ -410,3 +410,40 @@ pub(crate) fn register_desktop_uri_schemes() {
         });
     }
 }
+
+#[cfg(test)]
+mod locale_tests {
+    //! The locale is process-global, so these ask for one explicitly rather
+    //! than calling `set_locale` — tests run in parallel and would otherwise
+    //! race each other into whichever locale ran last.
+
+    /// The locale files use flat, dotted keys rather than nested maps. That is
+    /// only safe if the loader treats `a.b` written flat exactly as it treated
+    /// `a:` / `  b:` — so this asserts a real lookup rather than trusting it.
+    #[test]
+    fn flat_dotted_keys_resolve() {
+        assert_eq!(rust_i18n::t!("ui.call", locale = "en"), "Call");
+        // Three levels deep, which was nested twice before flattening.
+        assert_eq!(
+            rust_i18n::t!("settings.block_action.reject", locale = "en"),
+            "Reject (Instant SIP 603)"
+        );
+    }
+
+    /// Interpolation has to survive the rewrite too.
+    #[test]
+    fn placeholders_still_interpolate() {
+        assert_eq!(
+            rust_i18n::t!("registration.failed", locale = "en", error = "401"),
+            "Registration failed: 401"
+        );
+    }
+
+    /// German is a partial locale on purpose: proper nouns fall through to the
+    /// English so they are not translated into something that is not their name.
+    #[test]
+    fn german_translates_and_falls_back() {
+        assert_eq!(rust_i18n::t!("ui.call", locale = "de"), "Anrufen");
+        assert_eq!(rust_i18n::t!("settings.fritzbox", locale = "de"), "FRITZ!Box");
+    }
+}

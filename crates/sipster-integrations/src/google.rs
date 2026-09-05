@@ -12,26 +12,22 @@ use crate::model::{Contact, NumberType, PhoneNumber, RecordSource};
 const AUTH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(180);
 
 /// Set when the application is shutting down, so a pending sign-in stops
-/// waiting.
-///
-/// This is not a nicety. The wait runs on a `spawn_blocking` thread, and
-/// dropping a tokio runtime *waits* for blocking tasks to finish — so a
-/// sign-in nobody completed kept the whole process alive for the full three
-/// minutes after `--quit`, and it had to be killed instead.
-static CANCELLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// Generation counter for the current auth attempt. Incrementing this immediately
+/// invalidates and aborts any previously running `wait_for_code` loop.
+static AUTH_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-/// Asks any in-flight sign-in to give up. Call on shutdown.
+/// Asks any in-flight sign-in to give up. Call on shutdown or before starting a new flow.
 pub fn cancel_pending_auth() {
-    CANCELLED.store(true, std::sync::atomic::Ordering::Relaxed);
+    AUTH_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 }
 
-/// Clears the cancellation so a later sign-in can run.
-fn begin_auth() {
-    CANCELLED.store(false, std::sync::atomic::Ordering::Relaxed);
+/// Starts a new auth session, incrementing the generation counter to invalidate previous ones.
+fn begin_auth() -> u64 {
+    AUTH_GENERATION.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1
 }
 
-fn cancelled() -> bool {
-    CANCELLED.load(std::sync::atomic::Ordering::Relaxed)
+fn cancelled(generation: u64) -> bool {
+    AUTH_GENERATION.load(std::sync::atomic::Ordering::SeqCst) != generation
 }
 
 const FAILURE_PAGE: &str = "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nConnection: close\r\n\r\n    <!DOCTYPE html><html><body style='font-family:sans-serif;text-align:center;padding:50px;'>    <h2>Sign-in was not completed</h2><p>You can close this tab and try again in Sipster.</p>    </body></html>";
@@ -302,10 +298,26 @@ impl GoogleContactsClient {
 
         // Google desktop clients register "http://localhost" and accept any
         // port on it. Sending 127.0.0.1 instead risks redirect_uri_mismatch.
-        begin_auth();
+        // Cancel any previous in-flight flow and record this flow's generation
+        let generation = begin_auth();
         let redirect_uri = format!("http://localhost:{port}");
-        let listener = TcpListener::bind(format!("127.0.0.1:{port}"))
-            .map_err(|e| format!("could not listen on port {port}: {e}"))?;
+
+        // If an old listener was just cancelled, give it up to 1 second to release the port
+        let bind_deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        let listener = loop {
+            match TcpListener::bind(format!("127.0.0.1:{port}")) {
+                Ok(l) => break l,
+                Err(e) => {
+                    if cancelled(generation) {
+                        return Err("sign-in cancelled".into());
+                    }
+                    if std::time::Instant::now() >= bind_deadline {
+                        return Err(format!("could not listen on port {port}: {e}"));
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+            }
+        };
 
         // Open the consent page only once the listener is up, so the redirect
         // cannot arrive before anything is waiting for it.
@@ -316,7 +328,7 @@ impl GoogleContactsClient {
             ));
         }
 
-        let code = Self::wait_for_code(&listener)?;
+        let code = Self::wait_for_code(&listener, generation)?;
         let token = Self::exchange_auth_code(&code, &redirect_uri, client_id, client_secret)?;
         let refresh_token = token
             .refresh_token
@@ -326,7 +338,7 @@ impl GoogleContactsClient {
     }
 
     /// Waits for the browser redirect and extracts the authorization code.
-    fn wait_for_code(listener: &TcpListener) -> Result<String, String> {
+    fn wait_for_code(listener: &TcpListener, generation: u64) -> Result<String, String> {
         // Without a deadline this blocked forever when the user closed the tab
         // or never completed consent, pinning the worker thread for the rest of
         // the session.
@@ -339,7 +351,7 @@ impl GoogleContactsClient {
             match listener.accept() {
                 Ok(accepted) => break accepted,
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                    if cancelled() {
+                    if cancelled(generation) {
                         return Err("sign-in cancelled".into());
                     }
                     if std::time::Instant::now() >= deadline {

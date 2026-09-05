@@ -6,7 +6,9 @@
 
 use super::{expand_home, Message, SipsterApp, Task};
 use crate::{contacts, settings};
-use sipster_integrations::{CardDavClient, CardDavConfig, FritzConfig, GoogleContactsClient};
+use sipster_integrations::{
+    cancel_pending_auth, CardDavClient, CardDavConfig, FritzConfig, GoogleContactsClient,
+};
 
 impl SipsterApp {
     /// Contact/history provider configuration and call blocking.
@@ -276,6 +278,7 @@ impl SipsterApp {
         use settings::Message as S;
         match msg {
             S::ConnectGoogleAccount => {
+                cancel_pending_auth();
                 let client_id = self.settings.draft_google_client_id.trim().to_string();
                 let secret = self.settings.draft_google_client_secret.trim().to_string();
                 self.settings.notice = Some("Waiting for Google sign-in in your browser…".into());

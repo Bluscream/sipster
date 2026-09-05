@@ -59,9 +59,9 @@ mod imp {
             // Only unlink a socket that nothing is listening on.
             //
             // This used to remove it unconditionally, on the assumption that
-            // the caller holds the single-instance lock. `--no-single-instance`
-            // breaks that assumption: a second copy would unlink the running
-            // instance's socket and bind its own, so `--quit` and every other
+            // the caller holds the single-instance lock. A copy that starts
+            // without it breaks that assumption: it would unlink the running
+            // instance's socket and bind its own, so quit and every other
             // command silently went to the wrong process — and once the second
             // copy exited, the real instance was left holding the lock with a
             // socket nobody was listening on, unreachable for the rest of its

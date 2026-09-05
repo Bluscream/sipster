@@ -278,18 +278,6 @@ pub async fn try_forward(command: Option<Command>) -> Result<Option<Instance>> {
     Ok(None)
 }
 
-/// Opens the control channel at the configured address without taking the
-/// single-instance lock.
-///
-/// Only for `--no-single-instance`; normal startup goes through [`acquire`].
-///
-/// # Errors
-///
-/// Fails when the address is already claimed or cannot be created.
-pub fn bind_control_channel() -> Result<Listener> {
-    transport::bind(&socket_path())
-}
-
 /// Becomes the primary instance, or forwards `command` to the one already
 /// running.
 ///
@@ -516,10 +504,10 @@ mod tests {
 
     /// Binding must not unlink a socket something is listening on.
     ///
-    /// `--no-single-instance` used to do exactly that: the second copy stole
-    /// the primary's socket, so commands went to the wrong process, and when
-    /// that copy exited the primary was left unreachable while still holding
-    /// the single-instance lock.
+    /// A second copy starting without the lock used to do exactly that: it
+    /// stole the primary's socket, so commands went to the wrong process, and
+    /// when that copy exited the primary was left unreachable while still
+    /// holding the single-instance lock.
     #[cfg(unix)]
     #[test]
     fn binding_refuses_to_steal_a_live_socket() {

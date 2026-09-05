@@ -18,7 +18,6 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-use crate::cli;
 use crate::error::Result;
 use crate::instance::{self, Guard};
 
@@ -157,88 +156,21 @@ impl Command {
 
     /// Parses command-line arguments into a [`Command`], if any was requested.
     ///
-    /// Supports:
-    /// - `--call <TARGET>` or `-c <TARGET>`
-    /// - `--dial <TARGET>` or `-d <TARGET>`
-    /// - `--answer` or `-a`
-    /// - `--hangup`
-    /// - `--show`
-    /// - `--quit` or `-q`
-    /// - A bare `tel:`, `sip:`, `sips:`, `callto:` or `sipster:` URI
+    /// The only argument that carries a command is a URI: `tel:`, `sip:`,
+    /// `sips:`, `callto:` or `sipster:`. There are no command flags.
+    ///
+    /// There used to be a flag for every action — `--call`, `--hangup`,
+    /// `--transfer` and the rest — duplicating the URI scheme exactly. A URI
+    /// works whether or not the desktop has registered the handler, because
+    /// argv is argv, so the flags earned nothing and doubled the surface that
+    /// had to agree with itself.
     pub fn from_args<I, T>(args: I) -> Option<Self>
     where
         I: IntoIterator<Item = T>,
         T: AsRef<str>,
     {
-        let mut iter = args.into_iter();
-        while let Some(arg) = iter.next() {
-            let arg_ref = arg.as_ref();
-            match arg_ref {
-                "--call" | "-c" => {
-                    if let Some(target) = iter.next() {
-                        let t = target.as_ref().trim();
-                        if !t.is_empty() {
-                            return Some(Self::Call {
-                                target: t.to_string(),
-                            });
-                        }
-                    }
-                }
-                "--dial" | "-d" => {
-                    if let Some(target) = iter.next() {
-                        let t = target.as_ref().trim();
-                        if !t.is_empty() {
-                            return Some(Self::Dial {
-                                target: t.to_string(),
-                            });
-                        }
-                    }
-                }
-                "--answer" | "-a" => return Some(Self::Answer),
-                "--hangup" => return Some(Self::Hangup),
-                "--hold" => return Some(Self::SetHold { hold: true }),
-                "--resume" => return Some(Self::SetHold { hold: false }),
-                "--transfer" => {
-                    if let Some(target) = iter.next() {
-                        let t = target.as_ref().trim();
-                        if !t.is_empty() {
-                            return Some(Self::Transfer { target: t.to_string() });
-                        }
-                    }
-                }
-                "--dtmf" => {
-                    if let Some(digits) = iter.next() {
-                        if let Some(digit) = digits.as_ref().trim().chars().next() {
-                            return Some(Self::Dtmf { digit });
-                        }
-                    }
-                }
-                "--show" => return Some(Self::Show),
-                "--quit" | "-q" => return Some(Self::Quit),
-                _ if arg_ref.starts_with("--call=") => {
-                    let target = arg_ref.trim_start_matches("--call=").trim();
-                    if !target.is_empty() {
-                        return Some(Self::Call {
-                            target: target.to_string(),
-                        });
-                    }
-                }
-                _ if arg_ref.starts_with("--dial=") => {
-                    let target = arg_ref.trim_start_matches("--dial=").trim();
-                    if !target.is_empty() {
-                        return Some(Self::Dial {
-                            target: target.to_string(),
-                        });
-                    }
-                }
-                _ => {
-                    if let Some(cmd) = Self::from_uri(arg_ref) {
-                        return Some(cmd);
-                    }
-                }
-            }
-        }
-        None
+        args.into_iter()
+            .find_map(|arg| Self::from_uri(arg.as_ref()))
     }
 }
 
@@ -267,8 +199,25 @@ fn percent_decode(input: &str) -> String {
 /// cleared on logout, so a stale socket cannot outlive the session. On Windows
 /// a named pipe. See [`transport`] for the details.
 pub fn socket_path() -> PathBuf {
-    let args: Vec<String> = std::env::args().skip(1).collect();
-    socket_path_from(&args, configured_socket())
+    socket_path_from(configured_socket())
+}
+
+/// The config file this process is using, published once at startup.
+///
+/// Both the instance lock and the default socket are named after it, so a
+/// second config is a second instance.
+static CONFIG_PATH: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+
+/// Publishes the config path. Call once, at startup, before [`acquire`].
+pub fn set_config_path(path: PathBuf) {
+    let _ = CONFIG_PATH.set(path);
+}
+
+fn config_path() -> PathBuf {
+    CONFIG_PATH
+        .get()
+        .cloned()
+        .unwrap_or_else(crate::Config::path)
 }
 
 /// A socket path from the config file, published once at startup.
@@ -287,21 +236,19 @@ fn configured_socket() -> Option<PathBuf> {
     CONFIGURED.get().cloned().flatten()
 }
 
-/// The testable core of [`socket_path`], with argv and the configured value
-/// injected. Precedence is explicit flag, then config file, then the default
-/// under `XDG_RUNTIME_DIR`.
-pub fn socket_path_from<S: AsRef<str>>(args: &[S], configured: Option<PathBuf>) -> PathBuf {
-    const SOCKET_FLAGS: [&str; 3] = ["--socket", "--target-socket", "-s"];
-
-    if let Some(path) = cli::flag_value(args, &SOCKET_FLAGS) {
-        return PathBuf::from(path);
-    }
+/// The testable core of [`socket_path`], with the configured value injected.
+///
+/// Either the config file says where the socket is, or it is derived from the
+/// config's own path. There is no flag: the config file is the only source of
+/// configuration, and a second copy already gets its own socket by virtue of
+/// having its own config.
+pub fn socket_path_from(configured: Option<PathBuf>) -> PathBuf {
     if let Some(path) = configured {
         return path;
     }
     // XDG_RUNTIME_DIR is a platform directory convention, not Sipster
     // configuration — it says where per-user runtime state belongs.
-    transport::default_path(std::env::var("XDG_RUNTIME_DIR").ok())
+    transport::default_path(std::env::var("XDG_RUNTIME_DIR").ok(), &config_path())
 }
 
 /// Outcome of trying to become the single running instance.
@@ -353,7 +300,7 @@ pub async fn acquire(command: Option<Command>) -> Result<Instance> {
 
     // The kernel advisory lock is the source of truth for who is primary; the
     // socket is only how commands reach them.
-    let Some(lock) = instance::claim()? else {
+    let Some(lock) = instance::claim(&config_path())? else {
         return forward_to_primary(command).await;
     };
 
@@ -540,17 +487,9 @@ mod tests {
     }
 
     #[test]
-    fn the_socket_flag_wins() {
+    fn the_configured_socket_is_used_when_there_is_one() {
         assert_eq!(
-            socket_path_from(&["--socket", "/from/flag.sock"], Some("/from/config.sock".into())),
-            PathBuf::from("/from/flag.sock")
-        );
-    }
-
-    #[test]
-    fn the_configured_socket_is_used_when_there_is_no_flag() {
-        assert_eq!(
-            socket_path_from::<&str>(&[], Some("/from/config.sock".into())),
+            socket_path_from(Some("/from/config.sock".into())),
             PathBuf::from("/from/config.sock")
         );
     }
@@ -559,9 +498,20 @@ mod tests {
     /// somewhere absolute and per-user, not in the working directory.
     #[test]
     fn falls_back_to_a_runtime_directory() {
-        let path = socket_path_from::<&str>(&[], None);
+        let path = socket_path_from(None);
         assert!(path.is_absolute(), "socket path must be absolute: {}", path.display());
-        assert_eq!(path.file_name().unwrap(), "sipster.sock");
+        let name = path.file_name().unwrap().to_string_lossy();
+        assert!(name.starts_with("sipster-"), "{name}");
+        assert!(name.ends_with(".sock"), "{name}");
+    }
+
+    /// A unix socket address is limited to about 108 bytes, and the default
+    /// name now carries a digest, so it must stay comfortably short.
+    #[test]
+    fn the_default_socket_name_is_short() {
+        let path = socket_path_from(None);
+        let name = path.file_name().unwrap().to_string_lossy();
+        assert!(name.len() < 40, "{name} is {} bytes", name.len());
     }
 
     /// Binding must not unlink a socket something is listening on.
@@ -601,40 +551,49 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// Argv carries commands only as URIs now. The action flags are gone:
+    /// they duplicated the URI scheme exactly, and a URI works whether or not
+    /// the desktop has registered the handler.
     #[test]
-    fn parses_cli_arguments() {
+    fn a_uri_argument_is_the_command() {
         assert_eq!(
-            Command::from_args(["--call", "611"]),
-            Some(Command::Call { target: "611".into() })
-        );
-        assert_eq!(
-            Command::from_args(["--call=**611"]),
+            Command::from_args(["sipster://call/**611"]),
             Some(Command::Call { target: "**611".into() })
         );
-        assert_eq!(
-            Command::from_args(["-c", "123"]),
-            Some(Command::Call { target: "123".into() })
-        );
-        assert_eq!(
-            Command::from_args(["--dial", "611"]),
-            Some(Command::Dial { target: "611".into() })
-        );
-        assert_eq!(
-            Command::from_args(["--dial=**611"]),
-            Some(Command::Dial { target: "**611".into() })
-        );
-        assert_eq!(
-            Command::from_args(["-d", "123"]),
-            Some(Command::Dial { target: "123".into() })
-        );
-        assert_eq!(Command::from_args(["--answer"]), Some(Command::Answer));
-        assert_eq!(Command::from_args(["--hangup"]), Some(Command::Hangup));
-        assert_eq!(Command::from_args(["--show"]), Some(Command::Show));
-        assert_eq!(Command::from_args(["--quit"]), Some(Command::Quit));
+        assert_eq!(Command::from_args(["sipster://answer"]), Some(Command::Answer));
+        assert_eq!(Command::from_args(["sipster://hangup"]), Some(Command::Hangup));
+        assert_eq!(Command::from_args(["sipster://quit"]), Some(Command::Quit));
         assert_eq!(
             Command::from_args(["tel:611"]),
             Some(Command::Dial { target: "611".into() })
         );
-        assert_eq!(Command::from_args(["--unknown"]), None);
+    }
+
+    /// The removed flags must read as "no command", not be mistaken for a
+    /// target — `--call 611` should do nothing rather than dial "--call".
+    #[test]
+    fn the_removed_flags_are_not_commands() {
+        for args in [
+            vec!["--call", "611"],
+            vec!["-c", "611"],
+            vec!["--dial", "611"],
+            vec!["--answer"],
+            vec!["--hangup"],
+            vec!["--show"],
+            vec!["--quit"],
+            vec!["--unknown"],
+        ] {
+            assert_eq!(Command::from_args(&args), None, "{args:?}");
+        }
+    }
+
+    /// The config flag must never be read as a command, or naming a config
+    /// would dial its path.
+    #[test]
+    fn the_config_flag_is_not_a_command() {
+        assert_eq!(
+            Command::from_args(["--config-file", "/home/me/.config/sipster/work.toml"]),
+            None
+        );
     }
 }

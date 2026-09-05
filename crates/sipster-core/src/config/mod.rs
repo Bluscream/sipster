@@ -610,6 +610,56 @@ pub struct IpcSettings {
     pub socket: Option<std::path::PathBuf>,
 }
 
+/// Where and how much Sipster logs.
+///
+/// In the config rather than on the command line or in the environment: the
+/// config file is the only source of configuration, so a log setting survives
+/// however Sipster was started — from a desktop icon, a URI handler, or a
+/// terminal.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogSettings {
+    /// Append logs to this file as well as the console. `None` for console
+    /// only.
+    ///
+    /// Both, never either: writing only to a file means anyone running Sipster
+    /// from a terminal sees nothing, including the messages explaining why
+    /// something did not work.
+    #[serde(default)]
+    pub file: Option<std::path::PathBuf>,
+    /// A `tracing` filter, in the same syntax `RUST_LOG` used to take, for
+    /// example `info,sipster_core=trace`.
+    #[serde(default = "default_log_filter")]
+    pub filter: String,
+}
+
+/// The default log filter.
+///
+/// Two upstream crates are muted to `warn`, and neither is a matter of taste:
+///
+/// - `iced_winit` logs the window attributes at INFO, and those attributes
+///   embed the 256x256 window icon, which the pretty-printer renders as one
+///   line per byte — a 5 MB, 262,000-line log on every single startup.
+/// - `rvoip_media_core` logs four INFO lines per RTP packet, so a call emitted
+///   ~255 lines per second, roughly 2 MB for thirty seconds of talking.
+///
+/// Both drowned the SIP signalling that a bug report actually needs. `warn`
+/// still surfaces genuine problems from either.
+pub fn default_log_filter() -> String {
+    "info,sipster_core=debug,\
+     iced_winit=warn,iced_wgpu=warn,wgpu_core=warn,wgpu_hal=warn,naga=warn,\
+     rvoip_media_core=warn"
+        .to_string()
+}
+
+impl Default for LogSettings {
+    fn default() -> Self {
+        Self {
+            file: None,
+            filter: default_log_filter(),
+        }
+    }
+}
+
 /// Top-level config. One account per file; the UI edits this.
 ///
 /// One account rather than a list: a softphone registers one line, and every
@@ -634,6 +684,8 @@ pub struct Config {
     pub audio: AudioSettings,
     #[serde(default)]
     pub ipc: IpcSettings,
+    #[serde(default)]
+    pub log: LogSettings,
     #[serde(default)]
     pub integration: IntegrationSettings,
 }

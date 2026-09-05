@@ -54,23 +54,6 @@ static TRAY: OnceLock<std::sync::Mutex<Option<tray::Handle>>> = OnceLock::new();
 /// subscription with nothing to read.
 static TRAY_REQUESTS: OnceLock<std::sync::Mutex<Option<tray::Requests>>> = OnceLock::new();
 
-/// Default log filter, used when `RUST_LOG` is unset.
-///
-/// Two upstream crates are muted to `warn`, and neither is a matter of taste:
-///
-/// - `iced_winit` logs the window attributes at INFO, and those attributes
-///   embed the 256×256 window icon, which the pretty-printer renders as one
-///   line per byte — a 5 MB, 262,000-line log on every single startup.
-/// - `rvoip_media_core` logs four INFO lines per RTP packet, so a call emitted
-///   ~255 lines per second, roughly 2 MB for thirty seconds of talking.
-///
-/// Both drowned the SIP signalling that a bug report actually needs. `warn`
-/// still surfaces genuine problems from either. `RUST_LOG` overrides all of
-/// this, e.g. `RUST_LOG=rvoip_media_core=debug` when chasing an audio fault.
-const DEFAULT_LOG_FILTER: &str = "info,sipster_core=debug,\
-     iced_winit=warn,iced_wgpu=warn,wgpu_core=warn,wgpu_hal=warn,naga=warn,\
-     rvoip_media_core=warn";
-
 /// Desktop application id. Must stay in sync with `packaging/sipster.desktop`
 /// — both its filename and its `StartupWMClass` — for the icon to resolve.
 ///
@@ -100,20 +83,38 @@ Options:
       --config-file <PATH>
                           Config file to use
                           (default: $XDG_CONFIG_HOME/sipster/sipster.toml)
-      --log-file <PATH>   Append logs to PATH instead of stderr
-  -s, --socket <PATH>     Control socket to use, overriding the config file
-                          (default: $XDG_RUNTIME_DIR/sipster.sock)
-      --no-single-instance
-                          Start even if another copy is running. Intended for
-                          development; both copies will contend for SIP ports.
   -h, --help              Show this help
   -V, --version           Show the version
 
-Everything is configured in the settings window, which writes the config file.
-That file is the only source of configuration — there are no environment
-variables to set. On first run the settings window opens by itself.
+Everything else is configured in the settings window, which writes the config
+file. That file is the only source of configuration: there are no environment
+variables and no other flags. On first run the settings window opens by itself.
 
-Log verbosity follows RUST_LOG, e.g. RUST_LOG=sipster_core=trace.
+Actions are URIs, and they work whether or not the desktop has registered the
+handler:
+
+  sipster sipster://call/611      place a call
+  sipster sipster://dial/611      fill the dial box
+  sipster sipster://answer        answer the ringing call
+  sipster sipster://hangup        end the current call
+  sipster sipster://hold          hold, and sipster://resume to resume
+  sipster sipster://transfer/623  transfer the current call
+  sipster sipster://dtmf/5        send one DTMF digit
+  sipster sipster://settings      open settings (also contacts, history)
+  sipster sipster://show          focus the dialer
+  sipster sipster://quit          quit the running copy
+
+`tel:`, `sip:`, `sips:` and `callto:` URIs fill the dial box.
+
+Run a second line by giving a second copy its own config:
+
+  sipster --config-file ~/.config/sipster/work.toml
+
+Each config is its own instance, with its own control socket, window and tray
+icon. Address one of them by passing the same --config-file alongside the URI.
+
+Logging is configured under [log] in the config file: `file` to also append to
+a file, and `filter` for verbosity (the syntax RUST_LOG used to take).
 ";
 
 /// Entry point for Sipster.
@@ -133,19 +134,28 @@ pub fn main() -> iced::Result {
         return Ok(());
     }
 
-    init_logging(cli::flag_value(&args, &["--log-file"]));
-
     // Resolve and read the config before Iced starts: the dialer and the
     // engine bridge both need it, and neither can take arguments.
+    //
+    // Before logging, too, because logging is configured in the file. A
+    // failure to read it therefore has only stderr to report to, which is why
+    // it prints as well as logs.
     let config_path = sipster_core::Config::path_from(&args);
+    let load_error = std::cell::RefCell::new(None);
     let config = sipster_core::Config::load(&config_path).unwrap_or_else(|e| {
         // A broken file must not stop the app; start on defaults and let the
-        // settings window fix it. Logged as an error as well as printed —
-        // silently running on defaults looks like the config was ignored.
-        tracing::error!(path = %config_path.display(), error = %e, "could not read the config");
+        // settings window fix it. Reported once logging exists, and printed
+        // now — silently running on defaults looks like the config was
+        // ignored.
         eprintln!("sipster: {}: {e}", config_path.display());
+        *load_error.borrow_mut() = Some(e.to_string());
         sipster_core::Config::default()
     });
+
+    init_logging(&config.log);
+    if let Some(error) = load_error.into_inner() {
+        tracing::error!(path = %config_path.display(), %error, "could not read the config");
+    }
     tracing::info!(
         path = %config_path.display(),
         first_run = config.needs_setup(),
@@ -154,6 +164,10 @@ pub fn main() -> iced::Result {
     // The control socket may be named in the config; publish it before
     // anything tries to resolve it.
     ipc::set_configured_socket(config.ipc.socket.clone());
+    // The instance lock and the default control socket are both named after
+    // the config, so a second config is a second instance — no environment
+    // overrides, which is what previously broke the Wayland connection.
+    ipc::set_config_path(config_path.clone());
     let _ = CONFIG.set((config_path, config));
 
     if let Some(early_exit) = claim_instance(&args) {
@@ -246,28 +260,6 @@ pub(crate) fn calls_window_settings() -> iced::window::Settings {
 /// `Some(..)` means the GUI must not start — the command was forwarded to the
 /// running copy, or the claim failed. Both are ordinary outcomes, not errors.
 fn claim_instance(args: &[String]) -> Option<iced::Result> {
-    if cli::has_flag(args, &["--no-single-instance"]) {
-        // Development mode: still open the control channel so the instance can
-        // be driven over IPC, but do not take the single-instance lock. If the
-        // channel is already claimed by a real primary, carry on without one.
-        match ipc::bind_control_channel() {
-            Ok(listener) => store_primary_state(PrimaryState {
-                listener,
-                initial_command: Command::from_args(args),
-            }),
-            // Expected when a real instance already owns the socket: this
-            // copy simply runs without remote control rather than stealing it.
-            // Logged as well as printed — with `--log-file` the stderr copy
-            // goes nowhere, and this is exactly the message someone debugging
-            // "why is --call doing nothing" needs to see.
-            Err(e) => {
-                tracing::warn!(error = %e, "running without a control channel");
-                eprintln!("sipster: running without a control channel ({e})");
-            }
-        }
-        return None;
-    }
-
     // No action requested → ask the running copy (if any) to show itself.
     let command = Command::from_args(args).or(Some(Command::Show));
 
@@ -295,31 +287,38 @@ fn store_primary_state(state: PrimaryState) {
     PRIMARY_STATE.set(std::sync::Mutex::new(Some(state))).ok();
 }
 
-/// Installs the tracing subscriber, writing to `path` when one was given.
+/// Installs the tracing subscriber from the config's `[log]` section.
 ///
-/// A log file that cannot be opened falls back to stderr rather than starting
-/// the app with logging silently switched off.
-fn init_logging(path: Option<&str>) {
+/// A log file that cannot be opened falls back to the console rather than
+/// starting the app with logging silently switched off.
+fn init_logging(settings: &sipster_core::LogSettings) {
     use tracing_subscriber::layer::SubscriberExt as _;
     use tracing_subscriber::util::SubscriberInitExt as _;
 
-    let filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| DEFAULT_LOG_FILTER.into());
+    let filter = tracing_subscriber::EnvFilter::try_new(&settings.filter).unwrap_or_else(|e| {
+        eprintln!("sipster: log filter {:?} is not valid: {e}", settings.filter);
+        tracing_subscriber::EnvFilter::new(sipster_core::default_log_filter())
+    });
 
-    let file = path.and_then(|path| {
+    let file = settings.file.as_ref().and_then(|path| {
         std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(path)
-            .map_err(|e| eprintln!("sipster: cannot write to {path}: {e}; logging to stderr only"))
+            .map_err(|e| {
+                eprintln!(
+                    "sipster: cannot write to {}: {e}; logging to the console only",
+                    path.display()
+                );
+            })
             .ok()
     });
 
-    // Both, not either. `--log-file` used to redirect logging *away* from the
-    // console, so anyone running Sipster from a terminal with a log file saw
-    // nothing at all — including the messages that explain why something did
-    // not work. The file is a record; the console is what someone watching
-    // the run actually reads.
+    // Both, not either. A log file used to redirect logging *away* from the
+    // console, so anyone running Sipster from a terminal with one configured
+    // saw nothing at all — including the messages that explain why something
+    // did not work. The file is a record; the console is what someone
+    // watching the run actually reads.
     let console = tracing_subscriber::fmt::layer().with_writer(std::io::stderr);
     let to_file = file.map(|file| {
         tracing_subscriber::fmt::layer()

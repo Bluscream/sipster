@@ -106,8 +106,8 @@ This list is deliberately limited to things that demonstrably work — see
 - **Single instance**, enforced by a kernel file lock. A second launch hands
   its request to the copy already running instead of fighting it for SIP
   port 5060.
-- **Remote control and URI handling.** `sipster --call 611`, a `tel:` link
-  clicked in a browser, and a shell script all take the same path.
+- **Remote control and URI handling.** `sipster sipster://call/611`, a `tel:`
+  link clicked in a browser, and a shell script all take the same path.
 - **AppImage** packaging for x86-64 Linux, plus plain binaries for Linux
   aarch64/i686/armv7 and Windows x86-64/x86/ARM64.
 
@@ -115,7 +115,7 @@ This list is deliberately limited to things that demonstrably work — see
 
 Named here so nobody has to discover them the hard way:
 
-- **Transfer does not work.** The UI and the plumbing are there — `--transfer`,
+- **Transfer does not work.** The UI and the plumbing are there —
   `sipster://transfer/<target>` and a button during a call — but no transfer
   has ever completed. Against a FRITZ!Box the REFER was first refused with
   429 "Provide Referrer Identity"; adding the RFC 3892 `Referred-By` header
@@ -189,8 +189,8 @@ copy values across without translating them. In particular, **Username** is the
 sipster --config-file ~/work-phone.toml   # a second account, side by side
 ```
 
-Pair that with `--socket` and `--no-single-instance` to run two independently
-configured instances at once.
+Each config is its own instance, with its own control socket, window and tray
+icon — no other flags or environment variables are involved.
 
 <details>
 <summary><b>What the file looks like</b></summary>
@@ -246,7 +246,11 @@ username = "…"          # a router admin login, not the SIP account
 password = "…"
 
 [ipc]
-socket = "…"            # omit for $XDG_RUNTIME_DIR/sipster.sock
+socket = "…"            # omit to derive one from this config's path
+
+[log]
+file   = "…"            # omit for console only; the console is always used
+filter = "info,sipster_core=debug"   # the syntax RUST_LOG used to take
 ```
 
 A config written for an older version, with one or more `[[accounts]]` tables,
@@ -258,43 +262,50 @@ config, leave one account in each, and run a second copy with `--config`.
 
 ## Use
 
-Sipster runs as a single instance, so its flags double as a remote control: run
-it again with a flag and the request is handed to the copy already running.
+Sipster runs one instance per config, so running it again doubles as a remote
+control: the request is handed to the copy already running. Every action is a
+URI, and a URI works whether or not your desktop has registered the handler —
+so there is one way to do this, not two.
 
 ```bash
-sipster                      # start, or bring the running window back
-sipster --call '**610'       # dial from a script or a hotkey
-sipster --dial '**610'       # pre-fill the dial box without calling
-sipster tel:+4930123456      # what a tel: link from your browser does
-sipster --answer             # answer the ringing call
-sipster --hangup             # hang up, or decline
-sipster --show               # raise and focus the window
-sipster --quit
-sipster --help
-
-sipster --config-file ~/other.toml   # use a different config
-sipster --log-file /tmp/sipster.log  # log to a file instead of stderr
+sipster                            # start, or bring the running window back
+sipster sipster://call/**610       # dial from a script or a hotkey
+sipster sipster://dial/**610       # pre-fill the dial box without calling
+sipster tel:+4930123456            # what a tel: link from your browser does
+sipster sipster://answer           # answer the ringing call
+sipster sipster://hangup           # hang up, or decline
+sipster sipster://hold             # also: resume
+sipster sipster://transfer/**623
+sipster sipster://dtmf/5
+sipster sipster://settings         # also: contacts, history
+sipster sipster://show             # raise and focus the window
+sipster sipster://quit
 ```
 
-The `sipster:` scheme reaches the same actions, which is handy from a launcher
-or a desktop shortcut:
+The only flags are `--config-file <path>`, `--help` and `--version`. To address
+a particular copy, pass its config alongside the URI:
 
 ```bash
-sipster sipster://open/contacts   # also: open/settings, open/history
-sipster sipster://show            # also: answer, hangup, quit
+sipster --config-file ~/work-phone.toml sipster://hangup
 ```
 
-Sipster reads no environment variables of its own. It does honour the platform
-conventions that tell any Linux program where to put things — `XDG_CONFIG_HOME`,
-`XDG_RUNTIME_DIR`, `HOME` — and `RUST_LOG`, which is a debugging switch rather
-than configuration.
+Sipster reads no environment variables of its own — not even `RUST_LOG`.
+Logging lives under `[log]` in the config file. It does honour the platform
+conventions that tell any Linux program where to put things: `XDG_CONFIG_HOME`,
+`XDG_RUNTIME_DIR` and `HOME`.
 
 Register Sipster as your desktop's handler for `tel:`, `sip:` and `callto:`
 links by turning on **Register URI schemes** in Settings, or by installing
 `packaging/sipster.desktop` into `~/.local/share/applications/` yourself.
 
-For detail while debugging, set `RUST_LOG`, e.g. `RUST_LOG=sipster_core=trace`.
-`--log-file <path>` sends logs to a file instead of stderr.
+For detail while debugging, set the filter in the config; the file is written
+in addition to the console, never instead of it:
+
+```toml
+[log]
+file   = "/tmp/sipster.log"
+filter = "info,sipster_core=trace"
+```
 
 ## How device selection works
 

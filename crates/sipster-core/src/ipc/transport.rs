@@ -25,17 +25,23 @@ use crate::error::Result;
 
 /// Default control-channel address for the current user.
 #[cfg(unix)]
-pub(super) fn default_path(runtime_dir: Option<String>) -> PathBuf {
+pub(super) fn default_path(runtime_dir: Option<String>, config: &Path) -> PathBuf {
     let dir = runtime_dir.map_or_else(std::env::temp_dir, PathBuf::from);
-    dir.join("sipster.sock")
+    // Named after the config, so a second config gets its own control socket
+    // rather than colliding with the first. Kept short: a unix socket path is
+    // limited to about 108 bytes.
+    dir.join(format!("sipster-{}.sock", crate::instance::key_for(config)))
 }
 
 /// Named pipes live in a flat global namespace, so the user name is part of the
 /// address — otherwise two users on one machine would collide.
 #[cfg(windows)]
-pub(super) fn default_path(_runtime_dir: Option<String>) -> PathBuf {
+pub(super) fn default_path(_runtime_dir: Option<String>, config: &Path) -> PathBuf {
     let user = std::env::var("USERNAME").unwrap_or_else(|_| "default".into());
-    PathBuf::from(format!(r"\\.\pipe\sipster-{user}"))
+    PathBuf::from(format!(
+        r"\\.\pipe\sipster-{user}-{}",
+        crate::instance::key_for(config)
+    ))
 }
 
 // ── unix ─────────────────────────────────────────────────────────────────────

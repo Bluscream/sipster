@@ -192,6 +192,12 @@ done
 exec /usr/bin/clang "${args[@]}"
 SHIM
             chmod +x "${shim}/clang"
+            # cargo-xwin caches a clang-cl symlink pointing into the shim
+            # directory of whichever run created it. That directory is a
+            # tempdir and is gone by the next build, leaving a dangling link
+            # that it then refuses to replace ("File exists"). Clearing it
+            # costs nothing — it is recreated on demand.
+            rm -f "${HOME}/.cache/cargo-xwin/clang-cl"
             PATH="${shim}:${PATH}" \
                 "${NICE[@]}" cargo xwin build --release -p sipster-ui "${CARGO_JOBS[@]}" --target "${target}"
             local status=$?

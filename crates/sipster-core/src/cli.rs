@@ -21,7 +21,10 @@ pub fn flag_value<'a, S: AsRef<str>>(args: &'a [S], names: &[&str]) -> Option<&'
         if names.contains(&arg) {
             if let Some(value) = iter.next() {
                 let value = value.as_ref().trim();
-                if !value.is_empty() {
+                // A following flag is a missing value, not the value itself.
+                // `--log-file --show` used to log to a file called "--show"
+                // and silently swallow the flag.
+                if !value.is_empty() && !value.starts_with("--") {
                     return Some(value);
                 }
             }
@@ -67,6 +70,14 @@ mod tests {
         assert_eq!(flag_value(&["--log-file"], &["--log-file"]), None);
         assert_eq!(flag_value(&["--log-file", "  "], &["--log-file"]), None);
         assert_eq!(flag_value(&["--log-file="], &["--log-file"]), None);
+    }
+
+    /// `--log-file --show` is a missing value followed by a flag, not a file
+    /// called "--show" — and the swallowed `--show` never took effect.
+    #[test]
+    fn a_following_flag_is_not_taken_as_the_value() {
+        assert_eq!(flag_value(&["--log-file", "--show"], &["--log-file"]), None);
+        assert!(has_flag(&["--log-file", "--show"], &["--show"]));
     }
 
     #[test]

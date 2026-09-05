@@ -648,9 +648,12 @@ impl Config {
         let text = toml::to_string_pretty(self)
             .map_err(|e| Error::Config(format!("could not encode config: {e}")))?;
 
+        // Created 0600 rather than written and then chmod'ed: the old order
+        // left a window where the file existed with whatever the umask
+        // allowed. The contents are encrypted now, so that window leaked only
+        // ciphertext, but there is no reason to leave it open.
         let temp = path.with_extension("toml.tmp");
-        std::fs::write(&temp, text)?;
-        restrict_permissions(&temp)?;
+        write_private(&temp, text.as_bytes())?;
         std::fs::rename(&temp, path)?;
         Ok(())
     }
@@ -658,16 +661,29 @@ impl Config {
 
 /// Makes the config readable only by its owner. No-op off Unix.
 #[cfg(unix)]
-fn restrict_permissions(path: &Path) -> Result<()> {
-    use std::os::unix::fs::PermissionsExt;
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-    Ok(())
+/// Writes `bytes` to `path`, readable only by this user from the moment it
+/// exists.
+fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
+    #[cfg(unix)]
+    {
+        use std::io::Write as _;
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(bytes)?;
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        std::fs::write(path, bytes)?;
+        Ok(())
+    }
 }
 
-#[cfg(not(unix))]
-fn restrict_permissions(_path: &Path) -> Result<()> {
-    Ok(())
-}
 
 impl Config {
     /// Loads config from a TOML file. Missing file yields an empty config so

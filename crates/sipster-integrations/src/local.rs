@@ -87,25 +87,11 @@ impl LocalStore {
     }
 
     /// Loads all recorded local call records.
-    ///
-    /// Repairs records written before `remote_number` held a number: earlier
-    /// versions stored the whole `From` header, tag and all, so history read
-    /// as `"Alice" <sip:611@fritz.box>;tag=179BED3B…`. Repairing on read fixes
-    /// existing files without a migration step, and the next write persists it.
     pub fn load_calls(&self) -> Result<Vec<CallRecord>, LocalStoreError> {
         let Some(path) = self.history_path() else {
             return Ok(Vec::new());
         };
-        let mut calls = read_json::<HistoryPayload>(&path)?.calls;
-        for call in &mut calls {
-            if call.remote_number.contains('<') || call.remote_number.contains(';') {
-                if call.remote_name.is_none() {
-                    call.remote_name = display_name_of(&call.remote_number);
-                }
-                call.remote_number = crate::model::caller_number(&call.remote_number).to_string();
-            }
-        }
-        Ok(calls)
+        Ok(read_json::<HistoryPayload>(&path)?.calls)
     }
 
     /// Appends a new call record to local history.
@@ -161,12 +147,6 @@ impl LocalStore {
         };
         write_json(&path, &HistoryPayload { calls: Vec::new() })
     }
-}
-
-/// The display name from a legacy `From`-header value, if it had one.
-fn display_name_of(raw: &str) -> Option<String> {
-    let name = raw.split_once('<')?.0.trim().trim_matches('"').trim();
-    (!name.is_empty()).then(|| name.to_string())
 }
 
 /// Reads a JSON payload, treating a missing file as empty.
@@ -247,7 +227,7 @@ fn data_directory() -> Option<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{HistoryPayload, LocalStore};
+    use super::LocalStore;
     use crate::model::{CallRecord, CallType, RecordSource};
 
     fn store(name: &str) -> (LocalStore, std::path::PathBuf) {
@@ -276,26 +256,6 @@ mod tests {
         let calls = store.load_calls().expect("read");
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].remote_number, "611");
-        std::fs::remove_dir_all(dir).ok();
-    }
-
-    /// Files written before the number was extracted stored the whole From
-    /// header; they must read back as a dialable number, not a URI with a tag.
-    #[test]
-    fn legacy_records_are_repaired_on_read() {
-        let (store, dir) = store("legacy");
-        let legacy = HistoryPayload {
-            calls: vec![record("\"Alice\" <sip:611@fritz.box>;tag=179BED3B")],
-        };
-        std::fs::write(
-            dir.join("history.json"),
-            serde_json::to_vec(&legacy).unwrap(),
-        )
-        .unwrap();
-
-        let calls = store.load_calls().expect("read");
-        assert_eq!(calls[0].remote_number, "611");
-        assert_eq!(calls[0].remote_name.as_deref(), Some("Alice"));
         std::fs::remove_dir_all(dir).ok();
     }
 

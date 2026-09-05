@@ -63,6 +63,22 @@ pub struct State {
     pub filter_open: bool,
 }
 
+/// Whether two contacts list a number in common, comparing normalized.
+///
+/// Two contacts with no numbers at all count as sharing one: there is nothing
+/// to tell them apart beyond the name, which the caller has already matched.
+fn shares_a_number(a: &Contact, b: &Contact) -> bool {
+    if a.numbers.is_empty() && b.numbers.is_empty() {
+        return true;
+    }
+    a.numbers.iter().any(|na| {
+        let norm_a = normalize_number(&na.number);
+        b.numbers
+            .iter()
+            .any(|nb| norm_a == normalize_number(&nb.number))
+    })
+}
+
 impl State {
     /// Every source present in the loaded contacts, with how many each holds.
     ///
@@ -108,18 +124,27 @@ impl State {
     pub fn merge(&mut self, batch: Vec<Contact>) {
         self.contacts.extend(batch);
         self.contacts.sort_by_cached_key(|c| c.name.trim().to_lowercase());
-        self.contacts.dedup_by(|a, b| {
-            let same_name = a.name.trim().eq_ignore_ascii_case(b.name.trim());
-            let same_number = if a.numbers.is_empty() && b.numbers.is_empty() {
-                true
-            } else {
-                a.numbers.iter().any(|na| {
-                    let norm_a = normalize_number(&na.number);
-                    b.numbers.iter().any(|nb| norm_a == normalize_number(&nb.number))
-                })
-            };
-            same_name && same_number
-        });
+
+        // Compared against every namesake already kept, not just the one
+        // immediately before. `dedup_by` only looks at neighbours, so
+        // `Alice/611, Alice/622, Alice/611` kept the first number twice — the
+        // duplicate was real but not adjacent to its twin.
+        //
+        // Sorting by name puts namesakes together, so walking back over the
+        // kept entries stops at the first different name and the comparison
+        // stays bounded by how many people share one name.
+        let mut kept: Vec<Contact> = Vec::with_capacity(self.contacts.len());
+        for candidate in std::mem::take(&mut self.contacts) {
+            let duplicate = kept
+                .iter()
+                .rev()
+                .take_while(|k| k.name.trim().eq_ignore_ascii_case(candidate.name.trim()))
+                .any(|k| shares_a_number(k, &candidate));
+            if !duplicate {
+                kept.push(candidate);
+            }
+        }
+        self.contacts = kept;
     }
 
     /// Contacts matching the search box.
@@ -618,5 +643,80 @@ mod tests {
         assert_eq!(s.selected, None);
         s.toggle("local-Bob Jones");
         assert_eq!(s.selected.as_deref(), Some("local-Bob Jones"));
+    }
+}
+
+#[cfg(test)]
+mod dedup_tests {
+    use super::State;
+    use sipster_integrations::{Contact, NumberType, PhoneNumber, RecordSource};
+
+    fn contact(name: &str, number: &str, source: RecordSource) -> Contact {
+        Contact {
+            id: format!("{source}-{name}-{number}"),
+            name: name.into(),
+            numbers: vec![PhoneNumber {
+                number: number.into(),
+                number_type: NumberType::Home,
+                priority: 1,
+            }],
+            emails: Vec::new(),
+            source,
+        }
+    }
+
+    /// The same person from two providers is one entry, which is the whole
+    /// point of syncing several at once.
+    #[test]
+    fn the_same_contact_from_two_sources_is_merged() {
+        let mut state = State::default();
+        state.merge(vec![contact("Alice", "0301234", RecordSource::Local)]);
+        state.merge(vec![contact(
+            "alice",
+            "030 1234",
+            RecordSource::FritzBox {
+                phonebook_id: 0,
+                phonebook_name: "Book".into(),
+            },
+        )]);
+        assert_eq!(state.contacts.len(), 1, "{:?}", state.contacts);
+    }
+
+    /// Two people who happen to share a name are not the same person.
+    #[test]
+    fn a_shared_name_with_different_numbers_is_kept() {
+        let mut state = State::default();
+        state.merge(vec![
+            contact("Alice", "611", RecordSource::Local),
+            contact("Alice", "622", RecordSource::Local),
+        ]);
+        assert_eq!(state.contacts.len(), 2);
+    }
+
+    /// A duplicate that is not adjacent to its twin after sorting must still
+    /// go. `dedup_by` only looks at neighbours, so `A/611, A/622, A/611` left
+    /// the first number listed twice.
+    #[test]
+    fn a_duplicate_separated_by_a_namesake_is_still_removed() {
+        let mut state = State::default();
+        state.merge(vec![
+            contact("Alice", "611", RecordSource::Local),
+            contact("Alice", "622", RecordSource::Local),
+            contact("Alice", "611", RecordSource::Local),
+        ]);
+        assert_eq!(state.contacts.len(), 2, "{:?}", state.contacts);
+    }
+
+    /// Re-syncing must not grow the list.
+    #[test]
+    fn merging_the_same_batch_twice_changes_nothing() {
+        let mut state = State::default();
+        let batch = vec![
+            contact("Alice", "611", RecordSource::Local),
+            contact("Bob", "622", RecordSource::Local),
+        ];
+        state.merge(batch.clone());
+        state.merge(batch);
+        assert_eq!(state.contacts.len(), 2);
     }
 }

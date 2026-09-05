@@ -60,30 +60,48 @@ pub struct State {
     pub hidden_sources: std::collections::BTreeSet<String>,
     /// Whether the Filter dropdown is open.
     pub filter_open: bool,
+    /// What each contact is matched on, parallel to `contacts`. See
+    /// [`Identity`].
+    identities: Vec<Identity>,
 }
 
-/// Whether two contacts list a number in common, comparing normalized.
-fn shares_a_number(a: &Contact, b: &Contact) -> bool {
-    a.numbers.iter().any(|na| {
-        let norm_a = normalize_number(&na.number);
-        b.numbers
-            .iter()
-            .any(|nb| norm_a == normalize_number(&nb.number))
-    })
-}
-
-/// Whether two contacts describe the same person.
+/// What a contact is matched on: the name and numbers it arrived with.
 ///
-/// The same name **or** a number in common, not both. One provider spells a
-/// person "Blu-PC" and another "User" while both hold `**620`; a phone book
-/// lists a name with no number at all where Google has the number. Requiring
-/// both left those as separate rows.
-fn same_person(a: &Contact, b: &Contact) -> bool {
-    let same_name = {
-        let (x, y) = (a.name.trim(), b.name.trim());
-        !x.is_empty() && x.eq_ignore_ascii_case(y)
-    };
-    same_name || shares_a_number(a, b)
+/// Held apart from the contact because absorbing must not widen it. Pooling a
+/// duplicate's numbers onto the row it joined would let that row match on
+/// numbers it never had, and matching on a name *or* a number is transitive
+/// enough already: A joins B by name, B joins C by number, and C is now merged
+/// with an A it shares nothing with. In practice that collapsed the router's
+/// extensions, the answering machine and the broadcast group into single rows
+/// claiming six or seven sources.
+#[derive(Debug, Clone)]
+struct Identity {
+    name: String,
+    numbers: Vec<String>,
+}
+
+impl Identity {
+    fn of(contact: &Contact) -> Self {
+        Self {
+            name: contact.name.trim().to_lowercase(),
+            numbers: contact
+                .numbers
+                .iter()
+                .map(|n| normalize_number(&n.number))
+                .filter(|n| !n.is_empty())
+                .collect(),
+        }
+    }
+
+    /// The same name, or a number in common.
+    ///
+    /// One provider spells a person "Blu-PC" and another "User" while both
+    /// hold `**620`; a phone book lists a name with no number where Google has
+    /// the number. Requiring both left those as separate rows.
+    fn is(&self, other: &Self) -> bool {
+        let same_name = !self.name.is_empty() && self.name == other.name;
+        same_name || self.numbers.iter().any(|n| other.numbers.contains(n))
+    }
 }
 
 /// How a contact's origin reads in the list.
@@ -145,23 +163,37 @@ impl State {
     /// Merges an incoming batch, keeping the list sorted and de-duplicated so
     /// it stays coherent while providers are still arriving.
     pub fn merge(&mut self, batch: Vec<Contact>) {
-        self.contacts.extend(batch);
-        self.contacts.sort_by_cached_key(|c| c.name.trim().to_lowercase());
-
-        // Matching on a name *or* a number means a duplicate need not be
-        // adjacent after sorting, so every kept entry is a candidate. The
-        // lists are a few hundred long and this runs once per provider batch.
-        let mut kept: Vec<Contact> = Vec::with_capacity(self.contacts.len());
-        for candidate in std::mem::take(&mut self.contacts) {
-            match kept.iter_mut().find(|k| same_person(k, &candidate)) {
-                // Absorbed rather than dropped: the row can then say it is
-                // known to more than one provider, and hiding a source still
-                // hides every contact that came from it.
-                Some(existing) => existing.absorb(candidate),
-                None => kept.push(candidate),
+        for candidate in batch {
+            let identity = Identity::of(&candidate);
+            // Absorbed rather than dropped, so the row can say it is known to
+            // more than one provider — but its identity is left as it was, so
+            // it does not grow a wider net with every merge.
+            if let Some(index) = self.identities.iter().position(|kept| kept.is(&identity)) {
+                self.contacts[index].absorb(candidate);
+            } else {
+                self.contacts.push(candidate);
+                self.identities.push(identity);
             }
         }
-        self.contacts = kept;
+
+        // Sorted together, so the two stay aligned.
+        let mut paired: Vec<(Contact, Identity)> = std::mem::take(&mut self.contacts)
+            .into_iter()
+            .zip(std::mem::take(&mut self.identities))
+            .collect();
+        paired.sort_by(|a, b| a.1.name.cmp(&b.1.name));
+        let (contacts, identities) = paired.into_iter().unzip();
+        self.contacts = contacts;
+        self.identities = identities;
+    }
+
+    /// Empties the list, identities included.
+    ///
+    /// Clearing `contacts` alone would leave the identities behind and every
+    /// later contact would match a row that is no longer there.
+    pub fn clear(&mut self) {
+        self.contacts.clear();
+        self.identities.clear();
     }
 
     /// Contacts matching the search box.
@@ -743,6 +775,28 @@ mod dedup_tests {
         ]);
         assert_eq!(state.contacts.len(), 1, "{:?}", state.contacts);
         assert_eq!(state.contacts[0].numbers.len(), 2, "{:?}", state.contacts);
+    }
+
+    /// Matching on a name *or* a number is transitive, and absorbing must not
+    /// make it more so. `A` joins `B` by name and `B` joins `C` by number; if
+    /// the row then matched on everything it had absorbed, `C` would drag in a
+    /// `D` that shares nothing with `A` at all.
+    ///
+    /// Against the real list that collapsed the router extensions, the
+    /// answering machine and the broadcast group into rows claiming six and
+    /// seven sources.
+    #[test]
+    fn absorbing_does_not_widen_what_a_row_matches_on() {
+        let mut state = State::default();
+        state.merge(vec![contact("Alice", "611", RecordSource::Local)]);
+        // Same name as the first, and carries a number the first never had.
+        state.merge(vec![contact("Alice", "622", RecordSource::Local)]);
+        // Shares only that absorbed number, so it must stay its own contact.
+        state.merge(vec![contact("Bob", "622", RecordSource::Local)]);
+
+        let names: Vec<&str> = state.contacts.iter().map(|c| c.name.as_str()).collect();
+        assert_eq!(state.contacts.len(), 2, "{names:?}");
+        assert!(names.contains(&"Bob"), "{names:?}");
     }
 
     /// Re-syncing must not grow the list.

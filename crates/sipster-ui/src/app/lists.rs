@@ -210,7 +210,7 @@ impl SipsterApp {
                 Task::none()
             }
             contacts::Message::SyncPressed => {
-                self.contacts.contacts.clear();
+                self.contacts.clear();
                 self.contacts.loading = true;
                 self.stream_contacts()
             }

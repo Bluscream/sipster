@@ -9,6 +9,7 @@
 
 mod calling;
 mod lists;
+mod numbers;
 mod providers;
 
 use iced::window;
@@ -67,6 +68,10 @@ pub struct SipsterApp {
     /// Registration state per account, parallel to `engines`.
     pub registration: Vec<RegistrationState>,
     pub account_info: Vec<String>,
+    /// Each account's own numbers as the router reports them, parallel to
+    /// `config.accounts`. `None` where the router knows nothing about that
+    /// account, or has not been asked yet. See [`numbers`].
+    numbers: Vec<Option<sipster_integrations::fritzbox::AccountNumbers>>,
     pub dial_number: String,
     pub status: String,
     pub active: Option<ActiveCall>,
@@ -132,6 +137,8 @@ pub enum Message {
     TransferPressed,
     /// A hold or resume the far end accepted.
     HoldChanged(bool),
+    /// The router answered with the numbers of every device it knows.
+    RouterNumbers(Vec<sipster_integrations::fritzbox::AccountNumbers>),
     AnswerPressed,
     DeclinePressed,
     ContactsPressed,
@@ -180,6 +187,7 @@ impl SipsterApp {
             pending_command: None,
             registration: Vec::new(),
             account_info: Vec::new(),
+            numbers: Vec::new(),
             dial_number: String::new(),
             status: if first_run {
                 "Welcome — fill in your SIP account to get started".into()
@@ -367,6 +375,10 @@ impl SipsterApp {
             Message::HoldPressed => self.toggle_hold(),
             Message::TransferPressed => self.transfer(),
             Message::HoldChanged(on_hold) => self.on_hold_changed(on_hold),
+            Message::RouterNumbers(found) => {
+                self.on_router_numbers(&found);
+                Task::none()
+            }
             Message::AnswerPressed => self.answer(),
             Message::DeclinePressed => self.decline(),
             Message::ContactsPressed => self.cycle_contacts(),

@@ -114,6 +114,14 @@ fn statusbar(app: &SipsterApp) -> Element<'_, Message> {
         (None, _) => reg_text.to_string(),
     };
 
+    // The account's own numbers, when the router has told us: the extension
+    // to reach it on, and the number it presents when calling out. Masked
+    // along with the rest of the account line, being just as identifying.
+    if let Some(numbers) = app.active_account_numbers() {
+        use std::fmt::Write as _;
+        let _ = write!(msg, " · {}", show(&numbers, mask));
+    }
+
     // With more than one account configured, say how many of them are up —
     // otherwise a second line failing to register is invisible.
     let (registered, total) = app.registered_count();

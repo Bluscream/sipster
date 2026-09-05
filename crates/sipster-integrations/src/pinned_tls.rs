@@ -60,11 +60,35 @@ pub struct PinnedCert {
     seen: Arc<std::sync::Mutex<Option<Fingerprint>>>,
 }
 
+/// The first certificate accepted in this process, and the pin for every
+/// connection after it.
+///
+/// Without this, "first use" meant *every* connection: the learned fingerprint
+/// only reaches the config when a sync finishes, so a single sync opened a
+/// dozen connections that each accepted whatever they were given and verified
+/// nothing. Remembering it here closes the window to the one connection that
+/// genuinely has nothing to compare against.
+///
+/// Never cleared. A router that legitimately changes certificate is picked up
+/// on the next start, which is also when the config's stored pin is re-read.
+static FIRST_SEEN: std::sync::Mutex<Option<Fingerprint>> = std::sync::Mutex::new(None);
+
 impl PinnedCert {
     /// Pins `expected`, or accepts and records whatever is presented when it
     /// is empty — the first-use half of the bargain.
     #[must_use]
     pub fn new(expected: Fingerprint) -> (Arc<Self>, Arc<std::sync::Mutex<Option<Fingerprint>>>) {
+        // A pin learned earlier in this process stands in for a configured
+        // one, so only the very first connection is unverified.
+        let expected = if expected.is_empty() {
+            FIRST_SEEN
+                .lock()
+                .ok()
+                .and_then(|seen| seen.clone())
+                .unwrap_or_default()
+        } else {
+            expected
+        };
         let seen = Arc::new(std::sync::Mutex::new(None));
         let verifier = Arc::new(Self { expected, seen: Arc::clone(&seen) });
         (verifier, seen)
@@ -83,9 +107,13 @@ impl ServerCertVerifier for PinnedCert {
         let actual = fingerprint_of(end_entity);
 
         if self.expected.is_empty() {
-            // First use: remember it so the caller can store it.
+            // First use: remember it so the caller can store it, and pin it
+            // for the rest of this process straight away.
             if let Ok(mut slot) = self.seen.lock() {
-                *slot = Some(actual);
+                *slot = Some(actual.clone());
+            }
+            if let Ok(mut first) = FIRST_SEEN.lock() {
+                first.get_or_insert(actual);
             }
             return Ok(ServerCertVerified::assertion());
         }

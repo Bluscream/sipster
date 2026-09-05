@@ -371,6 +371,97 @@ impl FritzBoxClient {
         let cl_resp = self.agent().0.get(&call_list_url).call()?.into_string()?;
         Ok(parse_call_list_xml(&cl_resp))
     }
+
+    /// Asks the router which numbers each registered SIP client answers to.
+    ///
+    /// A SIP account knows its username and registrar and nothing else — not
+    /// the extension people dial to reach it, nor the number it presents when
+    /// it calls out. The router knows both, and this is the only way to ask.
+    ///
+    /// Returns one entry per telephony device the router has configured,
+    /// including ones that are not us; match on
+    /// [`username`](AccountNumbers::username).
+    ///
+    /// # Errors
+    ///
+    /// Fails if the client count cannot be read. An individual client that
+    /// cannot be read is logged and skipped, so one bad entry does not cost
+    /// the rest.
+    pub fn fetch_account_numbers(&self) -> Result<Vec<AccountNumbers>, FritzError> {
+        let xml = self.soap_call(
+            VOIP_CONTROL_URL,
+            VOIP_SERVICE,
+            "X_AVM-DE_GetNumberOfClients",
+            &[],
+        )?;
+        let count: u32 = extract_xml_tag(&xml, "NewX_AVM-DE_NumberOfClients")
+            .and_then(|raw| raw.parse().ok())
+            .unwrap_or(0);
+
+        let mut found = Vec::new();
+        for index in 0..count {
+            let index = index.to_string();
+            // `X_AVM-DE_GetClient` (no suffix) exists on paper but answers 500
+            // on current firmware; `GetClient3` is the one that works.
+            let client = match self.soap_call(
+                VOIP_CONTROL_URL,
+                VOIP_SERVICE,
+                "X_AVM-DE_GetClient3",
+                &[("NewX_AVM-DE_ClientIndex", &index)],
+            ) {
+                Ok(client) => client,
+                Err(err) => {
+                    warn!(%index, %err, "could not read a telephony client from the router");
+                    continue;
+                }
+            };
+
+            let username = extract_xml_tag(&client, "NewX_AVM-DE_ClientUsername").unwrap_or_default();
+            if username.is_empty() {
+                // A configured but unused slot. Nothing can match it.
+                continue;
+            }
+            found.push(AccountNumbers {
+                username,
+                phone_name: extract_xml_tag(&client, "NewX_AVM-DE_PhoneName").unwrap_or_default(),
+                internal: extract_xml_tag(&client, "NewX_AVM-DE_InternalNumber").unwrap_or_default(),
+                external: extract_xml_tag(&client, "NewX_AVM-DE_OutGoingNumber").unwrap_or_default(),
+            });
+        }
+        Ok(found)
+    }
+
+    /// The country code the router dials out with, as `0049`.
+    ///
+    /// # Errors
+    ///
+    /// Fails if the SOAP call fails or the response omits the code.
+    pub fn fetch_country_code(&self) -> Result<String, FritzError> {
+        let xml = self.soap_call(VOIP_CONTROL_URL, VOIP_SERVICE, "GetVoIPCommonCountryCode", &[])?;
+        extract_xml_tag(&xml, "NewVoIPCountryCode").ok_or_else(|| FritzError::SoapAction {
+            action: "GetVoIPCommonCountryCode".into(),
+            detail: "response carried no country code".into(),
+        })
+    }
+}
+
+/// The TR-064 `VoIP` service, which knows about telephony devices and numbers.
+const VOIP_SERVICE: &str = "urn:dslforum-org:service:X_VoIP:1";
+const VOIP_CONTROL_URL: &str = "/upnp/control/x_voip";
+
+/// The numbers the router associates with one registered SIP client.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountNumbers {
+    /// SIP username, as configured on the router. The key to match an account.
+    pub username: String,
+    /// The router's own label for the device, such as `Blu-PC`.
+    pub phone_name: String,
+    /// The extension other phones on this router dial to reach it, `620`.
+    /// Empty when the router has not assigned one.
+    pub internal: String,
+    /// The number presented to the outside world on outgoing calls.
+    /// Empty when the client has no outgoing number of its own.
+    pub external: String,
 }
 
 /// Downloads and parses one phonebook. Failures are reported and skipped so a

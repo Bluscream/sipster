@@ -127,6 +127,9 @@ impl SipsterApp {
         .chain(Task::done(Message::Contacts(
             contacts::Message::SyncFinished,
         )))
+        // Same trigger as the contact sync: both ask the same router, and an
+        // account's numbers can change under it just as its phonebook can.
+        .chain(self.discover_numbers())
     }
 
     /// Persists a router certificate fingerprint learned during a sync.

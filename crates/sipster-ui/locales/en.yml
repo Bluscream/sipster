@@ -110,6 +110,9 @@ settings:
   folder: "Folder"
   url: "URL"
   default_action: "Default action"
+  block_action:
+    reject: "Reject (Instant SIP 603)"
+    mute: "Mute (Silent Ring)"
   nothing_blocked: "Nothing blocked. Block a caller from Contacts or History."
   none_found: "none found"
   auto_detected: "Auto-detected: %{discovered}"

@@ -320,12 +320,49 @@ fn vdir_panel<'a>(
     .into()
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct BlockActionChoice {
+    pub action: BlockAction,
+    pub label: String,
+}
+
+impl BlockActionChoice {
+    pub fn list() -> Vec<Self> {
+        vec![
+            Self {
+                action: BlockAction::Reject,
+                label: rust_i18n::t!("settings.block_action.reject").to_string(),
+            },
+            Self {
+                action: BlockAction::Mute,
+                label: rust_i18n::t!("settings.block_action.mute").to_string(),
+            },
+        ]
+    }
+}
+
+impl std::fmt::Display for BlockActionChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.label)
+    }
+}
+
+pub(super) fn block_action_label(action: BlockAction) -> String {
+    match action {
+        BlockAction::Reject => rust_i18n::t!("settings.block_action.reject").to_string(),
+        BlockAction::Mute => rust_i18n::t!("settings.block_action.mute").to_string(),
+    }
+}
+
 /// Blocked numbers, listed so a rule can actually be found and removed.
 pub(super) fn blocking_section(integration: &IntegrationSettings) -> Element<'_, Message> {
+    let choices = BlockActionChoice::list();
+    let selected = choices.iter().find(|c| c.action == integration.default_block_action).cloned();
+
     let action_pick = pick_list(
-        BlockAction::ALL,
-        Some(integration.default_block_action),
-        Message::DefaultBlockActionChanged,
+        choices,
+        selected,
+        |c| Message::DefaultBlockActionChanged(c.action),
     )
     .text_size(13)
     .padding(7)
@@ -352,7 +389,7 @@ pub(super) fn blocking_section(integration: &IntegrationSettings) -> Element<'_,
                 row![
                     column![
                         text(label).size(13),
-                        text(blocked.action.label())
+                        text(block_action_label(blocked.action))
                             .size(11)
                             .color(iced::Color::from_rgb(0.62, 0.62, 0.66)),
                     ]

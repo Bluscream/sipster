@@ -104,6 +104,9 @@ settings:
   folder: "Ordner"
   url: "URL"
   default_action: "Standardaktion"
+  block_action:
+    reject: "Abweisen (Sofortiges SIP 603)"
+    mute: "Stummschalten (Lautloses Klingeln)"
   nothing_blocked: "Nichts blockiert. Blockieren Sie Anrufer aus den Kontakten oder dem Verlauf."
   none_found: "keine gefunden"
   auto_detected: "Automatisch erkannt: %{discovered}"

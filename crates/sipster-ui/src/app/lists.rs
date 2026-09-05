@@ -169,6 +169,14 @@ impl SipsterApp {
                 self.contacts.search = val;
                 Task::none()
             }
+            contacts::Message::ToggleFilterMenu => {
+                self.contacts.filter_open = !self.contacts.filter_open;
+                Task::none()
+            }
+            contacts::Message::ToggleSource(source, shown) => {
+                self.contacts.toggle_source(&source, shown);
+                Task::none()
+            }
             contacts::Message::SyncPressed => {
                 self.contacts.contacts.clear();
                 self.contacts.loading = true;

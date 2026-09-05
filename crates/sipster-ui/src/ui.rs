@@ -59,6 +59,14 @@ pub fn tool_button<'a, M: Clone + 'a>(label: &'a str, on_press: Option<M>) -> El
         .into()
 }
 
+/// As [`tool_button`], for a label built at render time.
+pub fn tool_button_owned<'a, M: Clone + 'a>(label: String, on_press: Option<M>) -> Element<'a, M> {
+    button(text(label).size(13))
+        .on_press_maybe(on_press)
+        .padding([5, 11])
+        .into()
+}
+
 /// A low-emphasis action shown inside an expanded row.
 pub fn row_action<'a, M: Clone + 'a>(label: &'a str, on_press: M) -> Element<'a, M> {
     button(text(label).size(12))

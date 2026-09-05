@@ -186,6 +186,8 @@ impl GoogleContactsClient {
                 .into_json()
                 .map_err(|e| format!("People API JSON parsing failed: {e}"))?;
 
+            log_page(&self.email, &body);
+
             if let Some(connections) = body.get("connections").and_then(|c| c.as_array()) {
                 for person in connections {
                     if let Some(contact) = self.parse_person(person) {
@@ -469,6 +471,22 @@ fn urlencoding_simple(input: &str) -> String {
         }
     }
     out
+}
+
+/// Reports what one People API page actually contained.
+///
+/// Distinguishes "this account has no saved contacts" from "we asked for the
+/// wrong thing": the API reports its own totals, so an empty page alongside a
+/// non-zero total means the request is at fault, not the address book.
+fn log_page(email: &str, body: &serde_json::Value) {
+    tracing::debug!(
+        email,
+        returned = body.get("connections").and_then(|c| c.as_array()).map_or(0, Vec::len),
+        total_people = ?body.get("totalPeople"),
+        total_items = ?body.get("totalItems"),
+        keys = ?body.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>()),
+        "People API page"
+    );
 }
 
 #[cfg(test)]

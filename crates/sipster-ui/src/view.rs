@@ -206,7 +206,7 @@ fn banner() -> Element<'static, Message> {
 }
 
 /// The wordmark, embedded so the binary stays self-contained.
-const BANNER: &[u8] = include_bytes!("../assets/banner.png");
+const BANNER: &[u8] = include_bytes!("../../../assets/banner.png");
 
 /// The banner as a decoded, cached image handle.
 ///

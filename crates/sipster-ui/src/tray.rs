@@ -207,10 +207,10 @@ impl ksni::Tray for Icon {
 /// Decode embedded PNGs into the ARGB format ksni requires.
 fn pixmaps() -> Vec<ksni::Icon> {
     const SIZES: [(&[u8], u32); 4] = [
-        (include_bytes!("../assets/icons/sipster-22.png"), 22),
-        (include_bytes!("../assets/icons/sipster-32.png"), 32),
-        (include_bytes!("../assets/icons/sipster-48.png"), 48),
-        (include_bytes!("../assets/icons/sipster-64.png"), 64),
+        (include_bytes!("../../../assets/icons/sipster-22.png"), 22),
+        (include_bytes!("../../../assets/icons/sipster-32.png"), 32),
+        (include_bytes!("../../../assets/icons/sipster-48.png"), 48),
+        (include_bytes!("../../../assets/icons/sipster-64.png"), 64),
     ];
     SIZES
         .iter()
@@ -259,7 +259,7 @@ pub fn spawn() -> Option<Handle> {
 /// Decode the 256×256 icon for the Iced window.
 #[must_use]
 pub fn window_icon() -> Option<iced::window::Icon> {
-    let bytes = include_bytes!("../assets/icons/sipster-256.png");
+    let bytes = include_bytes!("../../../assets/icons/sipster-256.png");
     let decoded = image::load_from_memory(bytes).ok()?.to_rgba8();
     let (width, height) = (decoded.width(), decoded.height());
     iced::window::icon::from_rgba(decoded.into_raw(), width, height).ok()

@@ -63,7 +63,7 @@ rust-i18n = "3.1"
 # built via cmake in the build-box; that C codec dependency is accepted.
 rvoip-sip = { git = "https://github.com/eisenzopf/rvoip.git", rev = "ed8100ae9e072af9353580e0d3ce09c1e4523cec", features = ["opus"] }
 # OS audio-device bridge (cpal microphone/speaker <-> call AudioStream).
-rvoip-audio-device = { git = "https://github.com/eisenzopf/rvoip.git", rev = "ed8100ae9e072af9353580e0d3ce09c1e4523cec" }
+rvoip-audio-device = { git = "https://github.com/eisenzopf/rvoip.git", rev = "8cab44b10f872d21b304c02111d5d203ee8226da" }
 
 # --- Profile Optimizations for Disk Space & Build Speed ---
 

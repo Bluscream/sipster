@@ -385,7 +385,9 @@ impl GoogleContactsClient {
 
         // Google reports consent failures in the query string too.
         if request_line.contains("error=") {
-            let _ = stream.write_all(FAILURE_PAGE.as_bytes());
+            if let Err(e) = stream.write_all(FAILURE_PAGE.as_bytes()) {
+                tracing::debug!(error = %e, "could not write the sign-in failure page");
+            }
             return Err("Google sign-in was denied or cancelled".into());
         }
 
@@ -399,7 +401,11 @@ impl GoogleContactsClient {
             html_body.len(),
             html_body
         );
-        let _ = stream.write_all(http_response.as_bytes());
+        if let Err(e) = stream.write_all(http_response.as_bytes()) {
+            // The sign-in itself already succeeded; only the browser's
+            // confirmation page was lost.
+            tracing::debug!(error = %e, "could not write the sign-in confirmation page");
+        }
         Ok(code)
     }
 

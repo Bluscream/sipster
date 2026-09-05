@@ -79,6 +79,22 @@ impl VdirStore {
         Ok(contacts)
     }
 
+    /// Reads one address book directory, reporting rather than propagating a
+    /// failure.
+    ///
+    /// One unreadable collection must not cost the user the others, but
+    /// returning fewer contacts than the disk holds is not something to hide
+    /// either.
+    fn collect_collection(&self, dir: &Path, depth: u32, out: &mut Vec<Contact>) {
+        if let Err(e) = self.collect(dir, depth + 1, out) {
+            tracing::warn!(
+                path = %dir.display(),
+                error = %e,
+                "could not read address book directory"
+            );
+        }
+    }
+
     fn collect(&self, dir: &Path, depth: u32, out: &mut Vec<Contact>) -> std::io::Result<()> {
         for entry in std::fs::read_dir(dir)? {
             let Ok(entry) = entry else { continue };
@@ -88,7 +104,7 @@ impl VdirStore {
                 // One level of collections; deeper is not a vdir layout and
                 // guards against a symlink loop walking the filesystem.
                 if depth == 0 {
-                    let _ = self.collect(&path, depth + 1, out);
+                    self.collect_collection(&path, depth, out);
                 }
                 continue;
             }

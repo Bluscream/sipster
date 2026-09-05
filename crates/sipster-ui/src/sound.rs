@@ -110,28 +110,42 @@ fn sine(freq: f32, t: f32) -> f32 {
     (2.0 * std::f32::consts::PI * freq * t).sin()
 }
 
+/// Feeds one clip to one player. `false` when that player is not installed.
+async fn pipe_to_player(player: &str, wav: &[u8]) -> bool {
+    let Ok(mut child) = tokio::process::Command::new(player)
+        .arg("-")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+    else {
+        return false;
+    };
+
+    if let Some(mut stdin) = child.stdin.take() {
+        if let Err(e) = stdin.write_all(wav).await {
+            // A player that exits early closes the pipe; the tone is lost but
+            // nothing else is affected.
+            tracing::debug!(player, error = %e, "could not feed audio to the player");
+        }
+        // Dropping stdin signals EOF; without it the player waits forever.
+        drop(stdin);
+    }
+    if let Err(e) = child.wait().await {
+        tracing::debug!(player, error = %e, "audio player did not exit cleanly");
+    }
+    true
+}
+
 /// Pipes a rendered clip to the system mixer, preferring `PipeWire`.
 ///
 /// Returns `false` when no player is available, so callers that loop (the
 /// ringtone) can stop instead of spinning.
 async fn play(wav: &[u8]) -> bool {
     for player in ["pw-play", "paplay"] {
-        let Ok(mut child) = tokio::process::Command::new(player)
-            .arg("-")
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-        else {
-            continue;
-        };
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(wav).await;
-            // Dropping stdin signals EOF; without it the player waits forever.
-            drop(stdin);
+        if pipe_to_player(player, wav).await {
+            return true;
         }
-        let _ = child.wait().await;
-        return true;
     }
     tracing::debug!("no audio player (pw-play/paplay) available for feedback sounds");
     false
@@ -267,7 +281,9 @@ async fn play_file(path: &str) -> bool {
             .stderr(std::process::Stdio::null())
             .spawn()
         {
-            let _ = child.wait().await;
+            if let Err(e) = child.wait().await {
+                tracing::debug!(player, error = %e, "audio player did not exit cleanly");
+            }
             return true;
         }
     }
@@ -282,7 +298,7 @@ async fn play_file(path: &str) -> bool {
 pub fn notify_incoming(caller: &str) {
     let caller = caller.to_owned();
     tokio::spawn(async move {
-        let _ = tokio::process::Command::new("notify-send")
+        let notified = tokio::process::Command::new("notify-send")
             .args([
                 "-a", "Sipster",
                 "-i", "call-start",
@@ -292,6 +308,15 @@ pub fn notify_incoming(caller: &str) {
             ])
             .status()
             .await;
+        // A desktop without notify-send simply gets no popup, but if it is
+        // there and failed, that is worth a line rather than silence.
+        match notified {
+            Ok(status) if !status.success() => {
+                tracing::debug!(%status, "notify-send reported a failure");
+            }
+            Err(e) => tracing::debug!(error = %e, "no desktop notification (notify-send)"),
+            Ok(_) => {}
+        }
     });
 }
 

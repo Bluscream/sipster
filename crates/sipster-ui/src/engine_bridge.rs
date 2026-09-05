@@ -130,7 +130,11 @@ pub fn run() -> impl iced::futures::Stream<Item = Message> {
             // stops sending us calls immediately instead of waiting out the
             // registration expiry.
             for engine in &engines {
-                let _ = engine.unregister().await;
+                if let Err(e) = engine.unregister().await {
+                    // Not fatal, but the PBX will keep sending us calls until
+                    // the registration expires — worth knowing about.
+                    tracing::warn!(error = %e, "could not unregister cleanly");
+                }
             }
             drop(engines);
 
@@ -217,7 +221,11 @@ async fn connect(account: SipAccount, devices: DeviceSelection) -> Result<SipEng
         .map_err(|e| e.to_string())?;
     // Apply the saved devices before any call can arrive, so the first call
     // already uses them rather than the system default.
-    let _ = engine.set_devices(devices).await;
+    if let Err(e) = engine.set_devices(devices).await {
+        // The call still works, on the system default rather than the chosen
+        // microphone and speaker.
+        tracing::warn!(error = %e, "could not apply the saved audio devices");
+    }
     Ok(engine)
 }
 

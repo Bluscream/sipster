@@ -132,7 +132,9 @@ pub fn main() -> iced::Result {
     let config_path = sipster_core::Config::path_from(&args);
     let config = sipster_core::Config::load(&config_path).unwrap_or_else(|e| {
         // A broken file must not stop the app; start on defaults and let the
-        // settings window fix it.
+        // settings window fix it. Logged as an error as well as printed —
+        // silently running on defaults looks like the config was ignored.
+        tracing::error!(path = %config_path.display(), error = %e, "could not read the config");
         eprintln!("sipster: {}: {e}", config_path.display());
         sipster_core::Config::default()
     });
@@ -244,7 +246,13 @@ fn claim_instance(args: &[String]) -> Option<iced::Result> {
             }),
             // Expected when a real instance already owns the socket: this
             // copy simply runs without remote control rather than stealing it.
-            Err(e) => eprintln!("sipster: running without a control channel ({e})"),
+            // Logged as well as printed — with `--log-file` the stderr copy
+            // goes nowhere, and this is exactly the message someone debugging
+            // "why is --call doing nothing" needs to see.
+            Err(e) => {
+                tracing::warn!(error = %e, "running without a control channel");
+                eprintln!("sipster: running without a control channel ({e})");
+            }
         }
         return None;
     }
@@ -265,6 +273,7 @@ fn claim_instance(args: &[String]) -> Option<iced::Result> {
         }
         Ok(Instance::Forwarded) => Some(Ok(())),
         Err(e) => {
+            tracing::error!(error = %e, "could not claim the single-instance lock");
             eprintln!("sipster: could not claim the single-instance lock: {e}");
             Some(Ok(()))
         }
@@ -280,6 +289,9 @@ fn store_primary_state(state: PrimaryState) {
 /// A log file that cannot be opened falls back to stderr rather than starting
 /// the app with logging silently switched off.
 fn init_logging(path: Option<&str>) {
+    use tracing_subscriber::layer::SubscriberExt as _;
+    use tracing_subscriber::util::SubscriberInitExt as _;
+
     let filter = tracing_subscriber::EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| DEFAULT_LOG_FILTER.into());
 
@@ -288,18 +300,28 @@ fn init_logging(path: Option<&str>) {
             .create(true)
             .append(true)
             .open(path)
-            .map_err(|e| eprintln!("sipster: cannot write to {path}: {e}; logging to stderr"))
+            .map_err(|e| eprintln!("sipster: cannot write to {path}: {e}; logging to stderr only"))
             .ok()
     });
 
-    match file {
-        Some(file) => tracing_subscriber::fmt()
-            .with_env_filter(filter)
+    // Both, not either. `--log-file` used to redirect logging *away* from the
+    // console, so anyone running Sipster from a terminal with a log file saw
+    // nothing at all — including the messages that explain why something did
+    // not work. The file is a record; the console is what someone watching
+    // the run actually reads.
+    let console = tracing_subscriber::fmt::layer().with_writer(std::io::stderr);
+    let to_file = file.map(|file| {
+        tracing_subscriber::fmt::layer()
             .with_writer(file)
+            // Escape codes are noise in a file someone will grep or paste.
             .with_ansi(false)
-            .init(),
-        None => tracing_subscriber::fmt().with_env_filter(filter).init(),
-    }
+    });
+
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(console)
+        .with(to_file)
+        .init();
 }
 
 /// The config file path, the startup config, and where its account came from.

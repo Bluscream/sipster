@@ -151,6 +151,7 @@ impl SipsterApp {
     }
 
     pub(super) fn handle_tray(&mut self, req: tray::Request) -> Task<Message> {
+        tracing::debug!(?req, "tray request");
         match req {
             tray::Request::Show => self.show_main_window(),
             tray::Request::OpenSettings => self.open_settings(),

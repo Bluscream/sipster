@@ -46,6 +46,14 @@ static CONFIG: OnceLock<(std::path::PathBuf, sipster_core::Config)> = OnceLock::
 /// [`SipsterApp::new`].
 static TRAY: OnceLock<std::sync::Mutex<Option<tray::Handle>>> = OnceLock::new();
 
+/// The tray's request stream, taken out of the handle before the application
+/// claims the handle itself.
+///
+/// Separate from `TRAY` because `SipsterApp::boot` takes the handle to keep
+/// the icon alive and to update its state, which would otherwise leave the
+/// subscription with nothing to read.
+static TRAY_REQUESTS: OnceLock<std::sync::Mutex<Option<tray::Requests>>> = OnceLock::new();
+
 /// Default log filter, used when `RUST_LOG` is unset.
 ///
 /// Two upstream crates are muted to `warn`, and neither is a matter of taste:
@@ -154,7 +162,10 @@ pub fn main() -> iced::Result {
 
     // Spawn the tray icon. The handle is picked up by SipsterApp::new() below.
     // Not having a tray is fine — plenty of desktops have none.
-    TRAY.set(std::sync::Mutex::new(tray::spawn())).ok();
+    let mut tray = tray::spawn();
+    let requests = tray.as_mut().and_then(tray::Handle::take_requests);
+    TRAY_REQUESTS.set(std::sync::Mutex::new(requests)).ok();
+    TRAY.set(std::sync::Mutex::new(tray)).ok();
 
     // Daemon rather than application: the settings window is a second real
     // window, which `iced::application` cannot host. Daemon mode starts with
@@ -340,6 +351,25 @@ pub(crate) fn take_primary_state() -> Option<PrimaryState> {
 }
 
 /// Called by [`SipsterApp::new`] to take the tray handle exactly once.
+/// Streams tray requests for `Subscription::run`.
+///
+/// A `fn()` pointer with no captures, like [`engine_bridge::run`], and it
+/// takes the receiver exactly once; later calls from Iced re-rendering get an
+/// empty stream while the original keeps running.
+pub(crate) fn tray_requests() -> impl iced::futures::Stream<Item = tray::Request> {
+    let requests = TRAY_REQUESTS
+        .get()
+        .and_then(|slot| slot.lock().ok())
+        .and_then(|mut slot| slot.take());
+
+    iced::futures::stream::unfold(requests, |requests| async move {
+        let mut requests = requests?;
+        // `None` means the tray was dropped, which ends the stream.
+        let request = requests.recv().await?;
+        Some((request, Some(requests)))
+    })
+}
+
 pub(crate) fn take_tray() -> Option<tray::Handle> {
     TRAY.get()?.lock().ok()?.take()
 }

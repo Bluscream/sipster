@@ -6,11 +6,16 @@
 //! never shows; ksni avoids that whole detour.
 //!
 //! The tray lives as long as the process. Its icon and menu state are updated
-//! via a shared atomic; tray actions are polled by the Iced app each tick and
-//! dispatched through `SipsterApp::handle_tray`.
+//! via a shared atomic; tray actions arrive on a channel the Iced app
+//! subscribes to, and are dispatched through `SipsterApp::handle_tray`.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
+
+use tokio::sync::mpsc as tokio_mpsc;
+
+/// The receiving end of the tray's request channel.
+pub type Requests = tokio_mpsc::UnboundedReceiver<Request>;
 
 /// State the tray reads to decide which menu items to show.
 ///
@@ -49,16 +54,20 @@ pub enum Request {
 ///
 /// Drop this to remove the icon from the tray.
 pub struct Handle {
-    pub requests: std::sync::mpsc::Receiver<Request>,
+    /// Taken once, by the subscription that streams tray requests into the
+    /// application. `None` afterwards.
+    requests: Option<Requests>,
     call_state: Arc<AtomicU8>,
     /// Also kept alive deliberately: dropping it removes the icon.
     service: ksni::blocking::Handle<Icon>,
 }
 
 impl Handle {
-    /// Check for requests from the tray menu/click without blocking.
-    pub fn poll(&self) -> Option<Request> {
-        self.requests.try_recv().ok()
+    /// Takes the request stream, which only one subscription may own.
+    ///
+    /// Returns `None` on any call after the first.
+    pub fn take_requests(&mut self) -> Option<Requests> {
+        self.requests.take()
     }
 
     /// Update the call state the tray reflects.
@@ -84,7 +93,7 @@ impl std::fmt::Debug for Handle {
 // ── icon implementation ──────────────────────────────────────────────────────
 
 struct Icon {
-    tx: std::sync::mpsc::Sender<Request>,
+    tx: tokio_mpsc::UnboundedSender<Request>,
     call_state: Arc<AtomicU8>,
     pixmap: Vec<ksni::Icon>,
 }
@@ -248,7 +257,9 @@ fn pixmaps() -> Vec<ksni::Icon> {
 /// that is not an error; desktops without a tray simply won't have one.
 #[must_use]
 pub fn spawn() -> Option<Handle> {
-    let (tx, rx) = std::sync::mpsc::channel();
+    // Unbounded and non-blocking to send: ksni calls these menu callbacks on
+    // its own thread, which must not be parked waiting for the UI.
+    let (tx, rx) = tokio_mpsc::unbounded_channel();
     let call_state = Arc::new(AtomicU8::new(CallState::Idle as u8));
     let icon = Icon {
         tx,
@@ -260,7 +271,7 @@ pub fn spawn() -> Option<Handle> {
         .ok()?;
     tracing::info!("tray icon registered");
     Some(Handle {
-        requests: rx,
+        requests: Some(rx),
         call_state,
         service,
     })

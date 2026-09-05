@@ -125,8 +125,8 @@ pub enum Message {
     EngineFailed(String),
     Call(usize, CallEvent),
     Ipc(Command),
-    // Periodic tray poll tick; drains tray::Request into handle_tray.
-    TrayTick,
+    /// The tray icon asked for something.
+    Tray(crate::tray::Request),
     /// One animation frame, while a dialpad key is still glowing.
     GlowTick,
     // User intent:
@@ -264,9 +264,8 @@ impl SipsterApp {
         // from the process-global OnceLock in main.rs exactly once.
         // Subsequent subscription calls get None — the stream keeps running.
         let engine_sub = Subscription::run(engine_bridge::run);
-        // Poll the tray channel every 100 ms.
-        let tray_sub = iced::time::every(std::time::Duration::from_millis(100))
-            .map(|_| Message::TrayTick);
+        // The tray pushes; nothing here polls for it.
+        let tray_sub = Subscription::run(crate::tray_requests).map(Message::Tray);
         let key_sub = iced::event::listen_with(|event, _status, _window| {
             if let iced::Event::Keyboard(iced::keyboard::Event::KeyPressed {
                 key,
@@ -329,15 +328,6 @@ impl SipsterApp {
         &self.config.ui
     }
 
-    /// Drains one pending tray request per tick (non-blocking).
-    fn on_tray_tick(&mut self) -> Task<Message> {
-        let Some(req) = self.tray.as_ref().and_then(crate::tray::Handle::poll) else {
-            return Task::none();
-        };
-        tracing::debug!(?req, "tray request");
-        self.handle_tray(req)
-    }
-
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::EngineReady(index, engine) => self.on_engine_ready(index, engine),
@@ -347,9 +337,7 @@ impl SipsterApp {
             }
             Message::Call(index, event) => self.on_call_event(index, event),
             Message::Ipc(cmd) => self.on_ipc(cmd),
-            Message::TrayTick => {
-                self.on_tray_tick()
-            }
+            Message::Tray(req) => self.handle_tray(req),
             Message::DialInputChanged(v) => self.on_dial_input_changed(v),
             Message::DialPad(d) => {
                 self.glow.strike(d);

@@ -250,3 +250,85 @@ impl ureq::ReadWrite for LenientStream {
         self.0.get_ref().socket()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{fingerprint_of, is_unclean_close, PinnedCert};
+    use rustls::client::danger::ServerCertVerifier;
+    use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+
+    /// Any bytes will do: the verifier only ever hashes them.
+    fn cert(bytes: &'static [u8]) -> CertificateDer<'static> {
+        CertificateDer::from(bytes)
+    }
+
+    fn verify(verifier: &PinnedCert, cert: &CertificateDer<'_>) -> Result<(), rustls::Error> {
+        let name = ServerName::try_from("router.invalid").expect("a valid name");
+        verifier
+            .verify_server_cert(cert, &[], &name, &[], UnixTime::now())
+            .map(|_| ())
+    }
+
+    #[test]
+    fn a_fingerprint_is_lower_case_hex_of_a_sha256() {
+        let fingerprint = fingerprint_of(&cert(b"anything"));
+        assert_eq!(fingerprint.len(), 64);
+        assert!(fingerprint
+            .chars()
+            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)));
+    }
+
+    #[test]
+    fn different_certificates_have_different_fingerprints() {
+        assert_ne!(fingerprint_of(&cert(b"one")), fingerprint_of(&cert(b"two")));
+    }
+
+    #[test]
+    fn the_pinned_certificate_is_accepted() {
+        let presented = cert(b"the router");
+        let (verifier, _) = PinnedCert::new(fingerprint_of(&presented));
+        assert!(verify(&verifier, &presented).is_ok());
+    }
+
+    #[test]
+    fn a_different_certificate_is_refused() {
+        let (verifier, _) = PinnedCert::new(fingerprint_of(&cert(b"the router")));
+        // The whole point of pinning: an impostor must not be accepted just
+        // because it offers a well-formed self-signed certificate.
+        assert!(verify(&verifier, &cert(b"an impostor")).is_err());
+    }
+
+    #[test]
+    fn a_first_connection_reports_what_it_saw() {
+        let presented = cert(b"a router we have never met");
+        let (verifier, seen) = PinnedCert::new(String::new());
+        assert!(verify(&verifier, &presented).is_ok());
+        assert_eq!(
+            seen.lock().expect("not poisoned").as_deref(),
+            Some(fingerprint_of(&presented).as_str())
+        );
+    }
+
+    #[test]
+    fn a_missing_close_notify_reads_as_end_of_stream() {
+        let err = std::io::Error::new(
+            std::io::ErrorKind::UnexpectedEof,
+            "peer closed connection without sending TLS close_notify",
+        );
+        assert!(is_unclean_close(&err));
+    }
+
+    #[test]
+    fn a_genuine_truncation_is_still_an_error() {
+        // Without this distinction the lenient read would hide a short body
+        // rather than just a missing handshake.
+        let err = std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "failed to fill whole buffer");
+        assert!(!is_unclean_close(&err));
+    }
+
+    #[test]
+    fn an_unrelated_error_is_not_treated_as_end_of_stream() {
+        let err = std::io::Error::new(std::io::ErrorKind::ConnectionReset, "connection reset by peer");
+        assert!(!is_unclean_close(&err));
+    }
+}

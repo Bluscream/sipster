@@ -148,6 +148,10 @@ impl State {
     }
 }
 
+// A declarative view builder: the branches choose what to show, they do not
+// compute anything. Breaking it up to satisfy a branch counter would scatter
+// the layout across functions and make it harder to read, not simpler.
+#[allow(clippy::cognitive_complexity)]
 pub fn view(state: &State, mask: bool) -> Element<'_, Message> {
 
     if let Some((number, name)) = &state.block_prompt {
@@ -325,10 +329,10 @@ fn contact_detail(contact: &Contact, mask: bool) -> Element<'_, Message> {
         detail = detail.push(ui::caption(emails.join("  ·  ")));
     }
 
-    let editable_externally = match contact.source {
-        RecordSource::Google { .. } | RecordSource::Local | RecordSource::FritzBox { .. } => true,
-        _ => false,
-    };
+    let editable_externally = matches!(
+        contact.source,
+        RecordSource::Google { .. } | RecordSource::Local | RecordSource::FritzBox { .. }
+    );
     
     let mut actions = row![].spacing(6);
     if editable_externally {

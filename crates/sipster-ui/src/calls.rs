@@ -168,6 +168,10 @@ impl State {
     }
 }
 
+// A declarative view builder: the branches choose what to show, they do not
+// compute anything. Breaking it up to satisfy a branch counter would scatter
+// the layout across functions and make it harder to read, not simpler.
+#[allow(clippy::cognitive_complexity)]
 pub fn view(state: &State, mask: bool) -> Element<'_, Message> {
     if let Some((number, name)) = &state.block_prompt {
         return block_prompt(number, name.as_deref());

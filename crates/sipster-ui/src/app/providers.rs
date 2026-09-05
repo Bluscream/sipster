@@ -63,10 +63,6 @@ impl SipsterApp {
                 self.config.ui.streaming_mode = on;
                 self.persist();
             }
-            S::ImportGoogleClientJson(path) => {
-                self.settings.draft_google_json_path = path;
-                self.import_google_client_json();
-            }
             S::PickGoogleJsonFile => {
                 let default_dir = std::env::var_os("XDG_DOWNLOAD_DIR")
                     .map(std::path::PathBuf::from)
@@ -212,11 +208,10 @@ impl SipsterApp {
                 self.persist();
             }
             S::PickVdirFolder => {
-                let default_dir = if !self.settings.draft_vdir_path.trim().is_empty() {
-                    Some(crate::consts::expand_home_path(self.settings.draft_vdir_path.trim()))
+                let default_dir = if self.settings.draft_vdir_path.trim().is_empty() {
+                    crate::consts::default_contacts_dir().or_else(crate::consts::home_dir)
                 } else {
-                    crate::consts::default_contacts_dir()
-                        .or_else(|| crate::consts::home_dir())
+                    Some(crate::consts::expand_home_path(self.settings.draft_vdir_path.trim()))
                 };
                 let mut builder = rfd::FileDialog::new().set_title("Select vCard Folder");
                 if let Some(dir) = default_dir {

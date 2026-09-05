@@ -25,7 +25,8 @@ pub fn default_contacts_dir_string() -> String {
         .unwrap_or_default()
 }
 
-/// Expands leading `~/` or `~` in path strings into full PathBuf cross-platform.
+/// Expands a leading `~/` or `~` in a path string into a full [`PathBuf`],
+/// on every platform.
 pub fn expand_home_path(path: &str) -> PathBuf {
     if path == "~" {
         return home_dir().unwrap_or_else(|| PathBuf::from(path));

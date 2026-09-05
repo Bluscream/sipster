@@ -101,7 +101,6 @@ pub enum Message {
     RegisterUriSchemes(bool),
     CloseToTray(bool),
     StreamingMode(bool),
-    ImportGoogleClientJson(String),
     PickGoogleJsonFile,
 
     // Integrations. Contact and history providers are account configuration,
@@ -515,6 +514,59 @@ pub(super) fn file_input<'a>(
             .align_y(iced::alignment::Vertical::Center),
     ]
     .into()
+}
+
+pub(super) fn secret_file_input<'a>(
+    placeholder: &'a str,
+    value: &'a str,
+    revealed: bool,
+    on_change: impl Fn(String) -> Message + 'a,
+    on_reveal: impl Fn(bool) -> Message + 'a,
+    on_pick: Message,
+) -> Element<'a, Message> {
+    // A secret that can also be loaded from a file: the Google client secret
+    // is both. Consolidating the two inputs into one dropped the masking, so
+    // the secret sat on screen in plain text — visible over a shoulder, and to
+    // anyone the user is screen-sharing with. Both controls belong here.
+    let field = text_input(placeholder, value)
+        .on_input(on_change)
+        .secure(!revealed)
+        .padding(iced::Padding::from(7).right(56))
+        .size(14);
+
+    let eye = button(text(if revealed { "⊘" } else { "◉" }).size(14))
+        .on_press(on_reveal(!revealed))
+        .padding([2, 6])
+        .style(icon_button_style);
+
+    let picker = button(text("▤").size(14))
+        .on_press(on_pick)
+        .padding([2, 6])
+        .style(icon_button_style);
+
+    stack![
+        field,
+        container(row![eye, picker].spacing(0))
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(iced::alignment::Horizontal::Right)
+            .align_y(iced::alignment::Vertical::Center),
+    ]
+    .into()
+}
+
+/// Shared look for the small glyph buttons that sit inside a text field.
+fn icon_button_style(theme: &iced::Theme, status: button::Status) -> button::Style {
+    let palette = theme.extended_palette();
+    button::Style {
+        background: None,
+        text_color: if matches!(status, button::Status::Hovered) {
+            palette.background.base.text
+        } else {
+            palette.background.strong.color
+        },
+        ..button::Style::default()
+    }
 }
 
 pub(super) fn input<'a>(

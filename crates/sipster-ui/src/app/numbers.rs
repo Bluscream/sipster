@@ -89,10 +89,10 @@ impl SipsterApp {
             } else {
                 format!("**{internal}")
             };
-            let name = if !dev.phone_name.trim().is_empty() {
-                dev.phone_name.trim().to_string()
-            } else {
+            let name = if dev.phone_name.trim().is_empty() {
                 format!("Internal {internal}")
+            } else {
+                dev.phone_name.trim().to_string()
             };
             router_contacts.push(sipster_integrations::Contact {
                 id: format!("fritzbox-dev-{}", dev.username),

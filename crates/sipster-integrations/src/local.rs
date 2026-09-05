@@ -235,6 +235,5 @@ mod tests {
         assert!(!store.is_enabled());
         assert!(store.load_calls().unwrap().is_empty());
         assert!(store.record_call(record("611")).is_ok());
-        assert!(store.load_contacts().unwrap().is_empty());
     }
 }

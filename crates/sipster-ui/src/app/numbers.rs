@@ -59,6 +59,9 @@ impl SipsterApp {
     /// The router lists every telephony device it knows, most of which are not
     /// us — other handsets, a DECT phone, a mobile app. Only the entry whose
     /// SIP username matches the configured account is kept.
+    // Two logging branches either side of a lookup; the macros are what
+    // clippy is counting, not the logic.
+    #[allow(clippy::cognitive_complexity)]
     pub(super) fn on_router_numbers(
         &mut self,
         found: &[sipster_integrations::fritzbox::AccountNumbers],
@@ -77,39 +80,20 @@ impl SipsterApp {
             );
         }
 
-        // Auto-insert router telephony devices into contacts as internal numbers with ** prefix
-        let mut router_contacts = Vec::new();
-        for dev in found {
-            let internal = dev.internal.trim();
-            if internal.is_empty() {
-                continue;
-            }
-            let int_num = if internal.starts_with("**") {
-                internal.to_string()
-            } else {
-                format!("**{internal}")
-            };
-            let name = if dev.phone_name.trim().is_empty() {
-                format!("Internal {internal}")
-            } else {
-                dev.phone_name.trim().to_string()
-            };
-            router_contacts.push(sipster_integrations::Contact {
-                id: format!("fritzbox-dev-{}", dev.username),
-                name,
-                numbers: vec![sipster_integrations::PhoneNumber {
-                    number: int_num,
-                    number_type: sipster_integrations::NumberType::Intern,
-                    priority: 1,
-                }],
-                emails: Vec::new(),
-                source: sipster_integrations::RecordSource::FritzBox {
-                    phonebook_id: 0,
-                    phonebook_name: "Router Devices".to_string(),
-                },
-            });
-        }
-        if !router_contacts.is_empty() {
+        let router_contacts = router_device_contacts(found);
+        if router_contacts.is_empty() {
+            tracing::debug!(
+                devices = found.len(),
+                "the router listed no telephony device with an internal number"
+            );
+        } else {
+            tracing::info!(
+                count = router_contacts.len(),
+                "adding the router's telephony devices to contacts"
+            );
+            // Most will merge straight into a phonebook entry that already
+            // names the same device; the count is what arrived, not what was
+            // added.
             self.contacts.merge(router_contacts);
         }
     }
@@ -152,4 +136,45 @@ impl SipsterApp {
             Some(format!("{who}@{}:{}", account.registrar, account.port))
         }
     }
+}
+
+/// Turns the router's telephony devices into contacts.
+///
+/// Every extension on the router is dialable from here, so each becomes a
+/// contact named after the device. The `**` prefix is what makes the call
+/// internal — dialling a bare `622` sends it to the outside line instead.
+fn router_device_contacts(
+    found: &[sipster_integrations::fritzbox::AccountNumbers],
+) -> Vec<sipster_integrations::Contact> {
+    found
+        .iter()
+        .filter(|dev| !dev.internal.trim().is_empty())
+        .map(|dev| {
+            let internal = dev.internal.trim();
+            let number = if internal.starts_with("**") {
+                internal.to_string()
+            } else {
+                format!("**{internal}")
+            };
+            let name = if dev.phone_name.trim().is_empty() {
+                format!("Internal {internal}")
+            } else {
+                dev.phone_name.trim().to_string()
+            };
+            sipster_integrations::Contact {
+                id: format!("fritzbox-dev-{}", dev.username),
+                name,
+                numbers: vec![sipster_integrations::PhoneNumber {
+                    number,
+                    number_type: sipster_integrations::NumberType::Intern,
+                    priority: 1,
+                }],
+                emails: Vec::new(),
+                source: sipster_integrations::RecordSource::FritzBox {
+                    phonebook_id: 0,
+                    phonebook_name: "Router Devices".to_string(),
+                },
+            }
+        })
+        .collect()
 }

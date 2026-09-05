@@ -29,7 +29,7 @@ fn default_google_edit_cmd() -> String {
 }
 
 fn default_fritzbox_edit_cmd() -> String {
-    "xdg-open https://{registrar}/#/phone-books/book/{phonebook_id}/entry/{short_id}".to_string()
+    "xdg-open http://{registrar}/?lp=pBook&BookId={phonebook_id}&edit={short_id}".to_string()
 }
 
 fn default_carddav_edit_cmd() -> String {

@@ -710,4 +710,23 @@ mod dedup_tests {
         state.merge(batch);
         assert_eq!(state.contacts.len(), 2);
     }
+    /// Router devices merged after a full sync must survive it.
+    #[test]
+    fn router_devices_survive_a_later_merge() {
+        let mut state = State::default();
+        state.merge(vec![
+            contact("Someone", "0301234", RecordSource::FritzBox {
+                phonebook_id: 0, phonebook_name: "Telefonbuch".into() }),
+        ]);
+        let devices = vec![
+            contact("Blu-PC", "**620", RecordSource::FritzBox {
+                phonebook_id: 0, phonebook_name: "Router Devices".into() }),
+            contact("blu-pc2", "**622", RecordSource::FritzBox {
+                phonebook_id: 0, phonebook_name: "Router Devices".into() }),
+        ];
+        state.merge(devices);
+        let names: Vec<&str> = state.contacts.iter().map(|c| c.name.as_str()).collect();
+        assert!(names.contains(&"Blu-PC"), "{names:?}");
+        assert_eq!(state.contacts.len(), 3, "{names:?}");
+    }
 }

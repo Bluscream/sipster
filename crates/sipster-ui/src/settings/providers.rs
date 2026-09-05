@@ -8,7 +8,7 @@ use iced::widget::{button, checkbox, column, pick_list, row, rule, text, text_in
 use iced::{Alignment, Element, Length};
 use sipster_core::{BlockAction, IntegrationSettings};
 
-use super::{field, file_input, input, secret_file_input, secret_input, section, Message, State};
+use super::{field, file_input, input, secret_input, section, Message, State};
 
 /// Contact and history providers.
 ///
@@ -148,21 +148,21 @@ fn google_panel<'a>(
     content
         .push(field(
             id_field_lbl,
-            input(
+            file_input(
                 "…apps.googleusercontent.com",
                 &state.draft_google_client_id,
                 Message::GoogleClientIdChanged,
+                Message::PickGoogleJsonFile,
             ),
         ))
         .push(field(
             secret_field_lbl,
-            secret_file_input(
-                "client_secret_….json",
+            secret_input(
+                "GOCSPX-…",
                 &state.draft_google_client_secret,
                 state.reveal_google_secret,
                 Message::GoogleClientSecretChanged,
                 Message::RevealGoogleSecret,
-                Message::PickGoogleJsonFile,
             ),
         ))
         .push(

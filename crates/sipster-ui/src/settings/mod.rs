@@ -24,7 +24,7 @@ mod widgets;
 pub(crate) use sections::{
     account_section, appearance_section, audio_section, integration_section, sounds_section,
 };
-pub(crate) use widgets::{field, file_input, input, secret_file_input, secret_input, section};
+pub(crate) use widgets::{field, file_input, input, secret_input, section};
 
 use providers::{blocking_section, providers_section};
 

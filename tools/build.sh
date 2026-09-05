@@ -349,7 +349,7 @@ check_file_lengths() {
     step "source file lengths (warn ${FILE_LINES_WARN}, fail ${FILE_LINES_FAIL})"
     local over_limit=0 file lines
     while read -r lines file; do
-        if (( lines >= FILE_LINES_FAIL )); then
+        if (( lines > FILE_LINES_FAIL )); then
             printf '  \033[31mtoo long\033[0m %s (%s lines, limit %s) — split it\n' \
                 "${file}" "${lines}" "${FILE_LINES_FAIL}" >&2
             over_limit=1

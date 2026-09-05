@@ -215,13 +215,23 @@ fn pixmaps() -> Vec<ksni::Icon> {
     SIZES
         .iter()
         .filter_map(|(bytes, size)| {
-            let decoded = image::load_from_memory(bytes).ok()?.to_rgba8();
+            // These are compiled into the binary, so a failure here means a
+            // broken asset rather than anything the user did — but silently
+            // dropping a size leaves the tray with a subtly wrong icon and no
+            // clue why.
+            let decoded = image::load_from_memory(bytes)
+                .inspect_err(|e| tracing::warn!(size, error = %e, "could not decode a tray icon"))
+                .ok()?
+                .to_rgba8();
             let mut argb = Vec::with_capacity(decoded.as_raw().len());
             for pixel in decoded.pixels() {
                 let [r, g, b, a] = pixel.0;
                 argb.extend_from_slice(&[a, r, g, b]);
             }
             Some(ksni::Icon {
+                // Sizes are literals above, so these cannot fail; written as
+                // conversions rather than casts so that stays true if the
+                // list changes.
                 width: i32::try_from(*size).ok()?,
                 height: i32::try_from(*size).ok()?,
                 data: argb,
@@ -260,9 +270,14 @@ pub fn spawn() -> Option<Handle> {
 #[must_use]
 pub fn window_icon() -> Option<iced::window::Icon> {
     let bytes = include_bytes!("../../../assets/icons/sipster-256.png");
-    let decoded = image::load_from_memory(bytes).ok()?.to_rgba8();
+    let decoded = image::load_from_memory(bytes)
+        .inspect_err(|e| tracing::warn!(error = %e, "could not decode the window icon"))
+        .ok()?
+        .to_rgba8();
     let (width, height) = (decoded.width(), decoded.height());
-    iced::window::icon::from_rgba(decoded.into_raw(), width, height).ok()
+    iced::window::icon::from_rgba(decoded.into_raw(), width, height)
+        .inspect_err(|e| tracing::warn!(error = %e, "could not build the window icon"))
+        .ok()
 }
 
 // ── tests ────────────────────────────────────────────────────────────────────

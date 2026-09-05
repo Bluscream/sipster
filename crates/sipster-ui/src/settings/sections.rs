@@ -173,6 +173,8 @@ pub(crate) fn appearance_section(ui: &UiSettings) -> Element<'_, Message> {
     let lang_lbl = rust_i18n::t!("language").to_string();
     let theme_lbl = rust_i18n::t!("theme").to_string();
     let banner_lbl = rust_i18n::t!("show_banner").to_string();
+    let streaming_cb_lbl = rust_i18n::t!("streaming_mode_cb").to_string();
+    let desc_streaming = rust_i18n::t!("streaming_mode_desc").to_string();
 
     section(
         title_app,
@@ -189,6 +191,22 @@ pub(crate) fn appearance_section(ui: &UiSettings) -> Element<'_, Message> {
                     .text_size(13)
                     .into()
             ),
+            // Streaming mode changes what every name and number on screen
+            // looks like, which is appearance. It used to sit under Desktop
+            // beside the tray and URI-handler toggles, which are about how
+            // Sipster fits into the desktop rather than what it shows.
+            field(
+                "",
+                checkbox(ui.streaming_mode)
+                    .label(streaming_cb_lbl)
+                    .on_toggle(Message::StreamingMode)
+                    .size(15)
+                    .text_size(13)
+                    .into()
+            ),
+            text(desc_streaming)
+                .size(11)
+                .color(iced::Color::from_rgb(0.62, 0.62, 0.66)),
         ]
         .spacing(9)
         .into(),
@@ -238,14 +256,6 @@ pub(crate) fn sounds_section(ui: &UiSettings) -> Element<'_, Message> {
 }
 
 pub(crate) fn integration_section(ui: &UiSettings) -> Element<'_, Message> {
-    let streaming_cb_lbl = rust_i18n::t!("streaming_mode_cb").to_string();
-    let streaming_cb: Element<'_, Message> = checkbox(ui.streaming_mode)
-        .label(streaming_cb_lbl)
-        .on_toggle(Message::StreamingMode)
-        .size(15)
-        .text_size(13)
-        .into();
-
     let uri_cb_lbl = rust_i18n::t!("register_uri_cb").to_string();
     let uri_cb: Element<'_, Message> = checkbox(ui.register_uri_schemes)
         .label(uri_cb_lbl)
@@ -264,19 +274,11 @@ pub(crate) fn integration_section(ui: &UiSettings) -> Element<'_, Message> {
 
     let title_desk = rust_i18n::t!("desktop_integration").to_string();
     let hint_desk = rust_i18n::t!("desktop_integration_hint").to_string();
-    let desc_streaming = rust_i18n::t!("streaming_mode_desc").to_string();
 
     section(
         title_desk,
         Some(hint_desk),
-        column![
-            tray_cb,
-            uri_cb,
-            streaming_cb,
-            text(desc_streaming)
-                .size(11)
-                .color(iced::Color::from_rgb(0.62, 0.62, 0.66)),
-        ]
+        column![tray_cb, uri_cb]
         .spacing(9)
         .into(),
     )

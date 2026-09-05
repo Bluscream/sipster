@@ -170,6 +170,7 @@ fn router_device_contacts(
                     priority: 1,
                 }],
                 emails: Vec::new(),
+                merged_from: Vec::new(),
                 source: sipster_integrations::RecordSource::FritzBox {
                     phonebook_id: 0,
                     phonebook_name: "Router Devices".to_string(),

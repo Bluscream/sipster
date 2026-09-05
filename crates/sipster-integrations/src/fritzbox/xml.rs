@@ -64,6 +64,7 @@ pub fn parse_phonebook_xml(xml: &str, pbid: u32, pb_name: &str) -> Vec<Contact> 
             name: real_name,
             numbers,
             emails: Vec::new(),
+            merged_from: Vec::new(),
             source: RecordSource::FritzBox {
                 phonebook_id: pbid,
                 phonebook_name: pb_name.to_string(),

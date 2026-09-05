@@ -149,6 +149,7 @@ pub fn parse(card: &str, id_prefix: &str, source: RecordSource) -> Option<Contac
         name,
         numbers,
         emails,
+        merged_from: Vec::new(),
         source,
     })
 }

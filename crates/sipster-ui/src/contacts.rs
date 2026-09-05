@@ -63,19 +63,41 @@ pub struct State {
 }
 
 /// Whether two contacts list a number in common, comparing normalized.
-///
-/// Two contacts with no numbers at all count as sharing one: there is nothing
-/// to tell them apart beyond the name, which the caller has already matched.
 fn shares_a_number(a: &Contact, b: &Contact) -> bool {
-    if a.numbers.is_empty() && b.numbers.is_empty() {
-        return true;
-    }
     a.numbers.iter().any(|na| {
         let norm_a = normalize_number(&na.number);
         b.numbers
             .iter()
             .any(|nb| norm_a == normalize_number(&nb.number))
     })
+}
+
+/// Whether two contacts describe the same person.
+///
+/// The same name **or** a number in common, not both. One provider spells a
+/// person "Blu-PC" and another "User" while both hold `**620`; a phone book
+/// lists a name with no number at all where Google has the number. Requiring
+/// both left those as separate rows.
+fn same_person(a: &Contact, b: &Contact) -> bool {
+    let same_name = {
+        let (x, y) = (a.name.trim(), b.name.trim());
+        !x.is_empty() && x.eq_ignore_ascii_case(y)
+    };
+    same_name || shares_a_number(a, b)
+}
+
+/// How a contact's origin reads in the list.
+///
+/// One source is named; several are counted, because the row has no space for
+/// a list and the count is the useful part — that this is one person the
+/// providers agreed on.
+fn source_label(contact: &Contact) -> String {
+    let count = contact.sources().count();
+    if count > 1 {
+        rust_i18n::t!("sources_count", count = count).to_string()
+    } else {
+        contact.source.to_string()
+    }
 }
 
 impl State {
@@ -89,7 +111,9 @@ impl State {
         let mut counts: std::collections::BTreeMap<String, usize> =
             std::collections::BTreeMap::new();
         for contact in &self.contacts {
-            *counts.entry(contact.source.to_string()).or_default() += 1;
+            for source in contact.sources() {
+                *counts.entry(source.to_string()).or_default() += 1;
+            }
         }
         counts.into_iter().collect()
     }
@@ -124,23 +148,17 @@ impl State {
         self.contacts.extend(batch);
         self.contacts.sort_by_cached_key(|c| c.name.trim().to_lowercase());
 
-        // Compared against every namesake already kept, not just the one
-        // immediately before. `dedup_by` only looks at neighbours, so
-        // `Alice/611, Alice/622, Alice/611` kept the first number twice — the
-        // duplicate was real but not adjacent to its twin.
-        //
-        // Sorting by name puts namesakes together, so walking back over the
-        // kept entries stops at the first different name and the comparison
-        // stays bounded by how many people share one name.
+        // Matching on a name *or* a number means a duplicate need not be
+        // adjacent after sorting, so every kept entry is a candidate. The
+        // lists are a few hundred long and this runs once per provider batch.
         let mut kept: Vec<Contact> = Vec::with_capacity(self.contacts.len());
         for candidate in std::mem::take(&mut self.contacts) {
-            let duplicate = kept
-                .iter()
-                .rev()
-                .take_while(|k| k.name.trim().eq_ignore_ascii_case(candidate.name.trim()))
-                .any(|k| shares_a_number(k, &candidate));
-            if !duplicate {
-                kept.push(candidate);
+            match kept.iter_mut().find(|k| same_person(k, &candidate)) {
+                // Absorbed rather than dropped: the row can then say it is
+                // known to more than one provider, and hiding a source still
+                // hides every contact that came from it.
+                Some(existing) => existing.absorb(candidate),
+                None => kept.push(candidate),
             }
         }
         self.contacts = kept;
@@ -158,7 +176,9 @@ impl State {
         // made the filter look broken exactly when it was most likely used.
         self.contacts
             .iter()
-            .filter(|c| self.source_shown(&c.source.to_string()))
+            // Shown while any of its sources is shown: hiding one provider
+            // should not hide a person that another provider also knows.
+            .filter(|c| c.sources().any(|s| self.source_shown(&s.to_string())))
             .filter(|c| {
                 if needle.is_empty() || c.name.to_lowercase().contains(&needle) {
                     return true;
@@ -306,7 +326,7 @@ fn contact_row<'a>(
         heading,
         Space::new().width(Length::Fill),
         // Bounded so a long phonebook name cannot squeeze out the contact.
-        container(ui::caption(contact.source.to_string())).max_width(150),
+        container(ui::caption(source_label(contact))).max_width(150),
     ]
     .align_y(Alignment::Center)
     .spacing(10)
@@ -365,7 +385,11 @@ fn contact_detail(contact: &Contact, mask: bool) -> Element<'_, Message> {
         actions = actions
             .push(ui::row_action(edit_lbl, Message::OpenEditContact(contact.clone())));
     }
-    let src_str = contact.source.to_string();
+    let src_str = contact
+        .sources()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ");
     let synced = rust_i18n::t!("synced_from", source = src_str).to_string();
     actions = actions.push(ui::caption(synced));
 
@@ -475,6 +499,7 @@ mod tests {
                 priority: 1,
             }],
             emails: Vec::new(),
+            merged_from: Vec::new(),
             source: RecordSource::Local,
         }
     }
@@ -652,6 +677,7 @@ mod dedup_tests {
                 priority: 1,
             }],
             emails: Vec::new(),
+            merged_from: Vec::new(),
             source,
         }
     }
@@ -673,29 +699,50 @@ mod dedup_tests {
         assert_eq!(state.contacts.len(), 1, "{:?}", state.contacts);
     }
 
-    /// Two people who happen to share a name are not the same person.
+    /// One name is taken to be one person, and their numbers are pooled.
+    ///
+    /// This is the cost of matching on a name *or* a number: two different
+    /// people who genuinely share a name become one row. Nothing is lost —
+    /// both numbers are on it — but they are no longer told apart.
     #[test]
-    fn a_shared_name_with_different_numbers_is_kept() {
+    fn one_name_is_one_person_and_keeps_both_numbers() {
         let mut state = State::default();
         state.merge(vec![
             contact("Alice", "611", RecordSource::Local),
             contact("Alice", "622", RecordSource::Local),
         ]);
-        assert_eq!(state.contacts.len(), 2);
+        assert_eq!(state.contacts.len(), 1);
+        assert_eq!(state.contacts[0].numbers.len(), 2);
+    }
+
+    /// The case that prompted the rule: the router calls a device `Blu-PC`
+    /// and a vCard calls the same extension `User`. One number, one person.
+    #[test]
+    fn a_shared_number_merges_different_names() {
+        let mut state = State::default();
+        state.merge(vec![contact("Blu-PC", "**620", RecordSource::Local)]);
+        state.merge(vec![contact(
+            "User",
+            "**620",
+            RecordSource::FritzBox { phonebook_id: 0, phonebook_name: "Book".into() },
+        )]);
+        assert_eq!(state.contacts.len(), 1);
+        // Both sources are remembered, so the row can say there were two.
+        assert_eq!(state.contacts[0].sources().count(), 2);
     }
 
     /// A duplicate that is not adjacent to its twin after sorting must still
-    /// go. `dedup_by` only looks at neighbours, so `A/611, A/622, A/611` left
-    /// the first number listed twice.
+    /// go, and a number must not be listed twice on the row that absorbed it.
     #[test]
-    fn a_duplicate_separated_by_a_namesake_is_still_removed() {
+    fn a_repeated_number_is_not_listed_twice() {
         let mut state = State::default();
         state.merge(vec![
             contact("Alice", "611", RecordSource::Local),
             contact("Alice", "622", RecordSource::Local),
             contact("Alice", "611", RecordSource::Local),
         ]);
-        assert_eq!(state.contacts.len(), 2, "{:?}", state.contacts);
+        assert_eq!(state.contacts.len(), 1, "{:?}", state.contacts);
+        assert_eq!(state.contacts[0].numbers.len(), 2, "{:?}", state.contacts);
     }
 
     /// Re-syncing must not grow the list.

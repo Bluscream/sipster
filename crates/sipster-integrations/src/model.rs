@@ -71,11 +71,50 @@ pub struct Contact {
     pub numbers: Vec<PhoneNumber>,
     /// Optional email addresses.
     pub emails: Vec<String>,
-    /// Provider source.
+    /// Provider source. The first one this contact was seen from.
     pub source: RecordSource,
+    /// The other sources that turned out to describe the same person.
+    ///
+    /// Filled in by de-duplication, so a contact known to the router, Google
+    /// and a local vCard says so instead of claiming to come from whichever
+    /// provider happened to answer first.
+    #[serde(default)]
+    pub merged_from: Vec<RecordSource>,
 }
 
 impl Contact {
+    /// Folds `other` into this contact, which describes the same person.
+    ///
+    /// Keeps the numbers and addresses only one of them had, and records where
+    /// the other came from. The name and id are this contact's, since it was
+    /// seen first.
+    pub fn absorb(&mut self, other: Self) {
+        for number in other.numbers {
+            let known = self
+                .numbers
+                .iter()
+                .any(|mine| crate::normalize_number(&mine.number) == crate::normalize_number(&number.number));
+            if !known {
+                self.numbers.push(number);
+            }
+        }
+        for email in other.emails {
+            if !self.emails.contains(&email) {
+                self.emails.push(email);
+            }
+        }
+        for source in std::iter::once(other.source).chain(other.merged_from) {
+            if source != self.source && !self.merged_from.contains(&source) {
+                self.merged_from.push(source);
+            }
+        }
+    }
+
+    /// Every source this contact is known to, the first one included.
+    pub fn sources(&self) -> impl Iterator<Item = &RecordSource> {
+        std::iter::once(&self.source).chain(self.merged_from.iter())
+    }
+
     /// Returns the primary number to dial for this contact.
     pub fn primary_number(&self) -> Option<&str> {
         self.numbers

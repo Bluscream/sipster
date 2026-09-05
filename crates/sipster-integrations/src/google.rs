@@ -272,6 +272,7 @@ impl GoogleContactsClient {
             name: name.to_string(),
             numbers,
             emails,
+            merged_from: Vec::new(),
             source: RecordSource::Google {
                 email: self.email.clone(),
             },

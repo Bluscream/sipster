@@ -17,19 +17,6 @@ const FALLBACK: &str = "en";
 /// Locales shipped with the app.
 const LOCALES: &[&str] = &["en", "de"];
 
-/// Keys deliberately absent from a non-fallback locale, so the English shows
-/// through.
-///
-/// These are names, not prose: translating them would produce something that
-/// is not what the thing is called. Anything else missing is an oversight and
-/// the test says so.
-const UNTRANSLATED_ON_PURPOSE: &[&str] = &[
-    "carddav",       // a protocol name
-    "evolution",     // an application name
-    "fritzbox",      // a product name
-    "fritzbox_sync", // ditto, in a phrase built around it
-];
-
 /// What separates a key from its value on a line.
 const KEY_VALUE_SEPARATOR: &str = ": ";
 
@@ -133,15 +120,12 @@ fn no_two_keys_share_a_value() {
 #[test]
 fn every_locale_covers_the_fallback() {
     let fallback: BTreeSet<String> = map(&read(FALLBACK)).into_keys().collect();
-    let allowed: BTreeSet<&str> = UNTRANSLATED_ON_PURPOSE.iter().copied().collect();
 
     let mut problems = Vec::new();
     for locale in LOCALES.iter().filter(|l| **l != FALLBACK) {
         let present: BTreeSet<String> = map(&read(locale)).into_keys().collect();
         for key in fallback.difference(&present) {
-            if !allowed.contains(key.as_str()) {
-                problems.push(format!("  {locale}.yml: missing {key}"));
-            }
+            problems.push(format!("  {locale}.yml: missing {key}"));
         }
         for key in present.difference(&fallback) {
             problems.push(format!(
@@ -150,24 +134,6 @@ fn every_locale_covers_the_fallback() {
         }
     }
     report("locales disagree about which keys exist", &problems);
-}
-
-/// A listed exception that is no longer missing is stale, and would hide a
-/// real gap if the key were dropped from the translation later.
-#[test]
-fn the_untranslated_list_is_current() {
-    let mut problems = Vec::new();
-    for locale in LOCALES.iter().filter(|l| **l != FALLBACK) {
-        let present = map(&read(locale));
-        for key in UNTRANSLATED_ON_PURPOSE {
-            if present.contains_key(*key) {
-                problems.push(format!(
-                    "  {locale}.yml: {key} is listed as untranslated on purpose but is translated"
-                ));
-            }
-        }
-    }
-    report("UNTRANSLATED_ON_PURPOSE is out of date", &problems);
 }
 
 /// An empty value renders as nothing at all — a blank button, a blank label.

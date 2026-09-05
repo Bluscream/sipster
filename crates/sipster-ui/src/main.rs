@@ -440,11 +440,10 @@ mod locale_tests {
         );
     }
 
-    /// German is a partial locale on purpose: proper nouns fall through to the
-    /// English so they are not translated into something that is not their name.
+    /// German covers every key; the names it must not translate are constants
+    /// in the code rather than keys, so there is nothing to fall through.
     #[test]
-    fn german_translates_and_falls_back() {
+    fn german_translates() {
         assert_eq!(rust_i18n::t!("call", locale = "de"), "Anrufen");
-        assert_eq!(rust_i18n::t!("fritzbox", locale = "de"), "FRITZ!Box");
     }
 }

@@ -9,6 +9,15 @@ use std::path::PathBuf;
 /// Display placeholder string for default local contacts directory (tilde form).
 pub const LOCAL_CONTACTS_DIR_DISPLAY: &str = "~/.local/share/contacts";
 
+/// Names of the things Sipster talks to.
+///
+/// Not translation keys: a product or protocol name is the same in every
+/// language, so routing it through the locales only created keys that every
+/// translation had to carry and deliberately leave alone.
+pub const FRITZBOX: &str = "FRITZ!Box";
+pub const CARDDAV: &str = "CardDAV";
+pub const EVOLUTION: &str = "Evolution / GNOME Contacts";
+
 /// The directory name holding vCards inside the data directory.
 ///
 /// The vdirsyncer/khard/Radicale convention, which is what the local provider

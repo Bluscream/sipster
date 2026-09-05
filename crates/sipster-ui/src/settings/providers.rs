@@ -69,7 +69,7 @@ fn fritzbox_panel<'a>(
 ) -> Element<'a, Message> {
     let fb = &integration.fritzbox;
 
-    let title_fb = rust_i18n::t!("fritzbox").to_string();
+    let title_fb = crate::consts::FRITZBOX.to_string();
     let sync_fb = rust_i18n::t!("fritzbox_sync").to_string();
     let host_lbl = rust_i18n::t!("host").to_string();
     let port_lbl = rust_i18n::t!("port").to_string();
@@ -177,7 +177,7 @@ fn carddav_panel<'a>(
     state: &'a State,
     integration: &'a IntegrationSettings,
 ) -> Element<'a, Message> {
-    let title_cd = rust_i18n::t!("carddav").to_string();
+    let title_cd = crate::consts::CARDDAV.to_string();
     let rm_lbl = rust_i18n::t!("remove").to_string();
 
     let mut content = column![text(title_cd).size(14)].spacing(6);
@@ -264,7 +264,7 @@ fn vdir_panel<'a>(
         rust_i18n::t!("evolution_not_found").to_string()
     };
 
-    let title_eds = rust_i18n::t!("evolution").to_string();
+    let title_eds = crate::consts::EVOLUTION.to_string();
     let desc_eds = rust_i18n::t!("evolution_desc").to_string();
     let read_eds = rust_i18n::t!("evolution_read").to_string();
 

@@ -49,6 +49,8 @@ impl SipsterApp {
                         port: fb.port,
                         username: fb.username.clone(),
                         password: fb.password.clone(),
+                        tls: fb.tls,
+                        cert_fingerprint: fb.cert_fingerprint.clone(),
                     }));
                 } else {
                     self.sync_manager.set_fritzbox(None);

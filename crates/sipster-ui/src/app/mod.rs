@@ -920,8 +920,10 @@ fn build_sync_manager(config: &Config) -> SyncManager {
                     host: fb.host.clone(),
                     port: fb.port,
                     username: fb.username.clone(),
-                    password: fb.password.clone(),
-                }));
+                        password: fb.password.clone(),
+                        tls: fb.tls,
+                        cert_fingerprint: fb.cert_fingerprint.clone(),
+                    }));
             }
             let g_clients = config
                 .integration

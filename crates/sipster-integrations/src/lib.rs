@@ -10,6 +10,7 @@ pub mod local;
 pub mod model;
 pub mod vcard;
 pub mod akonadi;
+pub mod pinned_tls;
 #[cfg(target_os = "linux")]
 pub mod eds;
 pub mod vdir;
@@ -19,7 +20,7 @@ use tokio::sync::RwLock;
 use tracing::{info, warn};
 
 pub use carddav::{CardDavClient, CardDavConfig};
-pub use fritzbox::{FritzBoxClient, FritzConfig, FritzError};
+pub use fritzbox::{take_learned_fingerprint, FritzBoxClient, FritzConfig, FritzError};
 pub use google::{cancel_pending_auth, GoogleContactsClient, GoogleTokenResponse};
 pub use local::{LocalStore, LocalStoreError};
 pub use vdir::VdirStore;
@@ -45,7 +46,41 @@ pub fn http_agent() -> ureq::Agent {
     AGENT.get_or_init(build_agent).clone()
 }
 
+/// An agent that trusts one self-signed certificate, pinned by fingerprint.
+///
+/// Used for the router, whose certificate no authority can vouch for. See
+/// [`pinned_tls`]. The learned fingerprint is reported back through `seen` so
+/// the caller can store it after a successful first connection.
+#[must_use]
+pub fn pinned_agent(
+    fingerprint: String,
+) -> (ureq::Agent, std::sync::Arc<std::sync::Mutex<Option<String>>>) {
+    // rustls refuses to pick a crypto provider when more than one could be
+    // compiled in, and panics inside the worker rather than returning an
+    // error. Installed once here, before any TLS config is built.
+    static PROVIDER: std::sync::Once = std::sync::Once::new();
+    PROVIDER.call_once(|| {
+        if rustls::crypto::ring::default_provider().install_default().is_err() {
+            // Already installed by someone else, which is equally fine.
+            tracing::debug!("a rustls crypto provider was already installed");
+        }
+    });
+
+    let (verifier, seen) = pinned_tls::PinnedCert::new(fingerprint);
+    let tls = rustls::ClientConfig::builder()
+        .dangerous()
+        .with_custom_certificate_verifier(verifier)
+        .with_no_client_auth();
+
+    let agent = agent_builder().tls_config(std::sync::Arc::new(tls)).build();
+    (agent, seen)
+}
+
 fn build_agent() -> ureq::Agent {
+    agent_builder().build()
+}
+
+fn agent_builder() -> ureq::AgentBuilder {
     ureq::AgentBuilder::new()
         // Connect fast so an unreachable host fails quickly, but read
         // patiently: a FRITZ!Box generates calllist.lua on demand and can take
@@ -54,7 +89,6 @@ fn build_agent() -> ureq::Agent {
         .timeout_connect(std::time::Duration::from_secs(5))
         .timeout_read(std::time::Duration::from_secs(60))
         .timeout_write(std::time::Duration::from_secs(15))
-        .build()
 }
 
 /// Central manager coordinating multi-source contact and call history synchronization.

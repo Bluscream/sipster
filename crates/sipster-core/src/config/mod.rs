@@ -418,6 +418,31 @@ pub struct CardDavAccountConfig {
 pub struct FritzBoxSettings {
     pub host: String,
     pub port: u16,
+    /// Fetch over TLS rather than plain HTTP.
+    ///
+    /// Off by default, and that is a measured retreat rather than an
+    /// oversight. The SOAP calls work over TLS, but the phonebook downloads
+    /// that follow do not: the router frames them with `Connection: close` and
+    /// no `Content-Length`, then closes the socket without a TLS
+    /// `close_notify`, which rustls reports as `unexpected_eof`. Every
+    /// download fails and the sync reports success with zero contacts.
+    /// Encrypting only the SOAP metadata while the contacts themselves still
+    /// travel in clear would miss the point, so the default stays on plain
+    /// HTTP until that is solved.
+    ///
+    /// Turning it on is safe to try — the certificate is pinned, see
+    /// [`cert_fingerprint`](Self::cert_fingerprint) — and a router or HTTP
+    /// stack that closes cleanly will work.
+    #[serde(default)]
+    pub tls: bool,
+    /// SHA-256 of the router's certificate, remembered on the first TLS
+    /// connection and required on every one after it.
+    ///
+    /// The certificate is self-signed, so nothing else can vouch for it. Clear
+    /// this if the router legitimately gets a new one — a factory reset, say —
+    /// and it will be learned again.
+    #[serde(default)]
+    pub cert_fingerprint: String,
     #[serde(with = "secret")]
     pub username: String,
     #[serde(with = "secret")]
@@ -433,6 +458,8 @@ impl Default for FritzBoxSettings {
             // other user would have had their router credentials sent to.
             host: "fritz.box".into(),
             port: 49000,
+            tls: false,
+            cert_fingerprint: String::new(),
             username: String::new(),
             password: String::new(),
             // Off until the user configures it. Defaulting to on meant a fresh
@@ -479,6 +506,10 @@ impl std::fmt::Debug for FritzBoxSettings {
         f.debug_struct("FritzBoxSettings")
             .field("host", &self.host)
             .field("port", &self.port)
+            .field("tls", &self.tls)
+            // Not secret — a certificate fingerprint is meant to be compared
+            // out loud — but worth seeing when a pin stops matching.
+            .field("cert_fingerprint", &self.cert_fingerprint)
             .field("username", &self.username)
             .field("password", &redacted(&self.password))
             .field("enabled", &self.enabled)

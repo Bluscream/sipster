@@ -27,6 +27,25 @@ impl From<ureq::Error> for FritzError {
     }
 }
 
+/// A certificate fingerprint reported back from a first TLS connection.
+type LearnedCert = Option<std::sync::Arc<std::sync::Mutex<Option<String>>>>;
+
+/// A certificate fingerprint learned during the last sync, waiting to be
+/// stored in the config.
+///
+/// A global because the sync runs deep inside a provider with no route back to
+/// the settings, and the value is written once on first contact with a router.
+pub static LEARNED_FINGERPRINT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Takes the fingerprint learned since the last call, if any.
+pub fn take_learned_fingerprint() -> Option<String> {
+    LEARNED_FINGERPRINT.lock().ok()?.take()
+}
+
+/// AVM's TR-064 TLS port. Fixed on the device and not the same as the plain
+/// one, so it is not derived from the configured port.
+pub const TLS_PORT: u16 = 49443;
+
 /// Configuration credentials to connect to a FRITZ!Box TR-064 interface.
 #[derive(Clone)]
 pub struct FritzConfig {
@@ -34,6 +53,11 @@ pub struct FritzConfig {
     pub port: u16,
     pub username: String,
     pub password: String,
+    /// Talk to the router over TLS. See [`crate::pinned_tls`].
+    pub tls: bool,
+    /// The router certificate's fingerprint, learned on first use. Empty means
+    /// "not learned yet"; the first TLS connection fills it in.
+    pub cert_fingerprint: String,
 }
 
 /// Redacts the router password, which on a FRITZ!Box is also the admin
@@ -43,6 +67,8 @@ impl std::fmt::Debug for FritzConfig {
         f.debug_struct("FritzConfig")
             .field("host", &self.host)
             .field("port", &self.port)
+            .field("tls", &self.tls)
+            .field("cert_fingerprint", &self.cert_fingerprint)
             .field("username", &self.username)
             .field("password", &"<redacted>")
             .finish()
@@ -56,6 +82,8 @@ impl Default for FritzConfig {
             port: 49000,
             username: String::new(),
             password: String::new(),
+            tls: false,
+            cert_fingerprint: String::new(),
         }
     }
 }
@@ -96,6 +124,42 @@ impl FritzBoxClient {
     }
 
     /// Performs an authenticated TR-064 SOAP request.
+    /// The HTTP agent for this router.
+    ///
+    /// Over TLS the certificate is self-signed, so the agent pins it by
+    /// fingerprint rather than trusting a certificate authority. A fingerprint
+    /// learned on a first connection comes back through the second value. See
+    /// [`crate::pinned_tls`].
+    fn agent(&self) -> (ureq::Agent, LearnedCert) {
+        if self.config.tls {
+            let (agent, seen) = crate::pinned_agent(self.config.cert_fingerprint.clone());
+            (agent, Some(seen))
+        } else {
+            (crate::http_agent(), None)
+        }
+    }
+
+    /// Publishes a certificate fingerprint learned on a first TLS connection,
+    /// so it can be pinned from here on.
+    fn record_learned_certificate(
+        &self,
+        learned: Option<&std::sync::Arc<std::sync::Mutex<Option<String>>>>,
+    ) {
+        let Some(fingerprint) = learned
+            .and_then(|seen| seen.lock().ok()?.take())
+        else {
+            return;
+        };
+        tracing::info!(
+            host = %self.config.host,
+            %fingerprint,
+            "learned the router's TLS certificate"
+        );
+        if let Ok(mut pending) = LEARNED_FINGERPRINT.lock() {
+            *pending = Some(fingerprint);
+        }
+    }
+
     pub fn soap_call(
         &self,
         control_url: &str,
@@ -124,16 +188,16 @@ impl FritzBoxClient {
         );
 
         let soap_action = format!("{service_type}#{action}");
-        // Plain HTTP on the LAN. Digest auth keeps the password off the wire,
-        // but the phonebook and call list themselves are not encrypted. The
-        // router also serves TR-064 over TLS on 49443, which would need either
-        // a pinned certificate or an explicit opt-in — its certificate is
-        // self-signed, and accepting any certificate would be encryption
-        // without authentication.
-        let url = format!("http://{}:{}{control_url}", self.config.host, self.config.port);
+        // Over TLS the port is the router's TLS port, not the plain one — AVM
+        // serves TR-064 on 49000 unencrypted and 49443 encrypted.
+        let url = if self.config.tls {
+            format!("https://{}:{TLS_PORT}{control_url}", self.config.host)
+        } else {
+            format!("http://{}:{}{control_url}", self.config.host, self.config.port)
+        };
         let started = std::time::Instant::now();
 
-        let agent = crate::http_agent();
+        let (agent, learned) = self.agent();
         let mut request = agent
             .post(&url)
             .set("Content-Type", "text/xml; charset=\"utf-8\"")
@@ -155,6 +219,8 @@ impl FritzBoxClient {
             );
         }
         let res = request.send_string(&body);
+
+        self.record_learned_certificate(learned.as_ref());
 
         match res {
             Ok(response) => {
@@ -211,11 +277,19 @@ impl FritzBoxClient {
         // The downloads dominate: the router generates each phonebook on
         // demand, and the largest took 8.5s while four others took under
         // 100ms. Sequentially that is the sum; in parallel it is the slowest.
+        // Built once and shared: over TLS this carries the certificate pin, and
+        // the downloads are served by the same router as the SOAP calls. Using
+        // the default agent here made every download fail certificate
+        // validation while the SOAP calls succeeded — six empty phonebooks and
+        // a sync that reported success.
+        let (agent, _) = self.agent();
+
         let all_contacts: Vec<Contact> = std::thread::scope(|scope| {
             let handles: Vec<_> = targets
                 .iter()
                 .map(|(pbid, pb_name, pb_url)| {
-                    scope.spawn(move || download_phonebook(*pbid, pb_name, pb_url))
+                    let agent = &agent;
+                    scope.spawn(move || download_phonebook(agent, *pbid, pb_name, pb_url))
                 })
                 .collect();
             handles
@@ -283,17 +357,17 @@ impl FritzBoxClient {
             });
         };
 
-        let cl_resp = crate::http_agent().get(&call_list_url).call()?.into_string()?;
+        let cl_resp = self.agent().0.get(&call_list_url).call()?.into_string()?;
         Ok(parse_call_list_xml(&cl_resp))
     }
 }
 
 /// Downloads and parses one phonebook. Failures are reported and skipped so a
 /// single unavailable phonebook does not lose the others.
-fn download_phonebook(pbid: u32, pb_name: &str, pb_url: &str) -> Vec<Contact> {
+fn download_phonebook(agent: &ureq::Agent, pbid: u32, pb_name: &str, pb_url: &str) -> Vec<Contact> {
     let started = std::time::Instant::now();
 
-    let body = crate::http_agent()
+    let body = agent
         .get(pb_url)
         .call()
         .map_err(|e| e.to_string())

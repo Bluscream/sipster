@@ -129,6 +129,36 @@ impl SipsterApp {
         )))
     }
 
+    /// Persists a router certificate fingerprint learned during a sync.
+    ///
+    /// Trust on first use: the first TLS connection to the router records what
+    /// it presented, and every connection after that requires the same
+    /// certificate. Stored here because the sync runs too deep to reach the
+    /// config itself.
+    fn store_learned_certificate(&mut self) {
+        let Some(fingerprint) = sipster_integrations::take_learned_fingerprint() else {
+            return;
+        };
+        if self.config.integration.fritzbox.cert_fingerprint == fingerprint {
+            return;
+        }
+        self.config.integration.fritzbox.cert_fingerprint = fingerprint;
+        self.persist();
+
+        // Hand the pin to the sync manager so the next sync verifies against
+        // it rather than learning all over again.
+        let fb = &self.config.integration.fritzbox;
+        self.sync_manager
+            .set_fritzbox(Some(sipster_integrations::FritzConfig {
+                host: fb.host.clone(),
+                port: fb.port,
+                username: fb.username.clone(),
+                password: fb.password.clone(),
+                tls: fb.tls,
+                cert_fingerprint: fb.cert_fingerprint.clone(),
+            }));
+    }
+
     /// Marks every missed call currently listed as seen.
     ///
     /// Recorded against the newest one rather than a flag, so a call that
@@ -188,6 +218,7 @@ impl SipsterApp {
             }
             contacts::Message::SyncFinished => {
                 self.contacts.loading = false;
+                self.store_learned_certificate();
                 Task::none()
             }
             contacts::Message::DialContact(target) => {

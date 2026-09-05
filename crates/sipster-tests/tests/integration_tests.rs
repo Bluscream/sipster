@@ -171,43 +171,6 @@ fn config_parses_from_toml() {
     assert_eq!(config.account.expires, 600, "expires should default");
 }
 
-/// Configs written before the one-account rule used `[[accounts]]`. Reading one
-/// must still work, or an upgrade would look like a wiped configuration.
-///
-/// The migration lives in `Config::load` rather than in `Deserialize`, so this
-/// has to go through a real file.
-#[test]
-fn a_legacy_accounts_list_is_adopted_on_load() {
-    let dir = std::env::temp_dir().join(format!("sipster-legacy-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).expect("temp dir");
-    let path = dir.join("sipster.toml");
-    std::fs::write(
-        &path,
-        r#"
-        [[accounts]]
-        registrar = "fritz.box"
-        username = "620"
-
-        [[accounts]]
-        registrar = "fritz.box"
-        username = "622"
-    "#,
-    )
-    .expect("write");
-
-    let config = Config::load(&path).expect("load");
-    assert_eq!(config.account.username, "620", "the first account is adopted");
-    assert!(!config.needs_setup());
-
-    // Saving writes the new shape and forgets the old list entirely.
-    let out = dir.join("saved.toml");
-    config.save(&out).expect("save");
-    let text = std::fs::read_to_string(&out).expect("read back");
-    assert!(!text.contains("[[accounts]]"), "the old list must not be written back");
-
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
 #[test]
 fn missing_config_file_is_not_an_error() {
     let config = Config::load("/nonexistent/sipster.toml").expect("missing file -> empty config");

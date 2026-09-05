@@ -253,10 +253,8 @@ file   = "…"            # omit for console only; the console is always used
 filter = "info,sipster_core=debug"   # the syntax RUST_LOG used to take
 ```
 
-A config written for an older version, with one or more `[[accounts]]` tables,
-still loads: the first is adopted and any others are named in a warning. Saving
-rewrites the file in the `[account]` form. To keep a second account, copy the
-config, leave one account in each, and run a second copy with `--config`.
+To run a second account, copy the config, put one account in each, and start a
+second copy with `--config-file`.
 
 </details>
 

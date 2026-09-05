@@ -671,13 +671,6 @@ impl Default for LogSettings {
 pub struct Config {
     #[serde(default)]
     pub account: SipAccount,
-    /// Accounts from a config written before the one-account rule.
-    ///
-    /// Read so an existing file still works, and never written back: the
-    /// first is adopted as [`account`](Self::account) on load and the rest are
-    /// reported, so nobody silently loses a line they had configured.
-    #[serde(default, rename = "accounts", skip_serializing)]
-    legacy_accounts: Vec<SipAccount>,
     #[serde(default)]
     pub ui: UiSettings,
     #[serde(default)]
@@ -725,35 +718,6 @@ impl Config {
     /// variable that could be supplying one behind the scenes.
     pub fn needs_setup(&self) -> bool {
         self.account.validate().is_err()
-    }
-
-    /// Adopts the first `[[accounts]]` entry from a pre-one-account config.
-    ///
-    /// Anything beyond the first cannot be represented any more, so it is
-    /// named in a warning rather than dropped quietly — the credentials are
-    /// still in the file the user has, and can be split into their own config.
-    #[allow(clippy::cognitive_complexity)] // three branches; the log macros inflate the score
-    fn adopt_legacy_account(&mut self) {
-        let mut legacy = std::mem::take(&mut self.legacy_accounts).into_iter();
-        let Some(first) = legacy.next() else {
-            return;
-        };
-        if self.account.validate().is_ok() {
-            // An explicit `[account]` wins; the old list is then redundant.
-            tracing::warn!(
-                "config has both [account] and the older [[accounts]]; using [account]"
-            );
-            return;
-        }
-        tracing::info!(account = %first.label(), "adopted the account from [[accounts]]");
-        self.account = first;
-        for extra in legacy {
-            tracing::warn!(
-                account = %extra.label(),
-                "ignoring an extra account: one account per config now — \
-                 run a second copy with --config to register it"
-            );
-        }
     }
 
     /// Writes the config as TOML, creating parent directories as needed.
@@ -820,10 +784,7 @@ impl Config {
         secret::use_key_beside(path);
         match std::fs::read_to_string(path) {
             Ok(text) => {
-                let mut config: Self = toml::from_str(&text)
-                    .map_err(|e| Error::Config(format!("{}: {e}", path.display())))?;
-                config.adopt_legacy_account();
-                Ok(config)
+                toml::from_str(&text).map_err(|e| Error::Config(format!("{}: {e}", path.display())))
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(Error::Io(e)),

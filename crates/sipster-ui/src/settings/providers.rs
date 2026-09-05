@@ -347,7 +347,7 @@ impl std::fmt::Display for BlockActionChoice {
     }
 }
 
-pub(super) fn block_action_label(action: BlockAction) -> String {
+pub(crate) fn block_action_label(action: BlockAction) -> String {
     match action {
         BlockAction::Reject => rust_i18n::t!("settings.block_action.reject").to_string(),
         BlockAction::Mute => rust_i18n::t!("settings.block_action.mute").to_string(),

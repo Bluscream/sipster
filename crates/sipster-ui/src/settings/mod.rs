@@ -17,7 +17,7 @@
 //! they are parsed once, on apply, and a bad value is reported rather than
 //! silently reset.
 
-mod providers;
+pub(crate) mod providers;
 
 use providers::{blocking_section, providers_section};
 

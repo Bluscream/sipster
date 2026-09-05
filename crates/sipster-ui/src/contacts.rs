@@ -360,8 +360,8 @@ fn block_prompt<'a>(number: &'a str, name: Option<&'a str>) -> Element<'a, Messa
     let title_str = rust_i18n::t!("contacts.block_prompt_title").to_string();
     let desc_str = rust_i18n::t!("contacts.block_prompt_desc").to_string();
     let cancel_str = rust_i18n::t!("ui.cancel").to_string();
-    let mute_str = rust_i18n::t!("ui.mute").to_string();
-    let reject_str = rust_i18n::t!("ui.reject").to_string();
+    let mute_str = crate::settings::providers::block_action_label(BlockAction::Mute);
+    let reject_str = crate::settings::providers::block_action_label(BlockAction::Reject);
 
     let content = column![
         text(title_str).size(18),

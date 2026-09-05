@@ -38,7 +38,7 @@ This list is deliberately limited to things that demonstrably work — see
 
 ### Calling
 
-- **Registration** against a SIP registrar over UDP, with re-registration.
+- **Registration** against a SIP registrar, with re-registration.
   Tested against an AVM Fritz!Box. The status line reflects what the registrar
   actually answered, not merely that a REGISTER was sent.
 - **Outgoing calls** to an extension, a phone number or a full SIP URI.
@@ -47,9 +47,18 @@ This list is deliberately limited to things that demonstrably work — see
 - **Two-way audio** through your microphone and speaker, including **early
   media** — you hear ringback, IVR prompts and announcements that arrive before
   the call is answered.
+- **DTMF** to the far end while a call is up, from the dialpad or the keyboard
+  — enough to drive a phone menu. Sent as RFC 4733 events.
+- **Hold and blind transfer**, offered only while there is a call to apply them
+  to. Transfer hands the call to whatever is in the number field.
 - **Per-device audio selection.** Real PipeWire sinks and sources are listed
   under their own names, and switching devices re-routes a call already in
   progress. See [How device selection works](#how-device-selection-works).
+- **Several accounts at once.** Every enabled account registers, and a call is
+  answered and hung up on the account it arrived on. One account failing to
+  connect does not stop the others.
+- **UDP, TCP or TLS** to the registrar, per account. TLS addresses it as
+  `sips:` on port 5061.
 - **Call blocking**, with a per-number action and a default for new rules.
 
 ### Contacts and call history
@@ -97,25 +106,26 @@ This list is deliberately limited to things that demonstrably work — see
 - **Remote control and URI handling.** `sipster --call 611`, a `tel:` link
   clicked in a browser, and a shell script all take the same path.
 - **AppImage** packaging for x86-64 Linux, plus plain binaries for Linux
-  aarch64/i686/armv7 and Windows x86-64/x86.
+  aarch64/i686/armv7 and Windows x86-64/x86/ARM64.
 
 ### Not yet
 
-Named here so nobody has to discover them the hard way:
+Two things are still missing, named here so nobody has to discover them the
+hard way:
 
-- **No DTMF during a call.** The dialpad plays a local feedback tone and edits
-  the number field. It does not send RFC 4733 or in-band digits to the peer, so
-  it cannot drive a phone menu mid-call.
-- **No hold or transfer.**
-- **No Akonadi SQL store.** Akonadi address books backed by its database — what
-  an IMAP or Kolab resource writes into — are only reachable through the Akonadi
-  protocol itself, and are not read. File-backed ones are.
-- **UDP only.** The config format reserves a `transport` field, but TCP and TLS
-  are not implemented.
-- **No Windows-on-ARM build.** `aarch64-pc-windows-msvc` does not currently
-  cross-compile here — `ring` fails under cargo-xwin. See the note in
-  `scripts/build.sh`.
-- **Only the first account** in the config is used.
+- **No attended transfer.** Transfer is blind: the call is handed over as soon
+  as the far end accepts the REFER, with no consultation call first and no way
+  back if the target does not answer.
+- **No Akonadi SQL store.** Akonadi address books backed by its own database —
+  what an IMAP or Kolab resource writes into — are reachable only through the
+  Akonadi protocol, which is a binary protocol of its own with no Rust client,
+  so they are not read. The `vcarddir` and `contacts` resources, which are what
+  a KDE user normally configures, are file-backed and *are* read.
+
+And one caveat about what has been tested: DTMF, hold and transfer are
+implemented and unit-tested, but have not been exercised against a live call.
+The Windows-on-ARM binary cross-compiles but has never been run — there is no
+ARM Windows machine here to run it on.
 
 ## Install
 
@@ -188,7 +198,8 @@ port      = 5060
 username  = "bluscream"
 auth_user = ""             # defaults to username
 password  = "…"
-transport = "udp"          # only udp is implemented
+transport = "udp"          # udp, tcp or tls
+enabled   = true           # register this account at all
 expires   = 600            # re-registration interval, seconds
 local_port = 5060          # falls back to an ephemeral port if taken
 
@@ -229,6 +240,9 @@ password = "…"
 [ipc]
 socket = "…"            # omit for $XDG_RUNTIME_DIR/sipster.sock
 ```
+
+`[[accounts]]` may appear more than once; every account with `enabled = true`
+is registered.
 
 </details>
 
@@ -330,6 +344,7 @@ re-enters it for you, so run it from the host:
 ./scripts/build.sh check           # clippy (warnings denied) + tests
 ./scripts/build.sh x86_64-linux    # one target
 ./scripts/build.sh appimage        # dist/sipster-linux-x86_64.AppImage
+./scripts/build.sh windows         # x86-64, x86 and ARM64
 ./scripts/build.sh all             # every target, plus the AppImage
 ./scripts/build.sh run             # run the AppImage without FUSE-mounting it
 ```
@@ -339,6 +354,9 @@ Artifacts land in `dist/` named `sipster-{os}-{arch}.{ext}`.
 Note that `check` only covers the host target. It will not catch a Linux-only
 call reaching cross-platform code — run `./scripts/build.sh windows` before
 tagging.
+
+While a game is running the build drops to half the cores at `nice 10` rather
+than fighting it for the CPU; `SIPSTER_IGNORE_GAMES=1` uses the whole machine.
 
 Test the AppImage with `build.sh run`, never by executing `dist/*.AppImage`
 directly: a killed AppImage orphans its `/tmp/.mount_*` FUSE mount, and these

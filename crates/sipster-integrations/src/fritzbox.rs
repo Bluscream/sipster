@@ -124,6 +124,12 @@ impl FritzBoxClient {
         );
 
         let soap_action = format!("{service_type}#{action}");
+        // Plain HTTP on the LAN. Digest auth keeps the password off the wire,
+        // but the phonebook and call list themselves are not encrypted. The
+        // router also serves TR-064 over TLS on 49443, which would need either
+        // a pinned certificate or an explicit opt-in — its certificate is
+        // self-signed, and accepting any certificate would be encryption
+        // without authentication.
         let url = format!("http://{}:{}{control_url}", self.config.host, self.config.port);
         let started = std::time::Instant::now();
 

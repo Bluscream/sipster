@@ -190,28 +190,40 @@ fn read_json<T: Default + for<'de> Deserialize<'de>>(path: &Path) -> Result<T, L
 fn write_json<T: Serialize>(path: &Path, payload: &T) -> Result<(), LocalStoreError> {
     let temp = path.with_extension("json.tmp");
     let json = serde_json::to_vec_pretty(payload)?;
-    fs::write(&temp, json)?;
-    restrict_file(&temp)?;
+    // Created 0600 rather than written and then chmod'ed: this file holds
+    // contacts and call history, and the old order left a window where it
+    // existed with whatever the umask allowed.
+    write_private(&temp, &json)?;
     fs::rename(&temp, path)?;
     Ok(())
 }
 
-#[cfg(unix)]
-fn restrict_file(path: &Path) -> Result<(), LocalStoreError> {
-    use std::os::unix::fs::PermissionsExt;
-    fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
-    Ok(())
+/// Writes `bytes`, readable only by this user from the moment the file exists.
+fn write_private(path: &Path, bytes: &[u8]) -> Result<(), LocalStoreError> {
+    #[cfg(unix)]
+    {
+        use std::io::Write as _;
+        use std::os::unix::fs::OpenOptionsExt as _;
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)?;
+        file.write_all(bytes)?;
+        Ok(())
+    }
+    #[cfg(not(unix))]
+    {
+        fs::write(path, bytes)?;
+        Ok(())
+    }
 }
 
 #[cfg(unix)]
 fn restrict_dir(path: &Path) -> Result<(), LocalStoreError> {
     use std::os::unix::fs::PermissionsExt;
     fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
-    Ok(())
-}
-
-#[cfg(not(unix))]
-fn restrict_file(_path: &Path) -> Result<(), LocalStoreError> {
     Ok(())
 }
 

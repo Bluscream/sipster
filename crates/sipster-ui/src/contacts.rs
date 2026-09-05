@@ -119,6 +119,15 @@ fn source_label(contact: &Contact) -> String {
 }
 
 impl State {
+    /// A list with the sources the user had switched off already hidden.
+    #[must_use]
+    pub fn with_hidden_sources(hidden: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            hidden_sources: hidden.into_iter().collect(),
+            ..Self::default()
+        }
+    }
+
     /// Every source present in the loaded contacts, with how many each holds.
     ///
     /// Derived from the contacts rather than from configuration, so it lists

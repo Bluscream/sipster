@@ -202,7 +202,11 @@ impl SipsterApp {
             settings: settings::State::new(),
             contacts_window: None,
             contacts_at: pane::Placement::default(),
-            contacts: contacts::State::default(),
+            // Restored so a filter set last time is still in force, rather
+            // than the list quietly showing everything again.
+            contacts: contacts::State::with_hidden_sources(
+                config.ui.hidden_contact_sources.iter().cloned(),
+            ),
             calls_window: None,
             calls_at: pane::Placement::default(),
             main_width: pane::DIALER_WIDTH,
@@ -213,6 +217,7 @@ impl SipsterApp {
                 // The badge has to survive a restart, or it would nag again
                 // every launch.
                 missed_seen_until: config.ui.missed_seen_until.clone(),
+                filter: calls::Filter::from_key(&config.ui.history_filter),
                 ..calls::State::default()
             },
             sync_manager: build_sync_manager(&config),

@@ -41,6 +41,30 @@ impl Filter {
         Self::Blocked,
     ];
 
+    /// A stable name for the config file.
+    ///
+    /// Not the label, which is translated and would stop matching the moment
+    /// the language changed.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Incoming => "incoming",
+            Self::Outgoing => "outgoing",
+            Self::Missed => "missed",
+            Self::Blocked => "blocked",
+        }
+    }
+
+    /// The filter `key` names, or `All` for anything unrecognised — a config
+    /// from a newer version should not leave the list showing nothing.
+    #[must_use]
+    pub fn from_key(key: &str) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|filter| filter.key() == key)
+            .unwrap_or_default()
+    }
+
     fn accepts(self, call: &CallRecord) -> bool {
         match self {
             Self::All => true,
@@ -562,5 +586,22 @@ mod tests {
         let s = State::default();
         assert_eq!(s.newest_missed(), None);
         assert_eq!(s.missed_count(), 0);
+    }
+
+    /// The stored filter must survive a round trip, or the history would come
+    /// back showing everything.
+    #[test]
+    fn a_filter_round_trips_through_its_key() {
+        for filter in Filter::ALL {
+            assert_eq!(Filter::from_key(filter.key()), filter);
+        }
+    }
+
+    /// A key from a newer version must leave the list usable rather than
+    /// empty.
+    #[test]
+    fn an_unknown_filter_key_falls_back_to_all() {
+        assert_eq!(Filter::from_key("something-else"), Filter::All);
+        assert_eq!(Filter::from_key(""), Filter::All);
     }
 }

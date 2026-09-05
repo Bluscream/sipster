@@ -207,6 +207,9 @@ impl SipsterApp {
             }
             contacts::Message::ToggleSource(source, shown) => {
                 self.contacts.toggle_source(&source, shown);
+                self.config.ui.hidden_contact_sources =
+                    self.contacts.hidden_sources.iter().cloned().collect();
+                self.persist();
                 Task::none()
             }
             contacts::Message::SyncPressed => {
@@ -368,6 +371,8 @@ impl SipsterApp {
             }
             calls::Message::FilterChanged(filter) => {
                 self.calls.filter = filter;
+                self.config.ui.history_filter = filter.key().to_string();
+                self.persist();
                 // Opening the Missed filter is the user seeing them, so the
                 // badge clears here rather than counting for ever.
                 if filter == calls::Filter::Missed {

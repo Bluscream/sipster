@@ -125,6 +125,18 @@ pub struct UiSettings {
     /// would be exactly the nag it is meant not to be.
     #[serde(default)]
     pub missed_seen_until: Option<String>,
+    /// Contact sources the user switched off in the Filter dropdown, by
+    /// display name.
+    ///
+    /// Held as the hidden ones rather than the shown ones so a source that
+    /// appears later — a newly added Google account, a phonebook the router
+    /// only just returned — is visible by default rather than silently
+    /// filtered out.
+    #[serde(default)]
+    pub hidden_contact_sources: Vec<String>,
+    /// The call-history filter, remembered as chosen.
+    #[serde(default)]
+    pub history_filter: String,
 }
 
 impl Default for UiSettings {
@@ -141,6 +153,8 @@ impl Default for UiSettings {
             close_to_tray: true,
             streaming_mode: false,
             missed_seen_until: None,
+            hidden_contact_sources: Vec::new(),
+            history_filter: String::new(),
         }
     }
 }

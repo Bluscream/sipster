@@ -273,10 +273,13 @@ impl Config {
     }
 }
 
-/// Makes the config readable only by its owner. No-op off Unix.
-#[cfg(unix)]
 /// Writes `bytes` to `path`, readable only by this user from the moment it
 /// exists.
+///
+/// The permission bits are Unix-only; elsewhere this is an ordinary write.
+/// The `#[cfg(unix)]` that used to sit on the function itself compiled the
+/// whole thing out on Windows, where `save` still called it — caught only by
+/// the Windows cross-build, since `check` builds for this host alone.
 fn write_private(path: &Path, bytes: &[u8]) -> Result<()> {
     #[cfg(unix)]
     {

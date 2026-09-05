@@ -122,14 +122,6 @@ fn statusbar(app: &SipsterApp) -> Element<'_, Message> {
         let _ = write!(msg, " · {}", show(&numbers, mask));
     }
 
-    // With more than one account configured, say how many of them are up —
-    // otherwise a second line failing to register is invisible.
-    let (registered, total) = app.registered_count();
-    if total > 1 {
-        use std::fmt::Write as _;
-        let _ = write!(msg, " · {registered}/{total} accounts");
-    }
-
     let status_bar_content = row![
         text(circle_char).size(14).color(circle_color),
         text(msg).size(13),

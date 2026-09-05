@@ -44,7 +44,6 @@ use crate::view;
 pub struct ActiveCall {
     /// Which account the call is on, so it is answered, held and hung up on
     /// the engine it actually belongs to.
-    pub account: usize,
     pub id: CallId,
     pub state: CallState,
     pub remote: String,
@@ -56,25 +55,20 @@ pub struct ActiveCall {
 /// A ringing inbound call awaiting the user's decision.
 #[derive(Debug, Clone)]
 pub struct IncomingCall {
-    pub account: usize,
     pub id: CallId,
     pub remote: String,
 }
 
 pub struct SipsterApp {
-    /// One engine per enabled account, in config order — the same order the
-    /// bridge tags its events with.
-    engines: Vec<EngineHandle>,
-    /// Which account outgoing calls use.
-    active_account: usize,
+    /// The engine for the configured account, once it has connected.
+    engine: Option<EngineHandle>,
     pending_command: Option<Command>,
-    /// Registration state per account, parallel to `engines`.
-    pub registration: Vec<RegistrationState>,
-    pub account_info: Vec<String>,
-    /// Each account's own numbers as the router reports them, parallel to
-    /// `config.accounts`. `None` where the router knows nothing about that
-    /// account, or has not been asked yet. See [`numbers`].
-    numbers: Vec<Option<sipster_integrations::fritzbox::AccountNumbers>>,
+    pub registration: RegistrationState,
+    pub account_info: String,
+    /// The account's own numbers as the router reports them. `None` where the
+    /// router knows nothing about it, or has not been asked yet. See
+    /// [`numbers`].
+    numbers: Option<sipster_integrations::fritzbox::AccountNumbers>,
     pub dial_number: String,
     pub status: String,
     pub active: Option<ActiveCall>,
@@ -121,9 +115,9 @@ pub struct SipsterApp {
 #[derive(Debug, Clone)]
 pub enum Message {
     // From the engine bridge:
-    EngineReady(usize, EngineHandle),
+    EngineReady(EngineHandle),
     EngineFailed(String),
-    Call(usize, CallEvent),
+    Call(CallEvent),
     Ipc(Command),
     /// The tray icon asked for something.
     Tray(crate::tray::Request),
@@ -185,12 +179,11 @@ impl SipsterApp {
         let (main_id, open) = window::open(crate::main_window_settings());
 
         let app = Self {
-            engines: Vec::new(),
-            active_account: 0,
+            engine: None,
             pending_command: None,
-            registration: Vec::new(),
-            account_info: Vec::new(),
-            numbers: Vec::new(),
+            registration: RegistrationState::Unregistered,
+            account_info: String::new(),
+            numbers: None,
             dial_number: String::new(),
             status: if first_run {
                 "Welcome — fill in your SIP account to get started".into()
@@ -330,12 +323,12 @@ impl SipsterApp {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::EngineReady(index, engine) => self.on_engine_ready(index, engine),
+            Message::EngineReady(engine) => self.on_engine_ready(engine),
             Message::EngineFailed(err) => {
                 self.status = format!("Engine error: {err}");
                 Task::none()
             }
-            Message::Call(index, event) => self.on_call_event(index, event),
+            Message::Call(event) => self.on_call_event(event),
             Message::Ipc(cmd) => self.on_ipc(cmd),
             Message::Tray(req) => self.handle_tray(req),
             Message::DialInputChanged(v) => self.on_dial_input_changed(v),
@@ -419,28 +412,9 @@ impl SipsterApp {
         self.calls_at
     }
 
-    /// The account picker's contents: one label per configured account.
-    ///
-    /// Falls back to the username, then to a numbered placeholder, so an
-    /// account with no label is still distinguishable from its neighbours.
+    /// The account the settings window edits.
     fn account_choices(&self) -> settings::AccountContext<'_> {
         settings::AccountContext {
-            labels: self
-                .config
-                .accounts
-                .iter()
-                .enumerate()
-                .map(|(i, account)| {
-                    // Derived from the account itself; a blank one has nothing
-                    // to derive from yet, so it is numbered until filled in.
-                    if account.registrar.trim().is_empty() {
-                        format!("Account {}", i + 1)
-                    } else {
-                        account.label()
-                    }
-                })
-                .collect(),
-            selected: self.active_account,
             current: self.engine().map(|e| e.account()),
             first_run: self.config.needs_setup(),
         }
@@ -448,36 +422,22 @@ impl SipsterApp {
 
     /// The engine outgoing calls use.
     pub fn engine(&self) -> Option<&EngineHandle> {
-        self.engines.get(self.active_account)
+        self.engine.as_ref()
     }
 
-    /// The engine for `account`, for acting on a call that arrived on it
-    /// rather than on whichever account is currently selected.
-    pub fn engine_for(&self, account: usize) -> Option<&EngineHandle> {
-        self.engines.get(account)
+    /// How this end of a call is recorded in local history.
+    pub fn local_party(&self) -> Option<String> {
+        (!self.account_info.is_empty()).then(|| self.account_info.clone())
     }
 
-    /// How the active account is described in the status bar.
+    /// How the account is described in the status bar.
     pub fn active_account_info(&self) -> Option<&str> {
-        self.account_info.get(self.active_account).map(String::as_str)
+        (!self.account_info.is_empty()).then_some(self.account_info.as_str())
     }
 
-    /// The active account's registration state.
+    /// The account's registration state.
     pub fn active_registration(&self) -> RegistrationState {
-        self.registration
-            .get(self.active_account)
-            .cloned()
-            .unwrap_or(RegistrationState::Unregistered)
-    }
-
-    /// How many accounts are registered, and how many there are.
-    pub fn registered_count(&self) -> (usize, usize) {
-        let registered = self
-            .registration
-            .iter()
-            .filter(|state| matches!(state, RegistrationState::Registered))
-            .count();
-        (registered, self.registration.len())
+        self.registration.clone()
     }
 
     /// Which dialpad keys are currently lit.
@@ -762,36 +722,18 @@ fn focus_dial_input() -> Task<Message> {
 }
 
 impl SipsterApp {
-    /// Records an engine that finished connecting.
-    ///
-    /// Engines arrive one at a time as each account registers, so the vectors
-    /// are grown to fit rather than assumed to be the right length.
-    fn on_engine_ready(&mut self, index: usize, engine: EngineHandle) -> Task<Message> {
+    /// Records the engine that finished connecting.
+    fn on_engine_ready(&mut self, engine: EngineHandle) -> Task<Message> {
         let account = engine.account();
-        let info = if account.port == 5060 {
+        self.account_info = if account.port == 5060 {
             format!("{} at {}", account.username, account.registrar)
         } else {
             format!("{} at {}:{}", account.username, account.registrar, account.port)
         };
 
-        if self.account_info.len() <= index {
-            self.account_info.resize(index + 1, String::new());
-        }
-        self.account_info[index] = info;
-        if self.registration.len() <= index {
-            self.registration
-                .resize(index + 1, RegistrationState::Unregistered);
-        }
-        if self.engines.len() <= index {
-            self.engines.resize(index + 1, engine.clone());
-        }
-        self.engines[index] = engine;
-
-        // The settings form edits whichever account is selected.
-        if index == self.active_account {
-            let account = self.engines[index].account().clone();
-            self.settings.load_account(&account);
-        }
+        let account = account.clone();
+        self.engine = Some(engine);
+        self.settings.load_account(&account);
         self.status = "Ready".into();
 
         if let Some(cmd) = self.pending_command.take() {

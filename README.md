@@ -55,10 +55,11 @@ This list is deliberately limited to things that demonstrably work — see
 - **Per-device audio selection.** Real PipeWire sinks and sources are listed
   under their own names, and switching devices re-routes a call already in
   progress. See [How device selection works](#how-device-selection-works).
-- **Several accounts at once.** Every enabled account registers, and a call is
-  answered and hung up on the account it arrived on. One account failing to
-  connect does not stop the others.
-- **UDP, TCP or TLS** to the registrar, per account. UDP and TCP are verified
+- **One account per copy.** A config holds a single account, which keeps call
+  state, registration and the tray icon unambiguous. To run a second line, run
+  a second copy with `--config` and its own `XDG_RUNTIME_DIR`; it gets its own
+  window and its own tray icon.
+- **UDP, TCP or TLS** to the registrar. UDP and TCP are verified
   against a FRITZ!Box; TLS addresses the registrar as `sips:` on port 5061 but
   is untested — see below.
 - **Call blocking**, with a per-number action and a default for new rules.
@@ -198,8 +199,7 @@ Everything below is written and read by the settings window; you only need this
 if you would rather edit it directly or deploy it from a script.
 
 ```toml
-[[accounts]]
-label     = "Fritz!Box"
+[account]
 registrar = "fritz.box"    # host, host:port, or a full sip:/sips: URI
 port      = 5060
 username  = "bluscream"
@@ -249,8 +249,10 @@ password = "…"
 socket = "…"            # omit for $XDG_RUNTIME_DIR/sipster.sock
 ```
 
-`[[accounts]]` may appear more than once; every account with `enabled = true`
-is registered.
+A config written for an older version, with one or more `[[accounts]]` tables,
+still loads: the first is adopted and any others are named in a warning. Saving
+rewrites the file in the `[account]` form. To keep a second account, copy the
+config, leave one account in each, and run a second copy with `--config`.
 
 </details>
 

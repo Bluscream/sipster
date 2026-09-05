@@ -54,37 +54,28 @@ impl SipsterApp {
         )
     }
 
-    /// Records the numbers the router reported, against the accounts they
-    /// belong to.
+    /// Records the numbers the router reported for our account.
     ///
     /// The router lists every telephony device it knows, most of which are not
-    /// us — other handsets, a DECT phone, a mobile app. Only entries whose SIP
-    /// username matches a configured account are kept.
+    /// us — other handsets, a DECT phone, a mobile app. Only the entry whose
+    /// SIP username matches the configured account is kept.
     pub(super) fn on_router_numbers(
         &mut self,
         found: &[sipster_integrations::fritzbox::AccountNumbers],
     ) {
-        self.numbers = self
-            .config
-            .accounts
+        self.numbers = found
             .iter()
-            .map(|account| {
-                let entry = found
-                    .iter()
-                    .find(|entry| entry.username == account.username)
-                    .cloned();
-                if let Some(entry) = &entry {
-                    tracing::info!(
-                        username = %entry.username,
-                        internal = %entry.internal,
-                        external = %entry.external,
-                        phone_name = %entry.phone_name,
-                        "the router knows this account's numbers"
-                    );
-                }
-                entry
-            })
-            .collect();
+            .find(|entry| entry.username == self.config.account.username)
+            .cloned();
+        if let Some(entry) = &self.numbers {
+            tracing::info!(
+                username = %entry.username,
+                internal = %entry.internal,
+                external = %entry.external,
+                phone_name = %entry.phone_name,
+                "the router knows this account's numbers"
+            );
+        }
     }
 
     /// How the active account's own numbers should read in the status line,
@@ -93,7 +84,7 @@ impl SipsterApp {
     /// Renders as `620 · 2671078`, dropping either half when the router did
     /// not supply it.
     pub fn active_account_numbers(&self) -> Option<String> {
-        let entry = self.numbers.get(self.active_account)?.as_ref()?;
+        let entry = self.numbers.as_ref()?;
         let parts: Vec<&str> = [entry.internal.as_str(), entry.external.as_str()]
             .into_iter()
             .filter(|part| !part.is_empty())

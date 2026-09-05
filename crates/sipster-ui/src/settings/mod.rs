@@ -82,9 +82,6 @@ pub enum Message {
     LocalPort(String),
     TransportChanged(sipster_core::Transport),
     AccountEnabled(bool),
-    SelectAccount(usize),
-    AddAccount,
-    RemoveAccount,
     RevealPassword(bool),
     RevealFritzPassword(bool),
     RevealCardDavPassword(bool),
@@ -482,9 +479,6 @@ pub(super) fn input<'a>(
 /// Bundled because the labels live in the config rather than the draft, which
 /// only ever holds the one account being edited.
 pub struct AccountContext<'a> {
-    /// One label per account, in config order.
-    pub labels: Vec<String>,
-    pub selected: usize,
     /// The account the engine is actually running, if any.
     pub current: Option<&'a SipAccount>,
     pub first_run: bool,
@@ -523,37 +517,7 @@ fn account_section<'a>(
             .into()
     };
 
-    // Only worth showing once there is more than one to switch between; a
-    // single-account setup should not have to think about accounts at all.
-    let switcher: Element<'a, Message> = if accounts.labels.len() > 1 {
-        let choices: Vec<AccountChoice> = accounts
-            .labels
-            .iter()
-            .enumerate()
-            .map(|(index, label)| AccountChoice { index, label: label.clone() })
-            .collect();
-        let current = choices.get(accounts.selected).cloned();
-        row![
-            pick_list(choices, current, |choice| Message::SelectAccount(choice.index))
-                .text_size(13)
-                .width(Length::Fill),
-            button(text("Add").size(13)).on_press(Message::AddAccount).padding([5, 11]),
-            button(text("Remove").size(13)).on_press(Message::RemoveAccount).padding([5, 11]),
-        ]
-        .spacing(6)
-        .align_y(Alignment::Center)
-        .into()
-    } else {
-        row![
-            Space::new().width(Length::Fill),
-            button(text("Add account").size(13)).on_press(Message::AddAccount).padding([5, 11]),
-        ]
-        .align_y(Alignment::Center)
-        .into()
-    };
-
     let content = column![
-        switcher,
         checkbox(state.account_enabled)
             .label("Register this account")
             .on_toggle(Message::AccountEnabled)
@@ -873,21 +837,5 @@ mod tests {
         let list = DeviceChoice::list(&devices, Some(&saved));
         assert!(list.iter().any(|c| c.id.as_deref() == Some("usb-headset")));
         assert!(list.iter().any(|c| c.name.contains("not connected")));
-    }
-}
-
-/// One entry in the account picker.
-///
-/// Carries its index so selecting it says which account to switch to, and
-/// renders as its label.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AccountChoice {
-    pub index: usize,
-    pub label: String,
-}
-
-impl std::fmt::Display for AccountChoice {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.label)
     }
 }

@@ -610,11 +610,24 @@ pub struct IpcSettings {
     pub socket: Option<std::path::PathBuf>,
 }
 
-/// Top-level config. A file holds zero or more accounts; the UI edits this.
+/// Top-level config. One account per file; the UI edits this.
+///
+/// One account rather than a list: a softphone registers one line, and every
+/// piece of state around a call — which engine, which registration, which
+/// number — was previously a parallel vector indexed by the same integer.
+/// Running a second line means running a second copy with `--config`, which
+/// also gives it its own window, tray icon and call state.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default)]
-    pub accounts: Vec<SipAccount>,
+    pub account: SipAccount,
+    /// Accounts from a config written before the one-account rule.
+    ///
+    /// Read so an existing file still works, and never written back: the
+    /// first is adopted as [`account`](Self::account) on load and the rest are
+    /// reported, so nobody silently loses a line they had configured.
+    #[serde(default, rename = "accounts", skip_serializing)]
+    legacy_accounts: Vec<SipAccount>,
     #[serde(default)]
     pub ui: UiSettings,
     #[serde(default)]
@@ -659,9 +672,36 @@ impl Config {
     /// the app cannot do anything at all, and there is now no environment
     /// variable that could be supplying one behind the scenes.
     pub fn needs_setup(&self) -> bool {
-        self.accounts
-            .first()
-            .is_none_or(|account| account.validate().is_err())
+        self.account.validate().is_err()
+    }
+
+    /// Adopts the first `[[accounts]]` entry from a pre-one-account config.
+    ///
+    /// Anything beyond the first cannot be represented any more, so it is
+    /// named in a warning rather than dropped quietly — the credentials are
+    /// still in the file the user has, and can be split into their own config.
+    #[allow(clippy::cognitive_complexity)] // three branches; the log macros inflate the score
+    fn adopt_legacy_account(&mut self) {
+        let mut legacy = std::mem::take(&mut self.legacy_accounts).into_iter();
+        let Some(first) = legacy.next() else {
+            return;
+        };
+        if self.account.validate().is_ok() {
+            // An explicit `[account]` wins; the old list is then redundant.
+            tracing::warn!(
+                "config has both [account] and the older [[accounts]]; using [account]"
+            );
+            return;
+        }
+        tracing::info!(account = %first.label(), "adopted the account from [[accounts]]");
+        self.account = first;
+        for extra in legacy {
+            tracing::warn!(
+                account = %extra.label(),
+                "ignoring an extra account: one account per config now — \
+                 run a second copy with --config to register it"
+            );
+        }
     }
 
     /// Writes the config as TOML, creating parent directories as needed.
@@ -727,8 +767,12 @@ impl Config {
         let path = path.as_ref();
         secret::use_key_beside(path);
         match std::fs::read_to_string(path) {
-            Ok(text) => toml::from_str(&text)
-                .map_err(|e| Error::Config(format!("{}: {e}", path.display()))),
+            Ok(text) => {
+                let mut config: Self = toml::from_str(&text)
+                    .map_err(|e| Error::Config(format!("{}: {e}", path.display())))?;
+                config.adopt_legacy_account();
+                Ok(config)
+            }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(Error::Io(e)),
         }
@@ -837,22 +881,18 @@ mod tests {
     #[test]
     fn needs_setup_until_a_usable_account_exists() {
         let mut config = Config::default();
-        assert!(config.needs_setup(), "no accounts at all");
+        assert!(config.needs_setup(), "a default account has no registrar");
 
-        config.accounts.push(super::SipAccount::default());
-        assert!(config.needs_setup(), "default account has no registrar");
-
-        config.accounts[0].registrar = "fritz.box".into();
+        config.account.registrar = "fritz.box".into();
         assert!(config.needs_setup(), "still no username");
 
-        config.accounts[0].username = "bob".into();
+        config.account.username = "bob".into();
         assert!(!config.needs_setup(), "registrar and username are enough");
     }
 
     #[test]
     fn missing_file_loads_as_an_empty_config() {
         let config = Config::load("/nonexistent/sipster.toml").expect("not an error");
-        assert!(config.accounts.is_empty());
         assert!(config.needs_setup());
     }
 
@@ -864,13 +904,15 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("nested/sipster.toml");
 
-        let mut config = Config::default();
-        config.accounts.push(super::SipAccount {
-            registrar: "fritz.box".into(),
-            username: "bob".into(),
-            password: "pw".into(),
-            ..super::SipAccount::default()
-        });
+        let mut config = Config {
+            account: super::SipAccount {
+                registrar: "fritz.box".into(),
+                username: "bob".into(),
+                password: "pw".into(),
+                ..super::SipAccount::default()
+            },
+            ..Config::default()
+        };
         config.ui.theme = super::ThemeChoice::Nord;
         config.ui.ringtone = false;
         config.audio.output = Some("hw:1".into());
@@ -878,8 +920,7 @@ mod tests {
         config.save(&path).expect("save creates parent directories");
         let back = Config::load(&path).expect("reload");
 
-        assert_eq!(back.accounts.len(), 1);
-        assert_eq!(back.accounts[0].password, "pw");
+        assert_eq!(back.account.password, "pw");
         assert_eq!(back.ui.theme, super::ThemeChoice::Nord);
         assert!(!back.ui.ringtone);
         assert_eq!(back.audio.output.as_deref(), Some("hw:1"));

@@ -23,16 +23,16 @@ use tokio::sync::mpsc as tokio_mpsc;
 use crate::app::Message;
 
 /// Sender for account changes, published once the stream is running.
-static RECONFIGURE: OnceLock<tokio_mpsc::UnboundedSender<Vec<SipAccount>>> = OnceLock::new();
+static RECONFIGURE: OnceLock<tokio_mpsc::UnboundedSender<SipAccount>> = OnceLock::new();
 
-/// Asks the bridge to rebuild its engines for `accounts`.
+/// Asks the bridge to rebuild its engine for `account`.
 ///
 /// Silently does nothing before the stream has started, which can only happen
 /// in the moments before the first `EngineReady` — there is nothing to
 /// reconfigure yet, and the account will be read from the config file anyway.
-pub fn reconfigure(accounts: Vec<SipAccount>) {
+pub fn reconfigure(account: SipAccount) {
     if let Some(tx) = RECONFIGURE.get() {
-        let _ = tx.send(accounts);
+        let _ = tx.send(account);
     }
 }
 
@@ -64,12 +64,12 @@ pub fn run() -> impl iced::futures::Stream<Item = Message> {
             output: config.audio.output.clone(),
         };
 
-        let mut accounts = enabled_accounts(config);
-        if accounts.is_empty() {
-            // Nothing configured yet. Report it and wait — returning here
-            // would end the stream and close the reconfigure channel, so
-            // entering an account in Settings could never start anything and
-            // a fresh install would be stuck until the next launch.
+        let mut account = config.account.clone();
+        while !account.enabled || account.validate().is_err() {
+            // Nothing usable configured yet. Report it and wait — returning
+            // here would end the stream and close the reconfigure channel, so
+            // entering an account in Settings could never start anything and a
+            // fresh install would be stuck until the next launch.
             let _ = output
                 .send(Message::EngineFailed(
                     "no SIP account configured — open Settings to add one".into(),
@@ -78,99 +78,79 @@ pub fn run() -> impl iced::futures::Stream<Item = Message> {
             let Some(next) = reconfigure_rx.recv().await else {
                 return;
             };
-            accounts = next;
+            account = next;
         }
 
-        // Outer loop: one iteration per set of engines. A reconfigure drops
-        // them all — which aborts their event pumps and releases their SIP
-        // ports — and starts again with the new accounts.
+        // Outer loop: one iteration per engine. A reconfigure drops it — which
+        // aborts its event pump and releases the SIP port — and starts again
+        // with the new account.
         loop {
-            let mut engines = Vec::new();
-            // Every account's events funnel into one channel, tagged with the
-            // account they came from, so the pump below stays a single select
-            // however many accounts there are.
-            let (tagged_tx, mut tagged_rx) = tokio_mpsc::unbounded_channel();
+            let (event_tx, mut event_rx) = tokio_mpsc::unbounded_channel();
+            let mut engine = None;
 
-            for (index, account) in accounts.iter().enumerate() {
-                match Box::pin(connect(account.clone(), devices.clone())).await {
-                    Ok(engine) => {
-                        let engine = Arc::new(engine);
-                        forward_events(index, &engine, tagged_tx.clone());
-                        if output
-                            .send(Message::EngineReady(index, engine.clone()))
-                            .await
-                            .is_err()
-                        {
-                            return;
-                        }
-                        {
-                            // Registration result arrives as a tagged event.
-                            let engine = engine.clone();
-                            tokio::spawn(async move {
-                                let _ = engine.register().await;
-                            });
-                        }
-                        engines.push(engine);
+            match Box::pin(connect(account.clone(), devices.clone())).await {
+                Ok(connected) => {
+                    let connected = Arc::new(connected);
+                    forward_events(&connected, event_tx.clone());
+                    if output
+                        .send(Message::EngineReady(connected.clone()))
+                        .await
+                        .is_err()
+                    {
+                        return;
                     }
-                    Err(err) => {
-                        // One bad account must not stop the others: a wrong
-                        // password on a second line should not take the line
-                        // that works down with it.
-                        if output.send(Message::EngineFailed(err)).await.is_err() {
-                            return;
-                        }
+                    {
+                        // The registration result arrives as an event.
+                        let connected = connected.clone();
+                        tokio::spawn(async move {
+                            let _ = connected.register().await;
+                        });
+                    }
+                    engine = Some(connected);
+                }
+                Err(err) => {
+                    // Report and keep the loop alive, so the settings window
+                    // can still fix a wrong password without a restart.
+                    if output.send(Message::EngineFailed(err)).await.is_err() {
+                        return;
                     }
                 }
             }
-            drop(tagged_tx);
+            drop(event_tx);
 
-            let next = pump(&mut output, &mut tagged_rx, &mut ipc_rx, &mut reconfigure_rx).await;
+            let next = pump(&mut output, &mut event_rx, &mut ipc_rx, &mut reconfigure_rx).await;
 
-            // Unregister politely before dropping the endpoints, so the PBX
+            // Unregister politely before dropping the endpoint, so the PBX
             // stops sending us calls immediately instead of waiting out the
             // registration expiry.
-            for engine in &engines {
+            if let Some(engine) = &engine {
                 if let Err(e) = engine.unregister().await {
                     // Not fatal, but the PBX will keep sending us calls until
                     // the registration expires — worth knowing about.
                     tracing::warn!(error = %e, "could not unregister cleanly");
                 }
             }
-            drop(engines);
+            drop(engine);
 
             match next {
-                Some(next) => accounts = next,
+                Some(next) => account = next,
                 None => return,
             }
         }
     })
 }
 
-/// The accounts that should be registered, in config order.
-///
-/// The index into this list is what tags every event, and what the UI uses to
-/// name the account a call belongs to.
-fn enabled_accounts(config: &sipster_core::Config) -> Vec<SipAccount> {
-    config
-        .accounts
-        .iter()
-        .filter(|account| account.enabled)
-        .cloned()
-        .collect()
-}
-
-/// Spawns a task that tags one engine's events with its account index.
+/// Spawns a task that forwards one engine's events to the application.
 fn forward_events(
-    index: usize,
     engine: &Arc<SipEngine>,
-    tx: tokio_mpsc::UnboundedSender<(usize, sipster_core::CallEvent)>,
+    tx: tokio_mpsc::UnboundedSender<sipster_core::CallEvent>,
 ) {
     let mut events = engine.subscribe();
     tokio::spawn(async move {
         loop {
             match events.recv().await {
                 Ok(event) => {
-                    if tx.send((index, event)).is_err() {
+                    if tx.send(event).is_err() {
                         return;
                     }
                 }
@@ -188,15 +168,14 @@ fn forward_events(
 /// shutting down and the loop should end.
 async fn pump(
     output: &mut mpsc::Sender<Message>,
-    events: &mut tokio_mpsc::UnboundedReceiver<(usize, sipster_core::CallEvent)>,
+    events: &mut tokio_mpsc::UnboundedReceiver<sipster_core::CallEvent>,
     ipc_rx: &mut tokio_mpsc::UnboundedReceiver<sipster_core::ipc::Command>,
-    reconfigure_rx: &mut tokio_mpsc::UnboundedReceiver<Vec<SipAccount>>,
-) -> Option<Vec<SipAccount>> {
+    reconfigure_rx: &mut tokio_mpsc::UnboundedReceiver<SipAccount>,
+) -> Option<SipAccount> {
     loop {
         tokio::select! {
             event = events.recv() => {
-                let (index, event) = event?;
-                if output.send(Message::Call(index, event)).await.is_err() {
+                if output.send(Message::Call(event?)).await.is_err() {
                     return None;
                 }
             }
@@ -207,8 +186,8 @@ async fn pump(
                     }
                 }
             }
-            accounts = reconfigure_rx.recv() => {
-                return accounts;
+            account = reconfigure_rx.recv() => {
+                return account;
             }
         }
     }

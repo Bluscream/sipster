@@ -29,11 +29,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let path = Config::path_from(&args);
     println!("config: {}", path.display());
 
-    let account = Config::load(&path)?
-        .accounts
-        .into_iter()
-        .next()
-        .ok_or_else(|| format!("no account in {} — run the GUI and fill in Settings", path.display()))?;
+    let config = Config::load(&path)?;
+    if config.needs_setup() {
+        return Err(format!(
+            "no usable account in {} — run the GUI and fill in Settings",
+            path.display()
+        )
+        .into());
+    }
+    let account = config.account;
 
     println!("account: {account:?}"); // password is redacted by Debug
     println!("connecting…");

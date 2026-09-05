@@ -142,21 +142,10 @@ fn google_panel<'a>(
     let ready = !state.draft_google_client_id.trim().is_empty()
         && !state.draft_google_client_secret.trim().is_empty();
 
-    let json_field_lbl = rust_i18n::t!("settings.client_secret_json").to_string();
     let id_field_lbl = rust_i18n::t!("settings.client_id").to_string();
     let secret_field_lbl = rust_i18n::t!("settings.client_secret").to_string();
     let connect_btn_lbl = rust_i18n::t!("settings.connect_google").to_string();
-
     content
-        .push(field(
-            json_field_lbl,
-            file_input(
-                "path to client_secret_….json downloaded from Google",
-                &state.draft_google_json_path,
-                Message::ImportGoogleClientJson,
-                Message::PickGoogleJsonFile,
-            ),
-        ))
         .push(field(
             id_field_lbl,
             input(
@@ -167,12 +156,11 @@ fn google_panel<'a>(
         ))
         .push(field(
             secret_field_lbl,
-            secret_input(
-                "",
+            file_input(
+                "client_secret_….json",
                 &state.draft_google_client_secret,
-                state.reveal_google_secret,
                 Message::GoogleClientSecretChanged,
-                Message::RevealGoogleSecret,
+                Message::PickGoogleJsonFile,
             ),
         ))
         .push(

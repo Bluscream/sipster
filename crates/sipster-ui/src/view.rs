@@ -110,7 +110,7 @@ fn statusbar(app: &SipsterApp) -> Element<'_, Message> {
     // identify the user on a shared screen.
     let mask = app.ui().streaming_mode;
     
-    let info_str = app.active_account_info().map(|s| show(s, mask));
+    let info_str = app.account_identity().map(|s| show(&s, mask));
     let number_str = app.active_numbers().map(|(_, ext)| show(ext, mask));
     
     let acc_info = match (info_str, number_str) {

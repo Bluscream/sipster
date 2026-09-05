@@ -383,28 +383,6 @@ impl SipsterApp {
                 }
                 Task::none()
             }
-            calls::Message::AddContact(number, name) => {
-                let name_str = name.unwrap_or_else(|| number.clone());
-                if let Some(dir) = crate::consts::default_contacts_dir() {
-                    let _ = std::fs::create_dir_all(&dir);
-                    let filename = format!(
-                        "contact_{}.vcf",
-                        std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_millis()
-                    );
-                    let vcard_content = format!(
-                        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:{}\r\nTEL:{}\r\nEND:VCARD\r\n",
-                        name_str, number
-                    );
-                    let _ = std::fs::write(dir.join(filename), vcard_content);
-                }
-                Task::batch([
-                    Task::done(Message::Contacts(contacts::Message::SyncPressed)),
-                    self.open_contacts(),
-                ])
-            }
             calls::Message::ClearHistoryPressed => {
                 let _ = self.sync_manager.local_store().clear_calls();
                 Task::done(Message::Calls(calls::Message::SyncPressed))

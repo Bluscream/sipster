@@ -66,7 +66,6 @@ pub enum Message {
     /// Selects a record, or clears the selection when it is already current.
     Select(String),
     DialNumber(String),
-    AddContact(String, Option<String>),
     ClearHistoryPressed,
 
     BlockNumberPrompt(String, Option<String>),
@@ -306,14 +305,9 @@ fn call_row<'a>(
 
     let expanded = is_selected.then(|| {
         let callback_lbl = rust_i18n::t!("history.call_back").to_string();
-        let add_lbl = rust_i18n::t!("history.add_contact").to_string();
         let block_lbl = rust_i18n::t!("ui.block").to_string();
         row![
             ui::row_action(callback_lbl, Message::DialNumber(call.remote_number.clone())),
-            ui::row_action(
-                add_lbl,
-                Message::AddContact(call.remote_number.clone(), call.remote_name.clone()),
-            ),
             ui::row_action_danger(
                 block_lbl,
                 Message::BlockNumberPrompt(call.remote_number.clone(), call.remote_name.clone()),

@@ -119,4 +119,30 @@ impl SipsterApp {
         let entry = self.numbers.as_ref()?;
         Some((entry.internal.as_str(), entry.external.as_str()))
     }
+
+    /// How the account identifies itself in the status bar, as
+    /// `620@192.168.2.1:5060`.
+    ///
+    /// The extension people actually dial to reach this copy, rather than the
+    /// SIP username — the username is a login, and on a FRITZ!Box it says
+    /// nothing about which phone rings. Falls back to the username until the
+    /// router has been asked, which is also the answer for any registrar that
+    /// cannot be asked at all.
+    pub fn account_identity(&self) -> Option<String> {
+        let account = self
+            .engine()
+            .map_or(&self.config.account, |engine| engine.account());
+        if account.registrar.trim().is_empty() {
+            return None;
+        }
+
+        let who = self
+            .numbers
+            .as_ref()
+            .map(|entry| entry.internal.as_str())
+            .filter(|internal| !internal.is_empty())
+            .unwrap_or(account.username.as_str());
+
+        Some(format!("{who}@{}:{}", account.registrar, account.port))
+    }
 }

@@ -489,7 +489,8 @@ pub(super) fn file_input<'a>(
         .padding(iced::Padding::from(7).right(30))
         .size(14);
 
-    let icon = button(text("📁").size(14))
+    // Geometric symbol rather than emoji so it renders on standard fonts
+    let icon = button(text("▤").size(14))
         .on_press(on_pick)
         .padding([2, 6])
         .style(move |theme: &iced::Theme, status| {

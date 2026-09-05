@@ -66,15 +66,25 @@ pub fn run() -> impl iced::futures::Stream<Item = Message> {
 
         let mut account = config.account.clone();
         while !account.enabled || account.validate().is_err() {
+            // Say *which* of the two it is. Both render as "Offline", and a
+            // disabled account looks identical to an unconfigured one — which
+            // is a genuinely confusing five minutes when the account is filled
+            // in correctly and simply switched off.
+            let reason = if account.enabled {
+                match account.validate() {
+                    Err(e) => format!("the account cannot register: {e}"),
+                    Ok(()) => unreachable!("the loop condition says otherwise"),
+                }
+            } else {
+                "the account is switched off (\"Register this account\")".to_string()
+            };
+            tracing::warn!(%reason, "not registering");
+
             // Nothing usable configured yet. Report it and wait — returning
             // here would end the stream and close the reconfigure channel, so
             // entering an account in Settings could never start anything and a
             // fresh install would be stuck until the next launch.
-            let _ = output
-                .send(Message::EngineFailed(
-                    "no SIP account configured — open Settings to add one".into(),
-                ))
-                .await;
+            let _ = output.send(Message::EngineFailed(reason)).await;
             let Some(next) = reconfigure_rx.recv().await else {
                 return;
             };

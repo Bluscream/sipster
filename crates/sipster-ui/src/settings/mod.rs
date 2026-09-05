@@ -635,7 +635,7 @@ fn account_section<'a>(
         field(port_lbl, input("5060", &state.port, Message::Port)),
         field(
             user_lbl,
-            hidden(&rust_i18n::t!("settings.username_placeholder"), &state.username, Message::Username)
+            hidden("", &state.username, Message::Username)
         ),
         field(
             auth_lbl,

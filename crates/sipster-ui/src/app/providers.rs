@@ -67,6 +67,22 @@ impl SipsterApp {
                 self.settings.draft_google_json_path = path;
                 self.import_google_client_json();
             }
+            S::PickGoogleJsonFile => {
+                let default_dir = std::env::var_os("XDG_DOWNLOAD_DIR")
+                    .map(std::path::PathBuf::from)
+                    .or_else(|| crate::consts::home_dir().map(|h| h.join("Downloads")));
+                let mut builder = rfd::FileDialog::new()
+                    .add_filter("JSON Files", &["json"])
+                    .set_title("Select Google client_secret JSON");
+                if let Some(dir) = default_dir {
+                    builder = builder.set_directory(dir);
+                }
+                if let Some(path) = builder.pick_file() {
+                    let path_str = path.to_string_lossy().to_string();
+                    self.settings.draft_google_json_path = path_str;
+                    self.import_google_client_json();
+                }
+            }
             S::GoogleClientIdChanged(v) => self.settings.draft_google_client_id = v,
             S::GoogleClientSecretChanged(v) => self.settings.draft_google_client_secret = v,
             other => return self.on_carddav_settings(other),

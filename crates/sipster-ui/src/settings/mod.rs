@@ -102,6 +102,7 @@ pub enum Message {
     CloseToTray(bool),
     StreamingMode(bool),
     ImportGoogleClientJson(String),
+    PickGoogleJsonFile,
 
     // Integrations. Contact and history providers are account configuration,
     // so they belong here rather than inside the windows that display their
@@ -468,6 +469,44 @@ pub(super) fn secret_input<'a>(
     stack![
         field,
         container(eye)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .align_x(iced::alignment::Horizontal::Right)
+            .align_y(iced::alignment::Vertical::Center),
+    ]
+    .into()
+}
+
+pub(super) fn file_input<'a>(
+    placeholder: &'a str,
+    value: &'a str,
+    on_change: impl Fn(String) -> Message + 'a,
+    on_pick: Message,
+) -> Element<'a, Message> {
+    let field = text_input(placeholder, value)
+        .on_input(on_change)
+        .padding(iced::Padding::from(7).right(30))
+        .size(14);
+
+    let icon = button(text("📁").size(14))
+        .on_press(on_pick)
+        .padding([2, 6])
+        .style(move |theme: &iced::Theme, status| {
+            let palette = theme.extended_palette();
+            button::Style {
+                background: None,
+                text_color: if matches!(status, button::Status::Hovered) {
+                    palette.background.base.text
+                } else {
+                    palette.background.strong.color
+                },
+                ..button::Style::default()
+            }
+        });
+
+    stack![
+        field,
+        container(icon)
             .width(Length::Fill)
             .height(Length::Fill)
             .align_x(iced::alignment::Horizontal::Right)

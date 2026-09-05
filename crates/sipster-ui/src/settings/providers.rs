@@ -8,7 +8,7 @@ use iced::widget::{button, checkbox, column, pick_list, row, rule, text, text_in
 use iced::{Alignment, Element, Length};
 use sipster_core::{BlockAction, IntegrationSettings};
 
-use super::{field, input, secret_input, section, Message, State};
+use super::{field, file_input, input, secret_input, section, Message, State};
 
 /// Contact and history providers.
 ///
@@ -150,14 +150,12 @@ fn google_panel<'a>(
     content
         .push(field(
             json_field_lbl,
-            text_input(
+            file_input(
                 "path to client_secret_….json downloaded from Google",
                 &state.draft_google_json_path,
-            )
-            .on_input(Message::ImportGoogleClientJson)
-            .padding(7)
-            .size(14)
-            .into(),
+                Message::ImportGoogleClientJson,
+                Message::PickGoogleJsonFile,
+            ),
         ))
         .push(field(
             id_field_lbl,

@@ -244,6 +244,13 @@ impl SipsterApp {
                     RecordSource::CardDav { .. } => &self.config.commands.edit_carddav,
                     RecordSource::Local => &self.config.commands.edit_local,
                     RecordSource::Other(s) if s.contains("Evolution") => &self.config.commands.edit_eds,
+                    // The vdir provider labels its contacts "Local vCards
+                    // (<book>)", so they arrive as `Other`, not `Local`.
+                    // Without this they fell through to the generic fallback
+                    // and never opened the folder they came from.
+                    RecordSource::Other(s) if s.contains("Local vCards") => {
+                        &self.config.commands.edit_local
+                    }
                     RecordSource::Other(_) => &self.config.commands.edit_default,
                 };
 
@@ -287,24 +294,6 @@ impl SipsterApp {
                     ],
                 );
                 Task::none()
-            }
-            contacts::Message::DeleteContact(id) => {
-                if let Some(dir) = crate::consts::default_contacts_dir() {
-                    if let Ok(entries) = std::fs::read_dir(dir) {
-                        for entry in entries.flatten() {
-                            let path = entry.path();
-                            if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("vcf") {
-                                if let Ok(content) = std::fs::read_to_string(&path) {
-                                    if content.contains(&id) || path.to_string_lossy().contains(&id) {
-                                        let _ = std::fs::remove_file(path);
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                Task::done(Message::Contacts(contacts::Message::SyncPressed))
             }
 
             // Providers modal:

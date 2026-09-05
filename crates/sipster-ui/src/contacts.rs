@@ -8,7 +8,7 @@
 use iced::widget::{checkbox, column, container, row, scrollable, text, text_input, Space};
 use iced::{Alignment, Element, Length, Padding};
 use sipster_core::BlockAction;
-use sipster_integrations::{normalize_number, number_contains, Contact, RecordSource};
+use sipster_integrations::{normalize_number, number_contains, Contact};
 
 use crate::ui;
 
@@ -36,7 +36,6 @@ pub enum Message {
     DialContact(String),
 
     OpenEditContact(Contact),
-    DeleteContact(String),
 
     // Blocking:
     BlockNumberPrompt(String, Option<String>),
@@ -354,10 +353,11 @@ fn contact_detail(contact: &Contact, mask: bool) -> Element<'_, Message> {
         detail = detail.push(ui::caption(emails.join("  ·  ")));
     }
 
-    let editable_externally = matches!(
-        contact.source,
-        RecordSource::Google { .. } | RecordSource::Local | RecordSource::FritzBox { .. }
-    );
+    // Every source has an edit command configured for it, including the
+    // fallback, so every contact can be opened somewhere. Local vCards were
+    // excluded and so offered no way to edit them at all — which is the one
+    // case where the file is right there on disk.
+    let editable_externally = true;
     
     let mut actions = row![].spacing(6);
     if editable_externally {
@@ -365,18 +365,9 @@ fn contact_detail(contact: &Contact, mask: bool) -> Element<'_, Message> {
         actions = actions
             .push(ui::row_action(edit_lbl, Message::OpenEditContact(contact.clone())));
     }
-    if matches!(contact.source, RecordSource::Local) {
-        let delete_lbl = rust_i18n::t!("ui.delete").to_string();
-        actions = actions
-            .push(ui::row_action_danger(
-                delete_lbl,
-                Message::DeleteContact(contact.id.clone()),
-            ));
-    } else {
-        let src_str = contact.source.to_string();
-        let synced = rust_i18n::t!("contacts.synced_from", source = src_str).to_string();
-        actions = actions.push(ui::caption(synced));
-    }
+    let src_str = contact.source.to_string();
+    let synced = rust_i18n::t!("contacts.synced_from", source = src_str).to_string();
+    actions = actions.push(ui::caption(synced));
 
     column![detail, actions].spacing(6).into()
 }

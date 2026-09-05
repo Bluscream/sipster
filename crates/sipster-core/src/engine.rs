@@ -378,10 +378,7 @@ impl SipEngine {
     /// When the id is not an established call, the target is empty, or the
     /// far end refuses the REFER.
     pub async fn transfer_blind(&self, id: CallId, target: &str) -> Result<()> {
-        let target = target.trim();
-        if target.is_empty() {
-            return Err(Error::Config("no transfer target given".into()));
-        }
+        let target = transfer_target(target)?;
         // Passed through as given, the same as `dial`: rvoip turns a bare
         // extension into a URI against the registrar.
         let reg = self.registry.lock().await;
@@ -683,6 +680,23 @@ mod tests {
     }
 }
 
+/// Validates a blind-transfer target.
+///
+/// Transfer hands the call away irreversibly, so an empty or whitespace-only
+/// target is refused here rather than sent — a REFER to nowhere drops the call
+/// with no way back.
+///
+/// # Errors
+///
+/// When the target is empty once trimmed.
+pub fn transfer_target(target: &str) -> Result<&str> {
+    let target = target.trim();
+    if target.is_empty() {
+        return Err(Error::Config("no transfer target given".into()));
+    }
+    Ok(target)
+}
+
 /// Whether `digit` is a sendable DTMF event.
 ///
 /// RFC 4733 defines events for the twelve keys of a phone plus the A-D tones;
@@ -694,7 +708,25 @@ pub fn is_dtmf_digit(digit: char) -> bool {
 
 #[cfg(test)]
 mod dtmf_tests {
-    use super::is_dtmf_digit;
+    use super::{is_dtmf_digit, transfer_target};
+
+    /// A blind transfer cannot be undone, so a blank target must never reach
+    /// the wire.
+    #[test]
+    fn a_blank_transfer_target_is_refused() {
+        assert!(transfer_target("").is_err());
+        assert!(transfer_target("   ").is_err());
+        assert!(transfer_target("\t\n").is_err());
+    }
+
+    #[test]
+    fn a_transfer_target_is_trimmed_but_otherwise_passed_through() {
+        assert_eq!(transfer_target("  **610 ").expect("valid"), "**610");
+        assert_eq!(
+            transfer_target("sip:bob@example.com").expect("valid"),
+            "sip:bob@example.com"
+        );
+    }
 
     #[test]
     fn the_twelve_phone_keys_and_the_abcd_tones_are_sendable() {

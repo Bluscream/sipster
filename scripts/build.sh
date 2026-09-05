@@ -102,7 +102,7 @@ Usage: $0 [target]
 Targets:
   x86_64-linux      aarch64-linux    i686-linux      armv7-linux
   x86_64-windows    x86-windows
-  aarch64-windows   currently broken, see the note in build_windows()
+  aarch64-windows   Windows on ARM (needs ninja + clang in the box)
   appimage          Linux x86_64 AppImage (sipster-linux-x86_64.AppImage)
   linux             all Linux binaries
   windows           all working Windows binaries
@@ -155,7 +155,33 @@ build_target() {
             "${NICE[@]}" cargo build --release -p sipster-ui "${CARGO_JOBS[@]}" --target "${target}"
             ;;
         aarch64-pc-windows-msvc)
-            "${NICE[@]}" cargo xwin build --release -p sipster-ui "${CARGO_JOBS[@]}" --target "${target}"
+            # cargo-xwin hands the C compiler MSVC-style include flags
+            # (`/imsvc <dir>`) but leaves CC as plain `clang`, whose GNU driver
+            # reads `/imsvc` as a filename. It overwrites CC and CFLAGS itself,
+            # so this cannot be corrected with environment variables — instead
+            # a shim earlier on PATH rewrites the flag to the GNU spelling.
+            # `ring` is the crate that trips over it.
+            local shim
+            shim="$(mktemp -d)"
+            cat > "${shim}/clang" <<'SHIM'
+#!/usr/bin/env bash
+# `/imsvc <dir>` is clang-cl's spelling of "system include directory".
+# `-imsvc` is cl-mode only, so the GNU driver wants `-isystem`.
+args=()
+for a in "$@"; do
+    case "$a" in
+        /imsvc) args+=("-isystem") ;;
+        *)      args+=("$a") ;;
+    esac
+done
+exec /usr/bin/clang "${args[@]}"
+SHIM
+            chmod +x "${shim}/clang"
+            PATH="${shim}:${PATH}" \
+                "${NICE[@]}" cargo xwin build --release -p sipster-ui "${CARGO_JOBS[@]}" --target "${target}"
+            local status=$?
+            rm -rf "${shim}"
+            (( status == 0 )) || return "${status}"
             ;;
         *)
             "${NICE[@]}" cargo build --release -p sipster-ui "${CARGO_JOBS[@]}" --target "${target}"
@@ -212,17 +238,10 @@ build_linux() {
     build_target "armv7-unknown-linux-gnueabihf"   "sipster-ui" "sipster-linux-armv7"
 }
 
-# aarch64-pc-windows-msvc is deliberately not built here.
-#
-# cargo-xwin exports MSVC-style include flags (`/imsvc <dir>`) in
-# CFLAGS_aarch64_pc_windows_msvc, but the `ring` build script drives plain
-# `clang` rather than `clang-cl`, and clang's GNU driver reads `/imsvc` as a
-# filename. cargo-xwin overwrites the variable, so it cannot be corrected from
-# the outside. Until that is fixed upstream there is no aarch64 Windows
-# artifact — do not add one to a release without building it first.
 build_windows() {
-    build_target "x86_64-pc-windows-gnu" "sipster-ui.exe" "sipster-windows-x86_64.exe"
-    build_target "i686-pc-windows-gnu"   "sipster-ui.exe" "sipster-windows-x86.exe"
+    build_target "x86_64-pc-windows-gnu"    "sipster-ui.exe" "sipster-windows-x86_64.exe"
+    build_target "i686-pc-windows-gnu"      "sipster-ui.exe" "sipster-windows-x86.exe"
+    build_target "aarch64-pc-windows-msvc"  "sipster-ui.exe" "sipster-windows-aarch64.exe"
 }
 
 # ── AppImage leftover hygiene ────────────────────────────────────────────────

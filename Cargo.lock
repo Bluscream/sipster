@@ -5489,13 +5489,13 @@ dependencies = [
 
 [[package]]
 name = "rvoip-audio-device"
-version = "0.3.8"
-source = "git+https://github.com/eisenzopf/rvoip.git?rev=ed8100ae9e072af9353580e0d3ce09c1e4523cec#ed8100ae9e072af9353580e0d3ce09c1e4523cec"
+version = "0.3.9"
+source = "git+https://github.com/eisenzopf/rvoip.git?rev=8cab44b10f872d21b304c02111d5d203ee8226da#8cab44b10f872d21b304c02111d5d203ee8226da"
 dependencies = [
  "anyhow",
  "cpal",
  "log",
- "rvoip-sip",
+ "rvoip-sip 0.3.9",
  "tokio",
 ]
 
@@ -5515,9 +5515,39 @@ dependencies = [
  "rand 0.8.8",
  "reqwest",
  "ring",
- "rvoip-core-traits",
- "rvoip-infra-common",
+ "rvoip-core-traits 0.3.8",
+ "rvoip-infra-common 0.3.8",
  "serde",
+ "serde_json",
+ "sha2",
+ "subtle",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "rvoip-auth-core"
+version = "0.3.9"
+source = "git+https://github.com/eisenzopf/rvoip.git?rev=8cab44b10f872d21b304c02111d5d203ee8226da#8cab44b10f872d21b304c02111d5d203ee8226da"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "hex",
+ "jsonwebtoken",
+ "md5",
+ "moka",
+ "rand 0.8.8",
+ "reqwest",
+ "ring",
+ "rvoip-core-traits 0.3.9",
+ "rvoip-infra-common 0.3.9",
+ "serde",
+ "serde_jcs",
  "serde_json",
  "sha2",
  "subtle",
@@ -5540,6 +5570,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rvoip-codec-core"
+version = "0.3.9"
+source = "git+https://github.com/eisenzopf/rvoip.git?rev=8cab44b10f872d21b304c02111d5d203ee8226da#8cab44b10f872d21b304c02111d5d203ee8226da"
+dependencies = [
+ "thiserror 1.0.69",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "rvoip-core"
 version = "0.3.8"
 source = "git+https://github.com/eisenzopf/rvoip.git?rev=ed8100ae9e072af9353580e0d3ce09c1e4523cec#ed8100ae9e072af9353580e0d3ce09c1e4523cec"
@@ -5550,15 +5590,41 @@ dependencies = [
  "chrono",
  "dashmap",
  "metrics",
- "rvoip-core-traits",
- "rvoip-infra-common",
- "rvoip-media-core",
- "rvoip-vcon",
+ "rvoip-core-traits 0.3.8",
+ "rvoip-infra-common 0.3.8",
+ "rvoip-media-core 0.3.8",
+ "rvoip-vcon 0.3.8",
  "serde",
  "serde_json",
  "sha2",
  "thiserror 1.0.69",
  "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "rvoip-core"
+version = "0.3.9"
+source = "git+https://github.com/eisenzopf/rvoip.git?rev=8cab44b10f872d21b304c02111d5d203ee8226da#8cab44b10f872d21b304c02111d5d203ee8226da"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "dashmap",
+ "metrics",
+ "rvoip-core-traits 0.3.9",
+ "rvoip-infra-common 0.3.9",
+ "rvoip-media-core 0.3.9",
+ "rvoip-rtp-core 0.3.9",
+ "rvoip-vcon 0.3.9",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-util",
  "tracing",
  "uuid",
 ]
@@ -5581,9 +5647,60 @@ dependencies = [
 ]
 
 [[package]]
+name = "rvoip-core-traits"
+version = "0.3.9"
+source = "git+https://github.com/eisenzopf/rvoip.git?rev=8cab44b10f872d21b304c02111d5d203ee8226da#8cab44b10f872d21b304c02111d5d203ee8226da"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "chrono",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 1.0.69",
+ "tokio",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "rvoip-ice-core"
+version = "0.3.9"
+source = "git+https://github.com/eisenzopf/rvoip.git?rev=8cab44b10f872d21b304c02111d5d203ee8226da#8cab44b10f872d21b304c02111d5d203ee8226da"
+dependencies = [
+ "hmac",
+ "rand 0.8.8",
+ "sha1",
+ "thiserror 1.0.69",
+ "tracing",
+]
+
+[[package]]
 name = "rvoip-infra-common"
 version = "0.3.8"
 source = "git+https://github.com/eisenzopf/rvoip.git?rev=ed8100ae9e072af9353580e0d3ce09c1e4523cec#ed8100ae9e072af9353580e0d3ce09c1e4523cec"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "config",
+ "dashmap",
+ "futures",
+ "mimalloc",
+ "once_cell",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "rvoip-infra-common"
+version = "0.3.9"
+source = "git+https://github.com/eisenzopf/rvoip.git?rev=8cab44b10f872d21b304c02111d5d203ee8226da#8cab44b10f872d21b304c02111d5d203ee8226da"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5621,9 +5738,40 @@ dependencies = [
  "parking_lot",
  "rand 0.8.8",
  "rustfft",
- "rvoip-codec-core",
- "rvoip-infra-common",
- "rvoip-rtp-core",
+ "rvoip-codec-core 0.3.8",
+ "rvoip-infra-common 0.3.8",
+ "rvoip-rtp-core 0.3.8",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
+name = "rvoip-media-core"
+version = "0.3.9"
+source = "git+https://github.com/eisenzopf/rvoip.git?rev=8cab44b10f872d21b304c02111d5d203ee8226da#8cab44b10f872d21b304c02111d5d203ee8226da"
+dependencies = [
+ "anyhow",
+ "apodize",
+ "async-trait",
+ "biquad",
+ "bytes",
+ "crossbeam-queue",
+ "dashmap",
+ "hound",
+ "num-complex",
+ "num_cpus",
+ "once_cell",
+ "parking_lot",
+ "rand 0.8.8",
+ "rustfft",
+ "rvoip-codec-core 0.3.9",
+ "rvoip-infra-common 0.3.9",
+ "rvoip-rtp-core 0.3.9",
  "serde",
  "serde_json",
  "thiserror 1.0.69",
@@ -5657,7 +5805,44 @@ dependencies = [
  "parking_lot",
  "rand 0.8.8",
  "rcgen",
- "rvoip-infra-common",
+ "rvoip-infra-common 0.3.8",
+ "sha1",
+ "sha2",
+ "thiserror 1.0.69",
+ "time",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "winapi",
+ "x509-parser",
+]
+
+[[package]]
+name = "rvoip-rtp-core"
+version = "0.3.9"
+source = "git+https://github.com/eisenzopf/rvoip.git?rev=8cab44b10f872d21b304c02111d5d203ee8226da#8cab44b10f872d21b304c02111d5d203ee8226da"
+dependencies = [
+ "aes",
+ "aes-gcm",
+ "anyhow",
+ "arc-swap",
+ "async-trait",
+ "base64 0.22.1",
+ "bytes",
+ "crossbeam-queue",
+ "ctr",
+ "dashmap",
+ "futures",
+ "hmac",
+ "hostname",
+ "libc",
+ "once_cell",
+ "p256",
+ "parking_lot",
+ "rand 0.8.8",
+ "rcgen",
+ "rvoip-infra-common 0.3.9",
  "sha1",
  "sha2",
  "thiserror 1.0.69",
@@ -5688,17 +5873,59 @@ dependencies = [
  "lazy_static",
  "rand 0.8.8",
  "roxmltree",
- "rvoip-auth-core",
- "rvoip-core",
- "rvoip-core-traits",
- "rvoip-infra-common",
- "rvoip-media-core",
- "rvoip-rtp-core",
- "rvoip-sip-core",
- "rvoip-sip-dialog",
- "rvoip-sip-proxy",
- "rvoip-sip-registrar",
- "rvoip-sip-transport",
+ "rvoip-auth-core 0.3.8",
+ "rvoip-core 0.3.8",
+ "rvoip-core-traits 0.3.8",
+ "rvoip-infra-common 0.3.8",
+ "rvoip-media-core 0.3.8",
+ "rvoip-rtp-core 0.3.8",
+ "rvoip-sip-core 0.3.8",
+ "rvoip-sip-dialog 0.3.8",
+ "rvoip-sip-proxy 0.3.8",
+ "rvoip-sip-registrar 0.3.8",
+ "rvoip-sip-transport 0.3.8",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "sha2",
+ "strum",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "rvoip-sip"
+version = "0.3.9"
+source = "git+https://github.com/eisenzopf/rvoip.git?rev=8cab44b10f872d21b304c02111d5d203ee8226da#8cab44b10f872d21b304c02111d5d203ee8226da"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "async-trait",
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "dashmap",
+ "futures",
+ "hound",
+ "ipnet",
+ "lazy_static",
+ "rand 0.8.8",
+ "roxmltree",
+ "rvoip-auth-core 0.3.9",
+ "rvoip-core 0.3.9",
+ "rvoip-core-traits 0.3.9",
+ "rvoip-ice-core",
+ "rvoip-infra-common 0.3.9",
+ "rvoip-media-core 0.3.9",
+ "rvoip-rtp-core 0.3.9",
+ "rvoip-sip-core 0.3.9",
+ "rvoip-sip-dialog 0.3.9",
+ "rvoip-sip-proxy 0.3.9",
+ "rvoip-sip-registrar 0.3.9",
+ "rvoip-sip-transport 0.3.9",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -5731,6 +5958,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "rvoip-sip-core"
+version = "0.3.9"
+source = "git+https://github.com/eisenzopf/rvoip.git?rev=8cab44b10f872d21b304c02111d5d203ee8226da#8cab44b10f872d21b304c02111d5d203ee8226da"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "chrono",
+ "log",
+ "nom 7.1.3",
+ "ordered-float 4.6.0",
+ "rand 0.8.8",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "rvoip-sip-dialog"
 version = "0.3.8"
 source = "git+https://github.com/eisenzopf/rvoip.git?rev=ed8100ae9e072af9353580e0d3ce09c1e4523cec#ed8100ae9e072af9353580e0d3ce09c1e4523cec"
@@ -5743,10 +5989,36 @@ dependencies = [
  "futures",
  "http",
  "rand 0.8.8",
- "rvoip-core-traits",
- "rvoip-infra-common",
- "rvoip-sip-core",
- "rvoip-sip-transport",
+ "rvoip-core-traits 0.3.8",
+ "rvoip-infra-common 0.3.8",
+ "rvoip-sip-core 0.3.8",
+ "rvoip-sip-transport 0.3.8",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "rvoip-sip-dialog"
+version = "0.3.9"
+source = "git+https://github.com/eisenzopf/rvoip.git?rev=8cab44b10f872d21b304c02111d5d203ee8226da#8cab44b10f872d21b304c02111d5d203ee8226da"
+dependencies = [
+ "anyhow",
+ "arc-swap",
+ "async-trait",
+ "bytes",
+ "dashmap",
+ "futures",
+ "http",
+ "rand 0.8.8",
+ "rvoip-core-traits 0.3.9",
+ "rvoip-infra-common 0.3.9",
+ "rvoip-sip-core 0.3.9",
+ "rvoip-sip-transport 0.3.9",
  "serde",
  "serde_json",
  "sha2",
@@ -5763,9 +6035,26 @@ source = "git+https://github.com/eisenzopf/rvoip.git?rev=ed8100ae9e072af9353580e
 dependencies = [
  "async-trait",
  "dashmap",
- "rvoip-sip-core",
- "rvoip-sip-dialog",
- "rvoip-sip-transport",
+ "rvoip-sip-core 0.3.8",
+ "rvoip-sip-dialog 0.3.8",
+ "rvoip-sip-transport 0.3.8",
+ "sha2",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "rvoip-sip-proxy"
+version = "0.3.9"
+source = "git+https://github.com/eisenzopf/rvoip.git?rev=8cab44b10f872d21b304c02111d5d203ee8226da#8cab44b10f872d21b304c02111d5d203ee8226da"
+dependencies = [
+ "async-trait",
+ "dashmap",
+ "rvoip-sip-core 0.3.9",
+ "rvoip-sip-dialog 0.3.9",
+ "rvoip-sip-transport 0.3.9",
  "sha2",
  "thiserror 1.0.69",
  "tokio",
@@ -5782,9 +6071,31 @@ dependencies = [
  "chrono",
  "dashmap",
  "quick-xml",
- "rvoip-auth-core",
- "rvoip-infra-common",
- "rvoip-sip-dialog",
+ "rvoip-auth-core 0.3.8",
+ "rvoip-infra-common 0.3.8",
+ "rvoip-sip-dialog 0.3.8",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "zeroize",
+]
+
+[[package]]
+name = "rvoip-sip-registrar"
+version = "0.3.9"
+source = "git+https://github.com/eisenzopf/rvoip.git?rev=8cab44b10f872d21b304c02111d5d203ee8226da#8cab44b10f872d21b304c02111d5d203ee8226da"
+dependencies = [
+ "async-trait",
+ "chrono",
+ "dashmap",
+ "quick-xml",
+ "rvoip-auth-core 0.3.9",
+ "rvoip-infra-common 0.3.9",
+ "rvoip-sip-dialog 0.3.9",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
@@ -5810,8 +6121,35 @@ dependencies = [
  "rustls",
  "rustls-native-certs",
  "rustls-pemfile",
- "rvoip-infra-common",
- "rvoip-sip-core",
+ "rvoip-infra-common 0.3.8",
+ "rvoip-sip-core 0.3.8",
+ "sha2",
+ "socket2 0.5.10",
+ "thiserror 1.0.69",
+ "tokio",
+ "tokio-rustls",
+ "tokio-tungstenite",
+ "tracing",
+ "webpki-roots 0.26.11",
+]
+
+[[package]]
+name = "rvoip-sip-transport"
+version = "0.3.9"
+source = "git+https://github.com/eisenzopf/rvoip.git?rev=8cab44b10f872d21b304c02111d5d203ee8226da#8cab44b10f872d21b304c02111d5d203ee8226da"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "bytes",
+ "fastrand",
+ "futures-util",
+ "hickory-resolver",
+ "http",
+ "rustls",
+ "rustls-native-certs",
+ "rustls-pemfile",
+ "rvoip-infra-common 0.3.9",
+ "rvoip-sip-core 0.3.9",
  "sha2",
  "socket2 0.5.10",
  "thiserror 1.0.69",
@@ -5843,10 +6181,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "rvoip-vcon"
+version = "0.3.9"
+source = "git+https://github.com/eisenzopf/rvoip.git?rev=8cab44b10f872d21b304c02111d5d203ee8226da#8cab44b10f872d21b304c02111d5d203ee8226da"
+dependencies = [
+ "async-trait",
+ "base64 0.22.1",
+ "chrono",
+ "dashmap",
+ "jsonwebtoken",
+ "mime",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 1.0.69",
+ "url",
+ "uuid",
+ "x509-parser",
+]
+
+[[package]]
 name = "ryu"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
+
+[[package]]
+name = "ryu-js"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6518fc26bced4d53678a22d6e423e9d8716377def84545fe328236e3af070e7f"
 
 [[package]]
 name = "same-file"
@@ -5968,6 +6332,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 3.0.4",
+]
+
+[[package]]
+name = "serde_jcs"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3a60f3fda61525e439ef6d67422118f11e986566997d9021c56867ad814a0aa"
+dependencies = [
+ "ryu-js",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -6165,7 +6540,7 @@ dependencies = [
  "base64 0.21.7",
  "ring",
  "rvoip-audio-device",
- "rvoip-sip",
+ "rvoip-sip 0.3.8",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
@@ -6844,6 +7219,7 @@ checksum = "494815d09bf52b5548659851081238f0ca39ff638363907596da739561c62c52"
 dependencies = [
  "bytes",
  "futures-core",
+ "futures-io",
  "futures-sink",
  "libc",
  "pin-project-lite",

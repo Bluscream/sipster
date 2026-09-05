@@ -46,6 +46,10 @@ pub fn take_learned_fingerprint() -> Option<String> {
 /// one, so it is not derived from the configured port.
 pub const TLS_PORT: u16 = 49443;
 
+/// AVM's plain-HTTP TR-064 port, and the historical default of the `port`
+/// setting.
+pub const PLAIN_PORT: u16 = 49000;
+
 /// Configuration credentials to connect to a FRITZ!Box TR-064 interface.
 #[derive(Clone)]
 pub struct FritzConfig {
@@ -79,10 +83,10 @@ impl Default for FritzConfig {
     fn default() -> Self {
         Self {
             host: "fritz.box".into(),
-            port: 49000,
+            port: PLAIN_PORT,
             username: String::new(),
             password: String::new(),
-            tls: false,
+            tls: true,
             cert_fingerprint: String::new(),
         }
     }
@@ -102,7 +106,15 @@ pub struct FritzBoxClient {
 }
 
 impl FritzBoxClient {
-    pub fn new(config: FritzConfig) -> Self {
+    pub fn new(mut config: FritzConfig) -> Self {
+        // TR-064 listens on two ports, and the setting holds the plain one
+        // because that is what it has always meant. Switching to TLS without
+        // also switching the port would just fail to connect, so a port left
+        // at the plain default follows the transport. An explicitly chosen
+        // port is left alone.
+        if config.tls && config.port == PLAIN_PORT {
+            config.port = TLS_PORT;
+        }
         Self {
             config,
             challenge: Arc::new(Mutex::new(None)),
@@ -188,10 +200,9 @@ impl FritzBoxClient {
         );
 
         let soap_action = format!("{service_type}#{action}");
-        // Over TLS the port is the router's TLS port, not the plain one — AVM
-        // serves TR-064 on 49000 unencrypted and 49443 encrypted.
+        // The port already follows the transport, see `new`.
         let url = if self.config.tls {
-            format!("https://{}:{TLS_PORT}{control_url}", self.config.host)
+            format!("https://{}:{}{control_url}", self.config.host, self.config.port)
         } else {
             format!("http://{}:{}{control_url}", self.config.host, self.config.port)
         };

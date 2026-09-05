@@ -420,20 +420,17 @@ pub struct FritzBoxSettings {
     pub port: u16,
     /// Fetch over TLS rather than plain HTTP.
     ///
-    /// Off by default, and that is a measured retreat rather than an
-    /// oversight. The SOAP calls work over TLS, but the phonebook downloads
-    /// that follow do not: the router frames them with `Connection: close` and
-    /// no `Content-Length`, then closes the socket without a TLS
-    /// `close_notify`, which rustls reports as `unexpected_eof`. Every
-    /// download fails and the sync reports success with zero contacts.
-    /// Encrypting only the SOAP metadata while the contacts themselves still
-    /// travel in clear would miss the point, so the default stays on plain
-    /// HTTP until that is solved.
+    /// On by default. Everything TR-064 carries — contacts, call lists — would
+    /// otherwise cross the LAN in the clear; digest auth keeps the password
+    /// off the wire but not the data it protects.
     ///
-    /// Turning it on is safe to try — the certificate is pinned, see
-    /// [`cert_fingerprint`](Self::cert_fingerprint) — and a router or HTTP
-    /// stack that closes cleanly will work.
-    #[serde(default)]
+    /// The router's certificate is self-signed, so it is pinned on first use
+    /// rather than verified against a certificate authority. See
+    /// [`cert_fingerprint`](Self::cert_fingerprint) and
+    /// `sipster_integrations::pinned_tls`.
+    ///
+    /// Turn it off only for a device that cannot do TLS on 49443.
+    #[serde(default = "yes")]
     pub tls: bool,
     /// SHA-256 of the router's certificate, remembered on the first TLS
     /// connection and required on every one after it.
@@ -450,6 +447,13 @@ pub struct FritzBoxSettings {
     pub enabled: bool,
 }
 
+/// The serde default for [`FritzBoxSettings::tls`]. A config written before
+/// TLS existed has no key, and should still be upgraded rather than left on
+/// plain HTTP.
+const fn yes() -> bool {
+    true
+}
+
 impl Default for FritzBoxSettings {
     fn default() -> Self {
         Self {
@@ -458,7 +462,7 @@ impl Default for FritzBoxSettings {
             // other user would have had their router credentials sent to.
             host: "fritz.box".into(),
             port: 49000,
-            tls: false,
+            tls: true,
             cert_fingerprint: String::new(),
             username: String::new(),
             password: String::new(),

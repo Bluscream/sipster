@@ -70,7 +70,7 @@ This list is deliberately limited to things that demonstrably work — see
 
   | Source | Needs |
   | ------ | ----- |
-  | FRITZ!Box phonebook and call list | router address and admin login |
+  | FRITZ!Box phonebook and call list | router address and admin login; over TLS by default, certificate pinned on first use |
   | Evolution Data Server | a GNOME desktop; picks up any Google/CardDAV account already added there |
   | KDE Akonadi | a file-backed address book (`vcarddir` or `contacts` resource) |
   | Local vCard folder | a directory of `.vcf` files — the vdirsyncer/khard/Radicale convention |
@@ -240,7 +240,8 @@ default_block_action = "reject"
 [integration.fritzbox]
 enabled  = true
 host     = "fritz.box"
-port     = 49000        # TR-064, not the SIP port
+port     = 49000        # TR-064, not the SIP port; 49443 is used when tls = true
+tls      = true         # certificate pinned on first use, see cert_fingerprint
 username = "…"          # a router admin login, not the SIP account
 password = "…"
 

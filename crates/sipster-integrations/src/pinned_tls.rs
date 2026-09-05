@@ -135,3 +135,90 @@ impl ServerCertVerifier for PinnedCert {
 
 
 }
+
+/// A `ureq` TLS connector that pins the certificate and tolerates a peer that
+/// closes without `close_notify`.
+///
+/// # Why not ureq's own
+///
+/// ureq already tries to treat a missing `close_notify` as a clean end of
+/// stream, but its check is stale: it looks for `ConnectionAborted` carrying
+/// the text `CloseNotify`, while rustls 0.23 reports `UnexpectedEof` with
+/// `close_notify`. Nothing matches, so the error escapes.
+///
+/// That matters here because a FRITZ!Box serves `phonebook.lua` with
+/// `Connection: close` and no `Content-Length` — the body *ends* at the close
+/// — and then drops the socket without the closing handshake. Strictly it is
+/// the router's fault, but the data is complete and refusing it only means no
+/// contacts. Every download failed while the SOAP calls succeeded, so the sync
+/// reported success with zero contacts.
+///
+/// Truncation is detectable here precisely because the body is framed by the
+/// close; a response with a `Content-Length` is still checked against it by
+/// the layer above, so this does not hide a short read.
+#[derive(Debug)]
+pub struct PinnedConnector {
+    config: Arc<rustls::ClientConfig>,
+}
+
+impl PinnedConnector {
+    #[must_use]
+    pub fn new(config: Arc<rustls::ClientConfig>) -> Self {
+        Self { config }
+    }
+}
+
+impl ureq::TlsConnector for PinnedConnector {
+    fn connect(
+        &self,
+        dns_name: &str,
+        io: Box<dyn ureq::ReadWrite>,
+    ) -> Result<Box<dyn ureq::ReadWrite>, ureq::Error> {
+        // A LAN device is usually reached by IP, which is not a valid SNI
+        // name. The name is irrelevant to a pinned certificate, so an
+        // unusable one falls back to a placeholder rather than failing.
+        let server_name = ServerName::try_from(dns_name.to_owned())
+            .unwrap_or_else(|_| ServerName::try_from("localhost").expect("a valid literal"));
+
+        let connection = rustls::ClientConnection::new(Arc::clone(&self.config), server_name)
+            .map_err(|e| std::io::Error::other(format!("TLS handshake setup failed: {e}")))?;
+
+        Ok(Box::new(LenientStream(rustls::StreamOwned::new(connection, io))))
+    }
+}
+
+/// A TLS stream that reports a missing `close_notify` as end of stream.
+#[derive(Debug)]
+struct LenientStream(rustls::StreamOwned<rustls::ClientConnection, Box<dyn ureq::ReadWrite>>);
+
+/// Whether this is the "peer went away without saying goodbye" error.
+fn is_unclean_close(e: &std::io::Error) -> bool {
+    matches!(
+        e.kind(),
+        std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionAborted
+    ) && e.to_string().to_ascii_lowercase().contains("close_notify")
+}
+
+impl std::io::Read for LenientStream {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        match self.0.read(buf) {
+            Err(ref e) if is_unclean_close(e) => Ok(0),
+            other => other,
+        }
+    }
+}
+
+impl std::io::Write for LenientStream {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.0.flush()
+    }
+}
+
+impl ureq::ReadWrite for LenientStream {
+    fn socket(&self) -> Option<&std::net::TcpStream> {
+        self.0.get_ref().socket()
+    }
+}

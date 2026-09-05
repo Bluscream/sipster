@@ -72,7 +72,11 @@ pub fn pinned_agent(
         .with_custom_certificate_verifier(verifier)
         .with_no_client_auth();
 
-    let agent = agent_builder().tls_config(std::sync::Arc::new(tls)).build();
+    // Our own connector rather than `tls_config`, so that a router closing the
+    // socket without `close_notify` reads as end of stream — see
+    // `pinned_tls::PinnedConnector`.
+    let connector = pinned_tls::PinnedConnector::new(std::sync::Arc::new(tls));
+    let agent = agent_builder().tls_connector(std::sync::Arc::new(connector)).build();
     (agent, seen)
 }
 

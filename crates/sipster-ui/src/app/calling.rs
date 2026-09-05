@@ -62,6 +62,20 @@ impl SipsterApp {
                 }
             }
             Command::Show => self.show_main_window(),
+            Command::SetHold { hold } => {
+                // Only meaningful mid-call; ignored otherwise rather than
+                // reported as an error, the same as Answer with nothing
+                // ringing.
+                if self.active.as_ref().is_some_and(|c| c.on_hold != hold) {
+                    return self.toggle_hold();
+                }
+                Task::none()
+            }
+            Command::Transfer { target } => {
+                self.dial_number = target;
+                self.transfer()
+            }
+            Command::Dtmf { digit } => self.send_dtmf(digit).unwrap_or_else(Task::none),
             Command::OpenSettings => self.open_settings(),
             // An explicit "open" from outside the app means a window,
             // whatever the button had cycled to.

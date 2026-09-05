@@ -36,6 +36,12 @@ pub enum Command {
     Answer,
     /// Hang up the active call, or decline a ringing one.
     Hangup,
+    /// Put the active call on hold, or take it off again.
+    SetHold { hold: bool },
+    /// Hand the active call to `target` and drop out of it.
+    Transfer { target: String },
+    /// Send one DTMF digit to the far end of the active call.
+    Dtmf { digit: char },
     /// Raise and focus the window.
     Show,
     /// Open the Settings window.
@@ -75,6 +81,17 @@ impl Command {
                 "open/contacts" | "contacts" => Some(Self::OpenContacts),
                 "open/calllist" | "open/history" | "calllist" | "history" => Some(Self::OpenCallList),
                 "hangup" | "end" => Some(Self::Hangup),
+                "hold" => Some(Self::SetHold { hold: true }),
+                "resume" | "unhold" => Some(Self::SetHold { hold: false }),
+                _ if action_lower.starts_with("transfer/") => {
+                    let target = percent_decode(&action[9..]);
+                    let target = target.trim();
+                    (!target.is_empty()).then(|| Self::Transfer { target: target.to_string() })
+                }
+                _ if action_lower.starts_with("dtmf/") => {
+                    let digits = percent_decode(&action[5..]);
+                    digits.chars().next().map(|digit| Self::Dtmf { digit })
+                }
                 "answer" => Some(Self::Answer),
                 "show" | "focus" | "" => Some(Self::Show),
                 "quit" => Some(Self::Quit),
@@ -96,15 +113,21 @@ impl Command {
                         Some(Self::Dial { target: decoded_target.trim().to_string() })
                     }
                 }
+                // A bare `sipster:<number>` fills the dial box, but only when
+                // it looks like something dialable. It used to accept
+                // anything, so a typo or an action from a newer version —
+                // `sipster://hold` — became a call attempt to "hold" instead
+                // of being rejected.
                 _ => {
-                    // Fallback: if action is a dialable number or SIP URI, fill the dial box
                     let candidate = if action.is_empty() { query } else { action };
                     let decoded = percent_decode(candidate);
                     let inner = decoded.trim();
                     if inner.is_empty() {
                         Some(Self::Show)
-                    } else {
+                    } else if is_dialable(inner) {
                         Some(Self::Dial { target: inner.to_string() })
+                    } else {
+                        None
                     }
                 }
             };
@@ -173,6 +196,23 @@ impl Command {
                 }
                 "--answer" | "-a" => return Some(Self::Answer),
                 "--hangup" => return Some(Self::Hangup),
+                "--hold" => return Some(Self::SetHold { hold: true }),
+                "--resume" => return Some(Self::SetHold { hold: false }),
+                "--transfer" => {
+                    if let Some(target) = iter.next() {
+                        let t = target.as_ref().trim();
+                        if !t.is_empty() {
+                            return Some(Self::Transfer { target: t.to_string() });
+                        }
+                    }
+                }
+                "--dtmf" => {
+                    if let Some(digits) = iter.next() {
+                        if let Some(digit) = digits.as_ref().trim().chars().next() {
+                            return Some(Self::Dtmf { digit });
+                        }
+                    }
+                }
                 "--show" => return Some(Self::Show),
                 "--quit" | "-q" => return Some(Self::Quit),
                 _ if arg_ref.starts_with("--call=") => {
@@ -347,8 +387,70 @@ pub fn cleanup() {
     transport::cleanup(&socket_path());
 }
 
+/// Whether `target` looks like something worth putting in the dial box.
+///
+/// Deliberately narrow: digits and the punctuation a dial string carries, or
+/// an explicit SIP URI. Anything else is more likely a mistyped action than a
+/// number, and turning it into a call is the wrong way to be wrong.
+fn is_dialable(target: &str) -> bool {
+    if target.starts_with("sip:") || target.starts_with("sips:") || target.contains('@') {
+        return true;
+    }
+    let mut has_digit = false;
+    for ch in target.chars() {
+        match ch {
+            '0'..='9' => has_digit = true,
+            '*' | '#' | '+' | '-' | '(' | ')' | ' ' | '.' => {}
+            _ => return false,
+        }
+    }
+    has_digit
+}
+
 #[cfg(test)]
 mod tests {
+    /// An action this version does not know — a typo, or one from a newer
+    /// release — must be refused, not dialled. `sipster://hold` used to place
+    /// a call to "hold".
+    #[test]
+    fn an_unknown_action_is_refused_rather_than_dialled() {
+        assert_eq!(Command::from_uri("sipster://wibble"), None);
+        assert_eq!(Command::from_uri("sipster://open/nonsense"), None);
+        // `transfer` without a target is incomplete, not a call to "transfer".
+        assert_eq!(Command::from_uri("sipster://transfer"), None);
+        assert_eq!(Command::from_uri("sipster://transfer/"), None);
+    }
+
+    /// The call-control actions, which had no URI or flag before.
+    #[test]
+    fn call_control_actions_are_understood() {
+        assert_eq!(Command::from_uri("sipster://hold"), Some(Command::SetHold { hold: true }));
+        assert_eq!(Command::from_uri("sipster://resume"), Some(Command::SetHold { hold: false }));
+        assert_eq!(
+            Command::from_uri("sipster://transfer/**623"),
+            Some(Command::Transfer { target: "**623".into() })
+        );
+        assert_eq!(Command::from_uri("sipster://dtmf/5"), Some(Command::Dtmf { digit: '5' }));
+    }
+
+    /// A bare number still fills the dial box, which is the point of the
+    /// shorthand.
+    #[test]
+    fn a_bare_number_still_reaches_the_dial_box() {
+        assert_eq!(
+            Command::from_uri("sipster:**622"),
+            Some(Command::Dial { target: "**622".into() })
+        );
+        assert_eq!(
+            Command::from_uri("sipster:+49 30 1234-567"),
+            Some(Command::Dial { target: "+49 30 1234-567".into() })
+        );
+        assert_eq!(
+            Command::from_uri("sipster:bob@example.com"),
+            Some(Command::Dial { target: "bob@example.com".into() })
+        );
+    }
+
     use super::*;
 
     #[test]

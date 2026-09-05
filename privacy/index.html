@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Privacy Policy - Sipster</title>
+  <meta name="description" content="Privacy Policy for Sipster, detailing data collection, processing, and handling of Google API data.">
+  <link rel="stylesheet" href="../style.css">
+  <link rel="icon" type="image/png" href="../assets/logo.png">
+</head>
+<body>
+
+  <header>
+    <div class="nav-container">
+      <a href="../" class="brand">
+        <img src="../assets/logo.png" alt="Sipster Logo">
+        <span>Sipster</span>
+      </a>
+      <nav>
+        <a href="../">Home</a>
+        <a href="./" class="active">Privacy Policy</a>
+        <a href="../terms/">Terms of Service</a>
+        <a href="https://github.com/Bluscream/sipster" target="_blank" rel="noopener">GitHub</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <div class="content-card">
+      <h1>Privacy Policy for Sipster</h1>
+      <p><em>Last updated: September 5, 2026</em></p>
+
+      <div class="notice-box">
+        <p><strong>Core Privacy Principle:</strong> Sipster is a local desktop client. It does not run centralized servers, collect telemetry, track usage, or harvest personal information. All communications occur directly between your device and the services you configure (such as your SIP registrar and Google APIs).</p>
+      </div>
+
+      <h2>1. Overview</h2>
+      <p>
+        This Privacy Policy explains how <strong>Sipster</strong> ("we", "our", or "the application"), an open-source SIP softphone desktop application developed by Bluscream, handles user information, particularly when integrating third-party services such as Google Contacts.
+      </p>
+
+      <h2>2. Information We Access and How It Is Used</h2>
+
+      <h3>A. Google User Data (Google Contacts API)</h3>
+      <p>
+        If you optionally connect your Google Account to Sipster to synchronize contacts:
+      </p>
+      <ul>
+        <li><strong>Requested Scopes:</strong> We request read-only access to your Google Contacts (<code>https://www.googleapis.com/auth/contacts.readonly</code>) and basic account info (<code>openid</code>, <code>email</code>).</li>
+        <li><strong>Purpose of Access:</strong> We access your contacts solely to allow Sipster to populate your local desktop address book, display names for incoming caller IDs, and let you dial phone numbers directly from the softphone dialpad.</li>
+        <li><strong>Local Storage:</strong> Contact data (names and phone numbers) and OAuth authentication tokens are saved strictly on your local device within the standard Sipster user configuration directory (e.g. <code>~/.config/sipster/</code> on Linux).</li>
+        <li><strong>No External Transmission:</strong> Your Google contacts data and authentication credentials are <strong>never</strong> transmitted to the developer, third-party analytics services, advertisement networks, or external cloud servers. The only network requests made using your Google credentials are sent directly to Google's official API endpoints.</li>
+      </ul>
+
+      <h3>B. Google Limited Use Requirements</h3>
+      <p>
+        Sipster's use and transfer to any other app of information received from Google APIs will adhere to the <a href="https://developers.google.com/terms/api-services-user-data-policy" target="_blank" rel="noopener">Google API Services User Data Policy</a>, including the Limited Use requirements.
+      </p>
+
+      <h3>C. VoIP and SIP Account Credentials</h3>
+      <p>
+        Sipster allows you to store credentials (usernames, passwords, registrar hosts) for connecting to SIP servers (e.g. Fritz!Box, Asterisk, VoIP providers). These credentials are used solely to establish local or direct network connections to your specified SIP registrar and are never shared with any other entity.
+      </p>
+
+      <h3>D. Call History & Logs</h3>
+      <p>
+        Call records (timestamps, dialed numbers, call duration) are stored locally on your device in your configuration folder. No log data or call metadata is sent to any centralized monitoring service.
+      </p>
+
+      <h2>3. Data Sharing, Selling, and Disclosure</h2>
+      <p>
+        We do <strong>not</strong> sell, rent, trade, or share your personal data, Google user data, or call history with third parties. There are no advertising networks, trackers, or telemetry SDKs embedded in Sipster.
+      </p>
+
+      <h2>4. Data Retention and Deletion</h2>
+      <p>
+        Because all data is stored on your local computer:
+      </p>
+      <ul>
+        <li>You can disconnect your Google Account at any time through the Sipster Settings interface.</li>
+        <li>You can revoke Sipster's access to your Google account at any time via <a href="https://myaccount.google.com/permissions" target="_blank" rel="noopener">Google Account Permissions</a>.</li>
+        <li>You can permanently delete all locally stored data, cache, contacts, and tokens simply by deleting the local configuration directory (e.g. <code>~/.config/sipster/</code> on Linux) or by removing the application.</li>
+      </ul>
+
+      <h2>5. Security of Your Data</h2>
+      <p>
+        Sipster communicates with Google APIs using industry-standard TLS encryption. All authentication tokens received during the OAuth 2.0 flow are kept in restricted user file storage on your operating system.
+      </p>
+
+      <h2>6. Open Source Verification</h2>
+      <p>
+        Sipster is free and open-source software. The complete source code is publicly accessible on GitHub at <a href="https://github.com/Bluscream/sipster" target="_blank" rel="noopener">https://github.com/Bluscream/sipster</a>. Users and developers are encouraged to inspect and verify how data and network requests are handled.
+      </p>
+
+      <h2>7. Contact and Inquiries</h2>
+      <p>
+        If you have questions or concerns regarding this Privacy Policy or data handling in Sipster, please reach out via:
+      </p>
+      <ul>
+        <li><strong>Email:</strong> <a href="mailto:bluscreamlp@gmail.com">bluscreamlp@gmail.com</a></li>
+        <li><strong>GitHub Issues:</strong> <a href="https://github.com/Bluscream/sipster/issues" target="_blank" rel="noopener">https://github.com/Bluscream/sipster/issues</a></li>
+      </ul>
+    </div>
+  </main>
+
+  <footer>
+    <div class="footer-links">
+      <a href="../">Home</a>
+      <a href="./">Privacy Policy</a>
+      <a href="../terms/">Terms of Service</a>
+      <a href="https://github.com/Bluscream/sipster">GitHub Repository</a>
+    </div>
+    <p>&copy; Sipster Open Source Project. Maintained by <a href="https://github.com/Bluscream">Bluscream</a></p>
+  </footer>
+
+</body>
+</html>

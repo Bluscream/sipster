@@ -5958,7 +5958,7 @@ checksum = "8ee5873ec9cce0195efcb7a4e9507a04cd49aec9c83d0389df45b1ef7ba2e649"
 name = "sipster-core"
 version = "1.0.0"
 dependencies = [
- "base64 0.21.7",
+ "base64 0.23.1",
  "ring",
  "rvoip-audio-device",
  "rvoip-sip",

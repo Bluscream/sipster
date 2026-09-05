@@ -22,7 +22,7 @@ toml.workspace = true
 # Credential encryption. Already in the tree via rustls, so this adds nothing
 # new to build — and it cross-compiles to every target we ship.
 ring = "0.17"
-base64 = "0.21"
+base64 = "0.23"
 
 # SIP calling engine (see workspace Cargo.toml for the codec rationale).
 rvoip-sip.workspace = true

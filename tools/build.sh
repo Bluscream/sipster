@@ -336,7 +336,38 @@ run_appimage() {
 # The gate a change must pass before it is committed. Warnings are denied here
 # even though a plain `cargo clippy` only warns, so "warning-free" is enforced
 # rather than merely intended.
+# A file this long has usually stopped being one thing. The limit is a
+# prompt to split it, not a law of nature, so it warns well before it bites.
+FILE_LINES_WARN=750
+FILE_LINES_FAIL=1000
+
+# Warns about long source files and fails on oversized ones.
+#
+# Counts every line, comments and tests included: they are all things a reader
+# has to scroll past to find what they came for.
+check_file_lengths() {
+    step "source file lengths (warn ${FILE_LINES_WARN}, fail ${FILE_LINES_FAIL})"
+    local over_limit=0 file lines
+    while read -r lines file; do
+        if (( lines >= FILE_LINES_FAIL )); then
+            printf '  \033[31mtoo long\033[0m %s (%s lines, limit %s) — split it\n' \
+                "${file}" "${lines}" "${FILE_LINES_FAIL}" >&2
+            over_limit=1
+        elif (( lines > FILE_LINES_WARN )); then
+            printf '  \033[33mgetting long\033[0m %s (%s lines)\n' "${file}" "${lines}" >&2
+        fi
+    done < <(cd "${ROOT_DIR}" && find crates -name '*.rs' -not -path '*/target/*' \
+                 -exec wc -l {} + | grep -v ' total$' | sort -rn)
+
+    if (( over_limit )); then
+        printf '\033[31mfail\033[0m at least one file is over %s lines\n' "${FILE_LINES_FAIL}" >&2
+        return 1
+    fi
+    ok "no file over ${FILE_LINES_FAIL} lines"
+}
+
 run_check() {
+    check_file_lengths
     step "cargo clippy (warnings denied)"
     "${NICE[@]}" cargo clippy --workspace --all-targets "${CARGO_JOBS[@]}" -- -D warnings
     step "cargo test"

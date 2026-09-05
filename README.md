@@ -393,7 +393,10 @@ Two rules matter more than the rest:
    `sipster-core`, provider logic in `sipster-integrations`, and `sipster-ui`
    is presentation only.
 
-`./tools/build.sh check` must pass — clippy runs with warnings denied.
+`./tools/build.sh check` must pass. It runs clippy with warnings denied, the
+tests, and a file-length check: a source file warns past 750 lines and fails
+at 1000, on the grounds that a file that long has usually stopped being one
+thing.
 
 ## License
 

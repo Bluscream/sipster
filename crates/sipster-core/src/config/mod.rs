@@ -261,6 +261,37 @@ impl std::fmt::Display for ThemeChoice {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum LanguageChoice {
+    #[default]
+    English,
+    German,
+}
+
+impl LanguageChoice {
+    pub const ALL: [Self; 2] = [Self::English, Self::German];
+
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::English => "en",
+            Self::German => "de",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::English => "English",
+            Self::German => "Deutsch",
+        }
+    }
+}
+
+impl std::fmt::Display for LanguageChoice {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
 /// Presentation and local-feedback preferences. None of this reaches the wire.
 ///
 /// The bool count trips `struct_excessive_bools`, whose usual remedy — folding
@@ -272,6 +303,7 @@ impl std::fmt::Display for ThemeChoice {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct UiSettings {
+    pub language: LanguageChoice,
     pub theme: ThemeChoice,
     /// Ring the speaker while an inbound call is pending.
     pub ringtone: bool,
@@ -303,6 +335,7 @@ pub struct UiSettings {
 impl Default for UiSettings {
     fn default() -> Self {
         Self {
+            language: LanguageChoice::default(),
             theme: ThemeChoice::default(),
             ringtone: true,
             notifications: true,

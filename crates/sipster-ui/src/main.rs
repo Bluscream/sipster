@@ -17,6 +17,8 @@ mod tray;
 mod ui;
 mod view;
 
+rust_i18n::i18n!("locales", fallback = "en");
+
 use std::sync::OnceLock;
 
 use app::SipsterApp;
@@ -152,6 +154,8 @@ pub fn main() -> iced::Result {
         *load_error.borrow_mut() = Some(e.to_string());
         sipster_core::Config::default()
     });
+
+    rust_i18n::set_locale(config.ui.language.code());
 
     init_logging(&config.log);
     if let Some(error) = load_error.into_inner() {

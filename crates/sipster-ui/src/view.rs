@@ -96,11 +96,14 @@ fn show(value: &str, mask: bool) -> String {
 
 fn statusbar(app: &SipsterApp) -> Element<'_, Message> {
     let registration = app.active_registration();
+    let reg_registered = rust_i18n::t!("registration.registered");
+    let reg_registering = rust_i18n::t!("registration.registering");
+    let reg_offline = rust_i18n::t!("registration.not_registered");
     let (circle_char, circle_color, reg_text) = match &registration {
-        RegistrationState::Registered => ("●", iced::Color::from_rgb(0.2, 0.85, 0.3), "Registered"),
-        RegistrationState::Registering => ("●", iced::Color::from_rgb(0.95, 0.8, 0.2), "Registering…"),
-        RegistrationState::Failed(err) => ("●", iced::Color::from_rgb(0.9, 0.25, 0.25), err.as_str()),
-        RegistrationState::Unregistered => ("○", iced::Color::from_rgb(0.6, 0.6, 0.6), "Offline"),
+        RegistrationState::Registered => ("●", iced::Color::from_rgb(0.2, 0.85, 0.3), reg_registered),
+        RegistrationState::Registering => ("●", iced::Color::from_rgb(0.95, 0.8, 0.2), reg_registering),
+        RegistrationState::Failed(err) => ("●", iced::Color::from_rgb(0.9, 0.25, 0.25), std::borrow::Cow::Owned(err.clone())),
+        RegistrationState::Unregistered => ("○", iced::Color::from_rgb(0.6, 0.6, 0.6), reg_offline),
     };
 
     // The account line carries the SIP username and registrar, both of which
@@ -113,7 +116,7 @@ fn statusbar(app: &SipsterApp) -> Element<'_, Message> {
     let acc_info = match (info_str, number_str) {
         (Some(i), Some(n)) => format!("{i} - {n}"),
         (Some(i), None) => i,
-        (None, Some(n)) => format!("Unknown - {n}"),
+        (None, Some(n)) => rust_i18n::t!("call.unknown", number = n).to_string(),
         (None, None) => String::new(),
     };
 
@@ -148,15 +151,19 @@ fn incoming_prompt(remote: &str, mask: bool) -> Element<'_, Message> {
     let (display_name, sip_addr) = parse_caller_display(remote);
     let (display_name, sip_addr) = (show(&display_name, mask), show(&sip_addr, mask));
 
+    let incoming_title = rust_i18n::t!("call.incoming").to_string();
+    let answer_label = rust_i18n::t!("call.answer");
+    let decline_label = rust_i18n::t!("call.decline");
+
     column![
-        text("Incoming call").size(22),
+        text(incoming_title).size(22),
         Space::new().height(5),
         text(display_name).size(20),
         text(sip_addr).size(14),
         Space::new().height(20),
         row![
-            action_button("Answer", Message::AnswerPressed, iced::Color::from_rgb(0.2, 0.75, 0.35)),
-            action_button("Decline", Message::DeclinePressed, iced::Color::from_rgb(0.85, 0.25, 0.25)),
+            action_button(&answer_label, Message::AnswerPressed, iced::Color::from_rgb(0.2, 0.75, 0.35)),
+            action_button(&decline_label, Message::DeclinePressed, iced::Color::from_rgb(0.85, 0.25, 0.25)),
         ]
         .spacing(16),
     ]
@@ -242,7 +249,8 @@ fn dialer(app: &SipsterApp, compact: bool) -> Element<'_, Message> {
     // The dial field is hidden with `secure`, not by rewriting its value:
     // substituting a mask would feed the mask back through `on_input` and
     // destroy what the user typed.
-    let number_input = text_input("Number or extension…", &app.dial_number)
+    let placeholder = rust_i18n::t!("ui.number_placeholder");
+    let number_input = text_input(&placeholder, &app.dial_number)
         .id(dial_input_id())
         .secure(app.ui().streaming_mode)
         .on_input(Message::DialInputChanged)
@@ -250,10 +258,12 @@ fn dialer(app: &SipsterApp, compact: bool) -> Element<'_, Message> {
         .padding(10)
         .size(20);
 
+    let hangup_label = rust_i18n::t!("ui.hangup");
+    let call_label = rust_i18n::t!("ui.call");
     let action = if app.active.is_some() {
-        action_button("Hang Up", Message::HangupPressed, iced::Color::from_rgb(0.85, 0.25, 0.25))
+        action_button(&hangup_label, Message::HangupPressed, iced::Color::from_rgb(0.85, 0.25, 0.25))
     } else {
-        action_button("Call", Message::CallPressed, iced::Color::from_rgb(0.2, 0.75, 0.35))
+        action_button(&call_label, Message::CallPressed, iced::Color::from_rgb(0.2, 0.75, 0.35))
     };
 
     // While a call is up, show who we are talking to and its live state.
@@ -279,16 +289,19 @@ fn dialer(app: &SipsterApp, compact: bool) -> Element<'_, Message> {
     .spacing(8);
 
     // Hold and transfer only exist while there is a call to apply them to.
+    let resume_label = rust_i18n::t!("ui.resume");
+    let hold_label = rust_i18n::t!("ui.hold");
+    let transfer_label = rust_i18n::t!("ui.transfer");
     let in_call_row: Element<'_, Message> = match &app.active {
         Some(call) => row![
             call_action(
-                if call.on_hold { "Resume" } else { "Hold" },
+                if call.on_hold { &resume_label } else { &hold_label },
                 Message::HoldPressed,
             ),
             // Blind transfer sends the call to whatever is in the number
             // field, so it stays disabled until there is something to send to.
             call_action_maybe(
-                "Transfer",
+                &transfer_label,
                 (!app.dial_number.trim().is_empty()).then_some(Message::TransferPressed),
             ),
         ]
@@ -317,12 +330,12 @@ fn dialer(app: &SipsterApp, compact: bool) -> Element<'_, Message> {
     layout.push(action_row).push(in_call_row).into()
 }
 
-fn state_label(state: CallState) -> &'static str {
+fn state_label(state: CallState) -> String {
     match state {
-        CallState::Dialing => "dialing",
-        CallState::Ringing => "ringing",
-        CallState::Active => "connected",
-        CallState::Terminated => "ended",
+        CallState::Dialing => rust_i18n::t!("call.dialing").to_string(),
+        CallState::Ringing => rust_i18n::t!("call.ringing").to_string(),
+        CallState::Active => rust_i18n::t!("call.connected").to_string(),
+        CallState::Terminated => rust_i18n::t!("call.terminated").to_string(),
     }
 }
 
@@ -451,7 +464,7 @@ fn secondary_button(glyph: char, msg: Message) -> Element<'static, Message> {
     .into()
 }
 
-fn action_button(label: &str, msg: Message, bg_color: iced::Color) -> Element<'_, Message> {
+fn action_button(label: &str, msg: Message, bg_color: iced::Color) -> Element<'static, Message> {
     button(
         container(text(label.to_string()).size(17))
             .center_x(Length::Fill)

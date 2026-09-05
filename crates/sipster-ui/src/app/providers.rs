@@ -238,7 +238,7 @@ impl SipsterApp {
         };
 
         let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
-            self.settings.error = Some("that file is not valid JSON".into());
+            self.settings.error = Some(rust_i18n::t!("app.invalid_json").into());
             return;
         };
 
@@ -257,14 +257,14 @@ impl SipsterApp {
 
         if id.is_empty() || secret.is_empty() {
             self.settings.error =
-                Some("no client_id/client_secret in that file — is it the OAuth client JSON?".into());
+                Some(rust_i18n::t!("app.no_creds_json").into());
             return;
         }
 
         self.settings.draft_google_client_id = id.to_string();
         self.settings.draft_google_client_secret = secret.to_string();
         self.settings.error = None;
-        self.settings.notice = Some("Google client credentials loaded".into());
+        self.settings.notice = Some(rust_i18n::t!("app.creds_loaded").into());
     }
 
     /// The Google account flow, which is long enough to stand on its own.
@@ -275,14 +275,14 @@ impl SipsterApp {
                 cancel_pending_auth();
                 let client_id = self.settings.draft_google_client_id.trim().to_string();
                 let secret = self.settings.draft_google_client_secret.trim().to_string();
-                self.settings.notice = Some("Waiting for Google sign-in in your browser…".into());
+                self.settings.notice = Some(rust_i18n::t!("app.waiting_browser").into());
                 self.settings.error = None;
                 return Task::future(async move {
                     let result = tokio::task::spawn_blocking(move || {
                         GoogleContactsClient::authorize(&client_id, &secret, 8765)
                     })
                     .await
-                    .map_err(|e| format!("sign-in task failed: {e}"))
+                    .map_err(|e| rust_i18n::t!("app.signin_failed", error = e).to_string())
                     .and_then(|inner| inner);
                     Message::Settings(S::GoogleAuthFinished(result))
                 });

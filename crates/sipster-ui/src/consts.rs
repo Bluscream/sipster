@@ -2,6 +2,9 @@
 
 use std::path::PathBuf;
 
+/// Display placeholder string for default local contacts directory (tilde form).
+pub const LOCAL_CONTACTS_DIR_DISPLAY: &str = "~/.local/share/contacts";
+
 /// Relative path to default local contacts directory from user home.
 pub const LOCAL_CONTACTS_DIR_RELATIVE: &str = ".local/share/contacts";
 
@@ -31,9 +34,4 @@ pub fn expand_home_path(path: &str) -> PathBuf {
         return home_dir().map_or_else(|| PathBuf::from(path), |home| home.join(rest));
     }
     PathBuf::from(path)
-}
-
-/// Expands leading `~/` or `~` in path strings into a expanded path string.
-pub fn expand_home_str(path: &str) -> String {
-    expand_home_path(path).to_string_lossy().to_string()
 }

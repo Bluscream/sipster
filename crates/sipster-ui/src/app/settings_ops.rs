@@ -74,7 +74,6 @@ impl SipsterApp {
             S::Password(v) => self.settings.password = v,
             S::Expires(v) => self.settings.expires = v,
             S::LocalPort(v) => self.settings.local_port = v,
-            S::AccountEnabled(v) => self.settings.account_enabled = v,
             S::TransportChanged(t) => {
                 self.settings.transport = t;
                 // Moving between UDP/TCP (5060) and TLS (5061) changes the
@@ -111,6 +110,11 @@ impl SipsterApp {
                 return self.apply_devices();
             }
 
+            S::Language(lang) => {
+                self.config.ui.language = lang;
+                rust_i18n::set_locale(lang.code());
+                self.persist();
+            }
             S::Theme(theme) => {
                 self.config.ui.theme = theme;
                 self.persist();
@@ -174,8 +178,8 @@ impl SipsterApp {
         };
 
         self.settings.error = None;
-        self.settings.notice = Some("Reconnecting…".into());
-        self.status = "Applying account settings…".into();
+        self.settings.notice = Some(rust_i18n::t!("app.reconnecting").into());
+        self.status = rust_i18n::t!("app.applying_settings").into();
 
         // Persist first: if the reconnect fails the user still has the values
         // they typed, and can fix them without retyping everything. Only the
@@ -213,11 +217,11 @@ impl SipsterApp {
         match self.config.save(&self.config_path) {
             Ok(()) => {
                 self.settings.error = None;
-                self.settings.notice = Some("Saved".into());
+                self.settings.notice = Some(rust_i18n::t!("app.saved").into());
             }
             Err(e) => {
                 tracing::error!(error = %e, "could not save settings");
-                self.settings.error = Some(format!("Could not save: {e}"));
+                self.settings.error = Some(rust_i18n::t!("app.save_failed", error = e).into());
             }
         }
     }

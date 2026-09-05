@@ -41,16 +41,6 @@ impl Filter {
         Self::Blocked,
     ];
 
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::All => "All",
-            Self::Incoming => "Incoming",
-            Self::Outgoing => "Outgoing",
-            Self::Missed => "Missed",
-            Self::Blocked => "Blocked",
-        }
-    }
-
     fn accepts(self, call: &CallRecord) -> bool {
         match self {
             Self::All => true,
@@ -186,16 +176,25 @@ pub fn view(state: &State, mask: bool) -> Element<'_, Message> {
 
     let matching = state.matching();
 
+    let title_str = rust_i18n::t!("ui.history").to_string();
+    let subtitle_str = rust_i18n::t!("history.count_filtered", count = matching.len(), total = state.calls.len()).to_string();
+    let clear_str = rust_i18n::t!("history.clear").to_string();
+    let sync_str = if state.loading {
+        rust_i18n::t!("ui.syncing").to_string()
+    } else {
+        rust_i18n::t!("ui.sync").to_string()
+    };
+
     let toolbar = ui::toolbar(
-        "History",
-        format!("{} of {} calls", matching.len(), state.calls.len()),
+        title_str,
+        subtitle_str,
         vec![
-            ui::tool_button(
-                "Clear",
+            ui::tool_button_owned(
+                clear_str,
                 (!state.calls.is_empty()).then_some(Message::ClearHistoryPressed),
             ),
-            ui::tool_button(
-                if state.loading { "Syncing…" } else { "Sync" },
+            ui::tool_button_owned(
+                sync_str,
                 (!state.loading).then_some(Message::SyncPressed),
             ),
         ],
@@ -204,11 +203,16 @@ pub fn view(state: &State, mask: bool) -> Element<'_, Message> {
     let missed = state.missed_count();
     let mut chips = row![].spacing(4).align_y(Alignment::Center);
     for filter in Filter::ALL {
-        // The missed count is the one number worth surfacing without a click.
         let label = if matches!(filter, Filter::Missed) && missed > 0 {
-            format!("Missed ({missed})")
+            rust_i18n::t!("history.filter_missed_count", count = missed).to_string()
         } else {
-            filter.label().to_string()
+            match filter {
+                Filter::All => rust_i18n::t!("history.filter_all").to_string(),
+                Filter::Incoming => rust_i18n::t!("history.filter_incoming").to_string(),
+                Filter::Outgoing => rust_i18n::t!("history.filter_outgoing").to_string(),
+                Filter::Missed => rust_i18n::t!("history.filter_missed").to_string(),
+                Filter::Blocked => rust_i18n::t!("history.filter_blocked").to_string(),
+            }
         };
         chips = chips.push(ui::chip_owned(
             label,
@@ -217,20 +221,28 @@ pub fn view(state: &State, mask: bool) -> Element<'_, Message> {
         ));
     }
 
-    let search = text_input("Search by name or number", &state.search)
+    let search_placeholder = rust_i18n::t!("ui.search_placeholder").to_string();
+    let search = text_input(&search_placeholder, &state.search)
         .on_input(Message::SearchChanged)
         .padding(8)
         .size(14);
 
+    let syncing_title = rust_i18n::t!("ui.syncing").to_string();
+    let syncing_desc = rust_i18n::t!("history.syncing_desc").to_string();
+    let no_calls_title = rust_i18n::t!("history.no_calls").to_string();
+    let no_calls_desc = rust_i18n::t!("history.no_calls_desc").to_string();
+    let no_matches_title = rust_i18n::t!("ui.no_matches").to_string();
+    let no_matches_desc = rust_i18n::t!("history.no_matches_desc").to_string();
+
     let body: Element<'_, Message> = if state.loading && state.calls.is_empty() {
-        ui::empty_state("Syncing…", "Reading local history and the router call list.")
+        ui::empty_state(syncing_title, syncing_desc)
     } else if state.calls.is_empty() {
         ui::empty_state(
-            "No calls yet",
-            "Calls you place and receive appear here once history is enabled.",
+            no_calls_title,
+            no_calls_desc,
         )
     } else if matching.is_empty() {
-        ui::empty_state("No matches", "Nothing here matches that search or filter.")
+        ui::empty_state(no_matches_title, no_matches_desc)
     } else {
         let mut list = column![].width(Length::Fill);
         for (index, call) in matching.iter().enumerate() {
@@ -268,10 +280,10 @@ fn call_row<'a>(
         CallType::Rejected => ("⊘", iced::Color::from_rgb(0.75, 0.55, 0.3)),
     };
 
-    let title = show(
-        call.remote_name.as_deref().unwrap_or(&call.remote_number),
-        mask,
-    );
+    let title = call
+        .remote_name
+        .as_ref()
+        .map_or_else(|| show(&call.remote_number, mask), |n| show(n, mask));
 
     let mut detail = call.timestamp.clone();
     if call.duration_seconds > 0 {
@@ -293,14 +305,17 @@ fn call_row<'a>(
     .into();
 
     let expanded = is_selected.then(|| {
+        let callback_lbl = rust_i18n::t!("history.call_back").to_string();
+        let add_lbl = rust_i18n::t!("history.add_contact").to_string();
+        let block_lbl = rust_i18n::t!("ui.block").to_string();
         row![
-            ui::row_action("Call back", Message::DialNumber(call.remote_number.clone())),
+            ui::row_action(callback_lbl, Message::DialNumber(call.remote_number.clone())),
             ui::row_action(
-                "Add contact",
+                add_lbl,
                 Message::AddContact(call.remote_number.clone(), call.remote_name.clone()),
             ),
             ui::row_action_danger(
-                "Block",
+                block_lbl,
                 Message::BlockNumberPrompt(call.remote_number.clone(), call.remote_name.clone()),
             ),
             Space::new().width(Length::Fill),
@@ -328,18 +343,23 @@ fn format_duration(seconds: u32) -> String {
 fn block_prompt<'a>(number: &'a str, name: Option<&'a str>) -> Element<'a, Message> {
     let who = name.map_or_else(|| number.to_string(), |n| format!("{n} ({number})"));
 
+    let title_str = rust_i18n::t!("contacts.block_prompt_title").to_string();
+    let desc_str = rust_i18n::t!("contacts.block_prompt_desc").to_string();
+    let cancel_str = rust_i18n::t!("ui.cancel").to_string();
+    let mute_str = rust_i18n::t!("ui.mute").to_string();
+    let reject_str = rust_i18n::t!("ui.reject").to_string();
+
     let content = column![
-        text("Block this caller?").size(18),
+        text(title_str).size(18),
         ui::caption(who),
         Space::new().height(10),
-        text("Reject answers with SIP 603 immediately. Mute lets it ring silently, with no notification.")
-            .size(12),
+        text(desc_str).size(12),
         Space::new().height(12),
         row![
-            ui::tool_button("Cancel", Some(Message::CancelBlockPrompt)),
+            ui::tool_button(cancel_str, Some(Message::CancelBlockPrompt)),
             Space::new().width(Length::Fill),
             ui::tool_button(
-                "Mute",
+                mute_str,
                 Some(Message::ConfirmBlockNumber(
                     number.to_string(),
                     name.map(str::to_string),
@@ -347,7 +367,7 @@ fn block_prompt<'a>(number: &'a str, name: Option<&'a str>) -> Element<'a, Messa
                 )),
             ),
             ui::tool_button(
-                "Reject",
+                reject_str,
                 Some(Message::ConfirmBlockNumber(
                     number.to_string(),
                     name.map(str::to_string),

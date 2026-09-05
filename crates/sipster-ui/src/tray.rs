@@ -137,7 +137,7 @@ impl ksni::Tray for Icon {
         let state = CallState::from_u8(self.call_state.load(Ordering::Relaxed));
         let mut items: Vec<ksni::MenuItem<Self>> = vec![
             StandardItem {
-                label: "Open Sipster".into(),
+                label: rust_i18n::t!("tray.open_sipster").into(),
                 activate: Box::new(|this: &mut Self| {
                     let _ = this.tx.send(Request::Show);
                 }),
@@ -145,7 +145,7 @@ impl ksni::Tray for Icon {
             }
             .into(),
             StandardItem {
-                label: "Open Contacts".into(),
+                label: format!("Open {}", rust_i18n::t!("ui.contacts")),
                 activate: Box::new(|this: &mut Self| {
                     let _ = this.tx.send(Request::OpenContacts);
                 }),
@@ -153,7 +153,7 @@ impl ksni::Tray for Icon {
             }
             .into(),
             StandardItem {
-                label: "Open Call List".into(),
+                label: format!("Open {}", rust_i18n::t!("ui.history")),
                 activate: Box::new(|this: &mut Self| {
                     let _ = this.tx.send(Request::OpenCallList);
                 }),
@@ -161,7 +161,7 @@ impl ksni::Tray for Icon {
             }
             .into(),
             StandardItem {
-                label: "Open Settings".into(),
+                label: format!("Open {}", rust_i18n::t!("ui.settings")),
                 activate: Box::new(|this: &mut Self| {
                     let _ = this.tx.send(Request::OpenSettings);
                 }),
@@ -173,7 +173,7 @@ impl ksni::Tray for Icon {
         if state == CallState::Ringing {
             items.push(
                 StandardItem {
-                    label: "Answer".into(),
+                    label: rust_i18n::t!("call.answer").into(),
                     activate: Box::new(|this: &mut Self| {
                         let _ = this.tx.send(Request::Answer);
                     }),
@@ -186,7 +186,7 @@ impl ksni::Tray for Icon {
         if state != CallState::Idle {
             items.push(
                 StandardItem {
-                    label: "Hang up".into(),
+                    label: rust_i18n::t!("ui.hangup").into(),
                     activate: Box::new(|this: &mut Self| {
                         let _ = this.tx.send(Request::Hangup);
                     }),
@@ -199,7 +199,7 @@ impl ksni::Tray for Icon {
         items.push(MenuItem::Separator);
         items.push(
             StandardItem {
-                label: "Quit Sipster".into(),
+                label: rust_i18n::t!("tray.quit").into(),
                 activate: Box::new(|this: &mut Self| {
                     let _ = this.tx.send(Request::Quit);
                 }),

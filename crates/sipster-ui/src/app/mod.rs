@@ -186,9 +186,9 @@ impl SipsterApp {
             numbers: None,
             dial_number: String::new(),
             status: if first_run {
-                "Welcome — fill in your SIP account to get started".into()
+                rust_i18n::t!("app.welcome").into()
             } else {
-                "Ready".into()
+                rust_i18n::t!("app.ready").into()
             },
             active: None,
             incoming: None,
@@ -238,16 +238,17 @@ impl SipsterApp {
     }
 
     pub fn title(&self, window: window::Id) -> String {
+        let app_name = "Sipster";
         if Some(window) == self.settings_window {
-            "Sipster — Settings".into()
+            format!("{app_name} — {}", rust_i18n::t!("ui.settings"))
         } else if Some(window) == self.contacts_window {
-            "Sipster — Contacts".into()
+            format!("{app_name} — {}", rust_i18n::t!("ui.contacts"))
         } else if Some(window) == self.calls_window {
-            "Sipster — Call History".into()
+            format!("{app_name} — {}", rust_i18n::t!("ui.history"))
         } else {
             // The version lived in the settings About section, which is gone;
             // the title bar is where a version belongs anyway.
-            concat!("Sipster ", env!("CARGO_PKG_VERSION")).into()
+            format!("{app_name} {}", env!("CARGO_PKG_VERSION"))
         }
     }
 
@@ -325,7 +326,7 @@ impl SipsterApp {
         match message {
             Message::EngineReady(engine) => self.on_engine_ready(engine),
             Message::EngineFailed(err) => {
-                self.status = format!("Engine error: {err}");
+                self.status = rust_i18n::t!("app.engine_error", error = err).to_string();
                 Task::none()
             }
             Message::Call(event) => self.on_call_event(event),
@@ -381,12 +382,12 @@ impl SipsterApp {
             | Message::ShowFallback(_)
             | Message::Settings(_) => self.on_window_message(message),
             Message::Dialed(Err(e)) => {
-                self.status = format!("Call failed: {e}");
+                self.status = rust_i18n::t!("app.call_failed", error = e).to_string();
                 Task::none()
             }
             Message::ActionDone(Err(e)) => {
                 tracing::error!("Call action failed: {e}");
-                self.status = format!("Error: {e}");
+                self.status = rust_i18n::t!("app.error", error = e).to_string();
                 Task::none()
             }
             Message::ActionDone(Ok(())) => {
@@ -604,19 +605,19 @@ fn display_name(remote: &str) -> Option<String> {
 
 fn registration_status(state: &RegistrationState) -> String {
     match state {
-        RegistrationState::Unregistered => "Not registered".into(),
-        RegistrationState::Registering => "Registering…".into(),
-        RegistrationState::Registered => "Registered".into(),
-        RegistrationState::Failed(e) => format!("Registration failed: {e}"),
+        RegistrationState::Unregistered => rust_i18n::t!("registration.not_registered").into(),
+        RegistrationState::Registering => rust_i18n::t!("registration.registering").into(),
+        RegistrationState::Registered => rust_i18n::t!("registration.registered").into(),
+        RegistrationState::Failed(e) => rust_i18n::t!("registration.failed", error = e).into(),
     }
 }
 
 fn call_status(state: CallState) -> String {
     match state {
-        CallState::Dialing => "Dialing…".into(),
-        CallState::Ringing => "Ringing…".into(),
-        CallState::Active => "In call".into(),
-        CallState::Terminated => "Call ended".into(),
+        CallState::Dialing => rust_i18n::t!("call.dialing").into(),
+        CallState::Ringing => rust_i18n::t!("call.ringing").into(),
+        CallState::Active => rust_i18n::t!("call.active").into(),
+        CallState::Terminated => rust_i18n::t!("call.terminated").into(),
     }
 }
 

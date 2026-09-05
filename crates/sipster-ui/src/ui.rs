@@ -33,8 +33,8 @@ pub fn caption<'a, M: 'a>(content: impl text::IntoFragment<'a>) -> Element<'a, M
 
 /// A window header: title, a count, and trailing controls.
 pub fn toolbar<'a, M: 'a>(
-    title: &'a str,
-    subtitle: String,
+    title: impl text::IntoFragment<'a>,
+    subtitle: impl text::IntoFragment<'a>,
     actions: Vec<Element<'a, M>>,
 ) -> Element<'a, M> {
     let mut trailing = row![].spacing(6).align_y(Alignment::Center);
@@ -52,7 +52,10 @@ pub fn toolbar<'a, M: 'a>(
 }
 
 /// A compact toolbar button.
-pub fn tool_button<'a, M: Clone + 'a>(label: &'a str, on_press: Option<M>) -> Element<'a, M> {
+pub fn tool_button<'a, M: Clone + 'a>(
+    label: impl text::IntoFragment<'a>,
+    on_press: Option<M>,
+) -> Element<'a, M> {
     button(text(label).size(13))
         .on_press_maybe(on_press)
         .padding([5, 11])
@@ -68,7 +71,10 @@ pub fn tool_button_owned<'a, M: Clone + 'a>(label: String, on_press: Option<M>) 
 }
 
 /// A low-emphasis action shown inside an expanded row.
-pub fn row_action<'a, M: Clone + 'a>(label: &'a str, on_press: M) -> Element<'a, M> {
+pub fn row_action<'a, M: Clone + 'a>(
+    label: impl text::IntoFragment<'a>,
+    on_press: M,
+) -> Element<'a, M> {
     button(text(label).size(12))
         .on_press(on_press)
         .padding([3, 9])
@@ -77,7 +83,10 @@ pub fn row_action<'a, M: Clone + 'a>(label: &'a str, on_press: M) -> Element<'a,
 }
 
 /// A destructive action shown inside an expanded row.
-pub fn row_action_danger<'a, M: Clone + 'a>(label: &'a str, on_press: M) -> Element<'a, M> {
+pub fn row_action_danger<'a, M: Clone + 'a>(
+    label: impl text::IntoFragment<'a>,
+    on_press: M,
+) -> Element<'a, M> {
     button(text(label).size(12))
         .on_press(on_press)
         .padding([3, 9])
@@ -135,7 +144,10 @@ pub fn list_row<'a, M: Clone + 'a>(
 }
 
 /// Centred message for an empty or still-loading list.
-pub fn empty_state<'a, M: 'a>(headline: &'a str, hint: &'a str) -> Element<'a, M> {
+pub fn empty_state<'a, M: 'a>(
+    headline: impl text::IntoFragment<'a>,
+    hint: impl text::IntoFragment<'a>,
+) -> Element<'a, M> {
     container(
         column![text(headline).size(15), caption(hint)]
             .spacing(5)

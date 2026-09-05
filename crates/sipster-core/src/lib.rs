@@ -19,7 +19,7 @@ pub use call::{CallDirection, CallEvent, CallId, CallState, RegistrationState};
 pub use config::{
     mask_identity, AudioSettings, BlockAction, BlockedNumber, CardDavAccountConfig, Config,
     default_log_filter, FritzBoxSettings, GoogleAccountConfig, IntegrationSettings, IpcSettings,
-    LogSettings, SipAccount, ThemeChoice, Transport, UiSettings,
+    LanguageChoice, LogSettings, SipAccount, ThemeChoice, Transport, UiSettings,
 };
 pub use engine::SipEngine;
 pub use error::{Error, Result};

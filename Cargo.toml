@@ -50,6 +50,7 @@ anyhow = "1.0"
 bytes = "1.10"
 uuid = { version = "1.13", features = ["v4", "serde"] }
 toml = "1.0"
+rust-i18n = "3.1"
 
 # SIP engine: rvoip provides the transaction/dialog/registrar/media stack behind
 # a softphone-oriented Endpoint API.

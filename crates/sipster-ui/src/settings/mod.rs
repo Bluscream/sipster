@@ -81,7 +81,6 @@ pub enum Message {
     Expires(String),
     LocalPort(String),
     TransportChanged(sipster_core::Transport),
-    AccountEnabled(bool),
     RevealPassword(bool),
     RevealFritzPassword(bool),
     RevealCardDavPassword(bool),
@@ -92,6 +91,7 @@ pub enum Message {
     // Immediate.
     InputDevice(DeviceChoice),
     OutputDevice(DeviceChoice),
+    Language(sipster_core::LanguageChoice),
     Theme(ThemeChoice),
     Ringtone(bool),
     Notifications(bool),
@@ -307,10 +307,19 @@ pub fn view<'a>(
     // A persistent index rather than scrolling to find a section. The window is
     // wide enough for it now, and the settings list has outgrown one screen.
     let mut index = column![].spacing(2);
-    for (i, name) in SECTIONS.iter().enumerate() {
+    for (i, _name) in SECTIONS.iter().enumerate() {
         let is_current = i == selected;
+        let cat_label = match i {
+            0 => rust_i18n::t!("categories.account").to_string(),
+            1 => rust_i18n::t!("categories.audio").to_string(),
+            2 => rust_i18n::t!("categories.appearance").to_string(),
+            3 => rust_i18n::t!("categories.sounds").to_string(),
+            4 => rust_i18n::t!("categories.desktop").to_string(),
+            5 => rust_i18n::t!("categories.integrations").to_string(),
+            _ => rust_i18n::t!("categories.call_blocking").to_string(),
+        };
         index = index.push(
-            button(text(*name).size(13))
+            button(text(cat_label).size(13))
                 .on_press(Message::JumpTo(i))
                 .padding([6, 9])
                 .width(Length::Fill)
@@ -365,14 +374,16 @@ fn footer(state: &State) -> Element<'_, Message> {
             .size(13)
             .color(iced::Color::from_rgb(0.35, 0.8, 0.45))
             .into(),
-        (None, None) => text("Changes apply immediately unless noted.").size(12).into(),
+        (None, None) => text(rust_i18n::t!("settings.changes_immediately").to_string()).size(12).into(),
     };
+
+    let close_lbl = rust_i18n::t!("ui.close").to_string();
 
     container(
         row![
             message,
             Space::new().width(Length::Fill),
-            button(text("Close").size(14)).on_press(Message::Close),
+            button(text(close_lbl).size(14)).on_press(Message::Close),
         ]
         .align_y(Alignment::Center)
         .spacing(12),
@@ -383,8 +394,8 @@ fn footer(state: &State) -> Element<'_, Message> {
 }
 
 pub(super) fn section<'a>(
-    title: &'a str,
-    hint: Option<&'a str>,
+    title: impl iced::widget::text::IntoFragment<'a>,
+    hint: Option<impl iced::widget::text::IntoFragment<'a>>,
     content: Element<'a, Message>,
 ) -> Element<'a, Message> {
     let mut header = column![text(title).size(17)].spacing(3);
@@ -401,7 +412,10 @@ pub(super) fn section<'a>(
 }
 
 /// A labelled row. The fixed label column keeps every field aligned.
-pub(super) fn field<'a>(label: &'a str, control: Element<'a, Message>) -> Element<'a, Message> {
+pub(super) fn field<'a>(
+    label: impl iced::widget::text::IntoFragment<'a>,
+    control: Element<'a, Message>,
+) -> Element<'a, Message> {
     row![
         text(label).size(13).width(Length::Fixed(132.0)),
         container(control).width(Length::Fill),
@@ -490,25 +504,19 @@ fn account_section<'a>(
     accounts: &AccountContext<'a>,
 ) -> Element<'a, Message> {
     let (account, first_run) = (accounts.current, accounts.first_run);
-    // `account` is the one the engine is actually running. When there is none
-    // — first run, or a failed connect — nothing has been applied yet, so
-    // whatever is in the form is worth applying and Apply must be live.
-    // Comparing against a non-existent account would leave the button dead
-    // exactly when it is the only way forward; validation on Apply reports
-    // anything still missing.
     let dirty = account.is_none_or(|acc| state.account_is_dirty(acc));
 
-    let mut apply = button(text("Apply & reconnect").size(14));
-    let mut revert = button(text("Revert").size(14));
+    let revert_lbl = rust_i18n::t!("ui.revert").to_string();
+
+    let apply_reconnect_str = rust_i18n::t!("settings.apply_reconnect").to_string();
+    let mut apply = button(text(apply_reconnect_str).size(14));
+    let mut revert = button(text(revert_lbl).size(14));
     if dirty {
         apply = apply.on_press(Message::ApplyAccount);
         revert = revert.on_press(Message::RevertAccount);
     }
 
-    // Identifying fields are hidden with `secure` rather than by substituting
-    // a mask: these are editable, and feeding a mask back through `on_input`
-    // would overwrite the real value.
-    let hidden = |placeholder: &'static str, value: &'a str, on_change: fn(String) -> Message| {
+    let hidden = |placeholder: &str, value: &'a str, on_change: fn(String) -> Message| {
         text_input(placeholder, value)
             .on_input(on_change)
             .secure(mask)
@@ -517,27 +525,31 @@ fn account_section<'a>(
             .into()
     };
 
+    let host_lbl = rust_i18n::t!("settings.registrar").to_string();
+    let port_lbl = rust_i18n::t!("settings.registrar_port").to_string();
+    let user_lbl = rust_i18n::t!("settings.username").to_string();
+    let auth_lbl = rust_i18n::t!("settings.auth_user").to_string();
+    let pass_lbl = rust_i18n::t!("settings.password").to_string();
+    let exp_lbl = rust_i18n::t!("settings.re_register_every").to_string();
+    let local_port_lbl = rust_i18n::t!("settings.port").to_string();
+    let transport_lbl = rust_i18n::t!("settings.transport").to_string();
+
     let content = column![
-        checkbox(state.account_enabled)
-            .label("Register this account")
-            .on_toggle(Message::AccountEnabled)
-            .size(15)
-            .text_size(13),
         field(
-            "Registrar",
+            host_lbl,
             hidden("fritz.box", &state.registrar, Message::Registrar)
         ),
-        field("Registrar port", input("5060", &state.port, Message::Port)),
+        field(port_lbl, input("5060", &state.port, Message::Port)),
         field(
-            "Username",
-            hidden("Benutzername", &state.username, Message::Username)
+            user_lbl,
+            hidden(&rust_i18n::t!("settings.username_placeholder"), &state.username, Message::Username)
         ),
         field(
-            "Auth user",
-            hidden("same as username", &state.auth_user, Message::AuthUser)
+            auth_lbl,
+            hidden(&rust_i18n::t!("settings.auth_user_placeholder"), &state.auth_user, Message::AuthUser)
         ),
         field(
-            "Password",
+            pass_lbl,
             secret_input(
                 "",
                 &state.password,
@@ -547,15 +559,15 @@ fn account_section<'a>(
             )
         ),
         field(
-            "Re-register every",
+            exp_lbl,
             input("600", &state.expires, Message::Expires)
         ),
         field(
-            "Local SIP port",
+            local_port_lbl,
             input("5060", &state.local_port, Message::LocalPort)
         ),
         field(
-            "Transport",
+            transport_lbl,
             pick_list(
                 sipster_core::Transport::ALL,
                 Some(state.transport),
@@ -569,20 +581,23 @@ fn account_section<'a>(
     .spacing(9);
 
     let hint = if first_run {
-        "Nothing configured yet — fill these in and press Apply to connect."
+        rust_i18n::t!("settings.account_hint_first").to_string()
     } else {
-        "Applied together — reconnects and re-registers."
+        rust_i18n::t!("settings.account_hint_applied").to_string()
     };
 
-    section("Account", Some(hint), content.into())
+    let title_acc = rust_i18n::t!("categories.account").to_string();
+    section(title_acc, Some(hint), content.into())
 }
 
 fn audio_section<'a>(state: &'a State, devices: &'a DeviceSelection) -> Element<'a, Message> {
+    let audio_title = rust_i18n::t!("categories.audio").to_string();
     if !state.devices_loaded {
+        let looking_str = rust_i18n::t!("settings.looking_audio").to_string();
         return section(
-            "Audio",
-            None,
-            text("Looking for audio devices…").size(13).into(),
+            audio_title,
+            None::<&str>,
+            text(looking_str).size(13).into(),
         );
     }
 
@@ -611,12 +626,16 @@ fn audio_section<'a>(state: &'a State, devices: &'a DeviceSelection) -> Element<
     .padding(7)
     .width(Length::Fill);
 
+    let mic_lbl = rust_i18n::t!("settings.microphone").to_string();
+    let speaker_lbl = rust_i18n::t!("settings.speaker").to_string();
+    let audio_hint_str = rust_i18n::t!("settings.audio_hint").to_string();
+
     section(
-        "Audio",
-        Some("Switches immediately, including on a call in progress."),
+        audio_title,
+        Some(audio_hint_str),
         column![
-            field("Microphone", input_pick.into()),
-            field("Speaker", output_pick.into()),
+            field(mic_lbl, input_pick.into()),
+            field(speaker_lbl, output_pick.into()),
         ]
         .spacing(9)
         .into(),
@@ -624,20 +643,35 @@ fn audio_section<'a>(state: &'a State, devices: &'a DeviceSelection) -> Element<
 }
 
 fn appearance_section(ui: &UiSettings) -> Element<'_, Message> {
+    let language_pick = pick_list(
+        sipster_core::LanguageChoice::ALL,
+        Some(ui.language),
+        Message::Language,
+    )
+    .text_size(13)
+    .padding(7)
+    .width(Length::Fill);
+
     let theme = pick_list(ThemeChoice::ALL, Some(ui.theme), Message::Theme)
         .text_size(13)
         .padding(7)
         .width(Length::Fill);
 
+    let title_app = rust_i18n::t!("categories.appearance").to_string();
+    let lang_lbl = rust_i18n::t!("settings.language").to_string();
+    let theme_lbl = rust_i18n::t!("settings.theme").to_string();
+    let banner_lbl = rust_i18n::t!("settings.show_banner").to_string();
+
     section(
-        "Appearance",
-        None,
+        title_app,
+        None::<&str>,
         column![
-            field("Theme", theme.into()),
+            field(lang_lbl, language_pick.into()),
+            field(theme_lbl, theme.into()),
             field(
                 "",
                 checkbox(ui.show_banner)
-                    .label("Show the Sipster banner above the dialpad")
+                    .label(banner_lbl)
                     .on_toggle(Message::ShowBanner)
                     .size(15)
                     .text_size(13)
@@ -650,7 +684,7 @@ fn appearance_section(ui: &UiSettings) -> Element<'_, Message> {
 }
 
 fn sounds_section(ui: &UiSettings) -> Element<'_, Message> {
-    let toggle = |label: &'static str, value: bool, msg: fn(bool) -> Message| {
+    let toggle = |label: String, value: bool, msg: fn(bool) -> Message| {
         checkbox(value)
             .label(label)
             .on_toggle(msg)
@@ -658,23 +692,30 @@ fn sounds_section(ui: &UiSettings) -> Element<'_, Message> {
             .text_size(13)
     };
 
+    let title_snd = rust_i18n::t!("categories.sounds").to_string();
+    let hint_snd = rust_i18n::t!("settings.sounds_hint").to_string();
+    let ring_lbl = rust_i18n::t!("settings.ring_incoming").to_string();
+    let notif_lbl = rust_i18n::t!("settings.desktop_notifications").to_string();
+    let dtmf_lbl = rust_i18n::t!("settings.beep_dialpad").to_string();
+    let chimes_lbl = rust_i18n::t!("settings.call_chimes").to_string();
+
     section(
-        "Sounds & notifications",
-        Some("Local feedback only — none of this is sent to the other party."),
+        title_snd,
+        Some(hint_snd),
         column![
-            toggle("Ring while a call is coming in", ui.ringtone, Message::Ringtone),
+            toggle(ring_lbl, ui.ringtone, Message::Ringtone),
             toggle(
-                "Desktop notification for incoming calls",
+                notif_lbl,
                 ui.notifications,
                 Message::Notifications
             ),
             toggle(
-                "Beep on dialpad keys",
+                dtmf_lbl,
                 ui.dtmf_feedback,
                 Message::DtmfFeedback
             ),
             toggle(
-                "Chime when a call starts and ends",
+                chimes_lbl,
                 ui.call_chimes,
                 Message::CallChimes
             ),
@@ -685,40 +726,44 @@ fn sounds_section(ui: &UiSettings) -> Element<'_, Message> {
 }
 
 fn integration_section(ui: &UiSettings) -> Element<'_, Message> {
+    let streaming_cb_lbl = rust_i18n::t!("settings.streaming_mode_cb").to_string();
     let streaming_cb: Element<'_, Message> = checkbox(ui.streaming_mode)
-        .label("Streaming mode — hide all names and numbers")
+        .label(streaming_cb_lbl)
         .on_toggle(Message::StreamingMode)
         .size(15)
         .text_size(13)
         .into();
 
+    let uri_cb_lbl = rust_i18n::t!("settings.register_uri_cb").to_string();
     let uri_cb: Element<'_, Message> = checkbox(ui.register_uri_schemes)
-        .label("Set Sipster as default handler for telephony & SIP links")
+        .label(uri_cb_lbl)
         .on_toggle(Message::RegisterUriSchemes)
         .size(15)
         .text_size(13)
         .into();
 
+    let tray_cb_lbl = rust_i18n::t!("settings.close_to_tray_cb").to_string();
     let tray_cb: Element<'_, Message> = checkbox(ui.close_to_tray)
-        .label("Close to system tray (keeps running in background)")
+        .label(tray_cb_lbl)
         .on_toggle(Message::CloseToTray)
         .size(15)
         .text_size(13)
         .into();
 
+    let title_desk = rust_i18n::t!("settings.desktop_integration").to_string();
+    let hint_desk = rust_i18n::t!("settings.desktop_integration_hint").to_string();
+    let desc_streaming = rust_i18n::t!("settings.streaming_mode_desc").to_string();
+
     section(
-        "Desktop Integration",
-        Some("Handles background tray operation and tel:, sip:, sips:, callto: links."),
+        title_desk,
+        Some(hint_desk),
         column![
             tray_cb,
             uri_cb,
             streaming_cb,
-            text(
-                "Streaming mode masks every name, number and address to its first \
-                 and last character across all windows, for screen sharing."
-            )
-            .size(11)
-            .color(iced::Color::from_rgb(0.62, 0.62, 0.66)),
+            text(desc_streaming)
+                .size(11)
+                .color(iced::Color::from_rgb(0.62, 0.62, 0.66)),
         ]
         .spacing(9)
         .into(),

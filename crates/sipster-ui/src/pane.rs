@@ -62,13 +62,13 @@ impl Placement {
         matches!(self, Self::Window)
     }
 
-    /// A one-word label for the tooltip/status line.
+    /// A localized label for the status line.
     #[must_use]
-    pub fn label(self) -> &'static str {
+    pub fn label(self) -> String {
         match self {
-            Self::Hidden => "hidden",
-            Self::Docked => "docked",
-            Self::Window => "window",
+            Self::Hidden => rust_i18n::t!("app.placement_hidden").to_string(),
+            Self::Docked => rust_i18n::t!("app.placement_docked").to_string(),
+            Self::Window => rust_i18n::t!("app.placement_window").to_string(),
         }
     }
 }

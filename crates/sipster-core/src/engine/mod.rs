@@ -396,7 +396,7 @@ impl SipEngine {
             .with_referred_by(referred_by)
             .send()
             .await
-            .map_err(|e| Error::Sip(format!("could not transfer to {target}: {e}")))
+            .map_err(|e| Error::Sip(format!("could not transfer to {target}: {}", detail(&e))))
     }
 
     /// Hang up (or decline) a call by our id.
@@ -480,6 +480,28 @@ mod tests {
         reg.take(first);
         assert_eq!(reg.resolve("rvoip-2"), Some(second), "unrelated call survives");
         assert_eq!(reg.take(second), Some("b"));
+    }
+}
+
+/// The text of an rvoip error, with its own redaction undone.
+///
+/// `SessionError` renders every detail as `redacted(bytes=N)` — a policy meant
+/// for operator-facing surfaces, applied unconditionally in `Display` with no
+/// way to switch it off. It left a local log saying only that something had
+/// failed and how long the explanation was, which is what "the transfer button
+/// does nothing" looked like from outside.
+///
+/// The variants carry their text in public fields, so it is read from there
+/// instead. Nothing in it is secret: these are dialog and media states, and
+/// the credentials that would matter are redacted where they are stored.
+fn detail(error: &rvoip_sip::SessionError) -> String {
+    use rvoip_sip::SessionError as E;
+    match error {
+        E::SessionNotFound(text)
+        | E::InvalidTransition(text)
+        | E::DialogError(text)
+        | E::MediaError(text) => text.clone(),
+        other => other.to_string(),
     }
 }
 

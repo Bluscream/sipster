@@ -179,13 +179,13 @@ pub fn view(state: &State, mask: bool) -> Element<'_, Message> {
 
     let matching = state.matching();
 
-    let title_str = rust_i18n::t!("ui.history").to_string();
+    let title_str = rust_i18n::t!("history").to_string();
     let subtitle_str = rust_i18n::t!("history.count_filtered", count = matching.len(), total = state.calls.len()).to_string();
-    let clear_str = rust_i18n::t!("history.clear").to_string();
+    let clear_str = rust_i18n::t!("clear").to_string();
     let sync_str = if state.loading {
-        rust_i18n::t!("ui.syncing").to_string()
+        rust_i18n::t!("syncing").to_string()
     } else {
-        rust_i18n::t!("ui.sync").to_string()
+        rust_i18n::t!("sync").to_string()
     };
 
     let toolbar = ui::toolbar(
@@ -207,14 +207,14 @@ pub fn view(state: &State, mask: bool) -> Element<'_, Message> {
     let mut chips = row![].spacing(4).align_y(Alignment::Center);
     for filter in Filter::ALL {
         let label = if matches!(filter, Filter::Missed) && missed > 0 {
-            rust_i18n::t!("history.filter_missed_count", count = missed).to_string()
+            rust_i18n::t!("filter_missed_count", count = missed).to_string()
         } else {
             match filter {
-                Filter::All => rust_i18n::t!("history.filter_all").to_string(),
-                Filter::Incoming => rust_i18n::t!("history.filter_incoming").to_string(),
-                Filter::Outgoing => rust_i18n::t!("history.filter_outgoing").to_string(),
-                Filter::Missed => rust_i18n::t!("history.filter_missed").to_string(),
-                Filter::Blocked => rust_i18n::t!("history.filter_blocked").to_string(),
+                Filter::All => rust_i18n::t!("filter_all").to_string(),
+                Filter::Incoming => rust_i18n::t!("filter_incoming").to_string(),
+                Filter::Outgoing => rust_i18n::t!("filter_outgoing").to_string(),
+                Filter::Missed => rust_i18n::t!("filter_missed").to_string(),
+                Filter::Blocked => rust_i18n::t!("filter_blocked").to_string(),
             }
         };
         chips = chips.push(ui::chip_owned(
@@ -224,17 +224,17 @@ pub fn view(state: &State, mask: bool) -> Element<'_, Message> {
         ));
     }
 
-    let search_placeholder = rust_i18n::t!("ui.search_placeholder").to_string();
+    let search_placeholder = rust_i18n::t!("search_placeholder").to_string();
     let search = text_input(&search_placeholder, &state.search)
         .on_input(Message::SearchChanged)
         .padding(8)
         .size(14);
 
-    let syncing_title = rust_i18n::t!("ui.syncing").to_string();
+    let syncing_title = rust_i18n::t!("syncing").to_string();
     let syncing_desc = rust_i18n::t!("history.syncing_desc").to_string();
-    let no_calls_title = rust_i18n::t!("history.no_calls").to_string();
-    let no_calls_desc = rust_i18n::t!("history.no_calls_desc").to_string();
-    let no_matches_title = rust_i18n::t!("ui.no_matches").to_string();
+    let no_calls_title = rust_i18n::t!("no_calls").to_string();
+    let no_calls_desc = rust_i18n::t!("no_calls_desc").to_string();
+    let no_matches_title = rust_i18n::t!("no_matches").to_string();
     let no_matches_desc = rust_i18n::t!("history.no_matches_desc").to_string();
 
     let body: Element<'_, Message> = if state.loading && state.calls.is_empty() {
@@ -308,8 +308,8 @@ fn call_row<'a>(
     .into();
 
     let expanded = is_selected.then(|| {
-        let callback_lbl = rust_i18n::t!("history.call_back").to_string();
-        let block_lbl = rust_i18n::t!("ui.block").to_string();
+        let callback_lbl = rust_i18n::t!("call_back").to_string();
+        let block_lbl = rust_i18n::t!("block").to_string();
         row![
             ui::row_action(callback_lbl, Message::DialNumber(call.remote_number.clone())),
             ui::row_action_danger(
@@ -341,9 +341,9 @@ fn format_duration(seconds: u32) -> String {
 fn block_prompt<'a>(number: &'a str, name: Option<&'a str>) -> Element<'a, Message> {
     let who = name.map_or_else(|| number.to_string(), |n| format!("{n} ({number})"));
 
-    let title_str = rust_i18n::t!("contacts.block_prompt_title").to_string();
-    let desc_str = rust_i18n::t!("contacts.block_prompt_desc").to_string();
-    let cancel_str = rust_i18n::t!("ui.cancel").to_string();
+    let title_str = rust_i18n::t!("block_prompt_title").to_string();
+    let desc_str = rust_i18n::t!("block_prompt_desc").to_string();
+    let cancel_str = rust_i18n::t!("cancel").to_string();
     let mute_str = crate::settings::providers::block_action_label(BlockAction::Mute);
     let reject_str = crate::settings::providers::block_action_label(BlockAction::Reject);
 

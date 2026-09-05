@@ -311,13 +311,13 @@ pub fn view<'a>(
     for (i, _name) in SECTIONS.iter().enumerate() {
         let is_current = i == selected;
         let cat_label = match i {
-            0 => rust_i18n::t!("categories.account").to_string(),
-            1 => rust_i18n::t!("categories.audio").to_string(),
-            2 => rust_i18n::t!("categories.appearance").to_string(),
-            3 => rust_i18n::t!("categories.sounds").to_string(),
-            4 => rust_i18n::t!("categories.desktop").to_string(),
-            5 => rust_i18n::t!("categories.integrations").to_string(),
-            _ => rust_i18n::t!("categories.call_blocking").to_string(),
+            0 => rust_i18n::t!("account").to_string(),
+            1 => rust_i18n::t!("audio").to_string(),
+            2 => rust_i18n::t!("appearance").to_string(),
+            3 => rust_i18n::t!("sounds").to_string(),
+            4 => rust_i18n::t!("desktop").to_string(),
+            5 => rust_i18n::t!("integrations").to_string(),
+            _ => rust_i18n::t!("call_blocking").to_string(),
         };
         index = index.push(
             button(text(cat_label).size(13))
@@ -375,10 +375,10 @@ fn footer(state: &State) -> Element<'_, Message> {
             .size(13)
             .color(iced::Color::from_rgb(0.35, 0.8, 0.45))
             .into(),
-        (None, None) => text(rust_i18n::t!("settings.changes_immediately").to_string()).size(12).into(),
+        (None, None) => text(rust_i18n::t!("changes_immediately").to_string()).size(12).into(),
     };
 
-    let close_lbl = rust_i18n::t!("ui.close").to_string();
+    let close_lbl = rust_i18n::t!("close").to_string();
 
     container(
         row![
@@ -599,9 +599,9 @@ fn account_section<'a>(
     let (account, first_run) = (accounts.current, accounts.first_run);
     let dirty = account.is_none_or(|acc| state.account_is_dirty(acc));
 
-    let revert_lbl = rust_i18n::t!("ui.revert").to_string();
+    let revert_lbl = rust_i18n::t!("revert").to_string();
 
-    let apply_reconnect_str = rust_i18n::t!("settings.apply_reconnect").to_string();
+    let apply_reconnect_str = rust_i18n::t!("apply_reconnect").to_string();
     let mut apply = button(text(apply_reconnect_str).size(14));
     let mut revert = button(text(revert_lbl).size(14));
     if dirty {
@@ -618,14 +618,14 @@ fn account_section<'a>(
             .into()
     };
 
-    let host_lbl = rust_i18n::t!("settings.registrar").to_string();
-    let port_lbl = rust_i18n::t!("settings.registrar_port").to_string();
-    let user_lbl = rust_i18n::t!("settings.username").to_string();
-    let auth_lbl = rust_i18n::t!("settings.auth_user").to_string();
-    let pass_lbl = rust_i18n::t!("settings.password").to_string();
-    let exp_lbl = rust_i18n::t!("settings.re_register_every").to_string();
-    let local_port_lbl = rust_i18n::t!("settings.port").to_string();
-    let transport_lbl = rust_i18n::t!("settings.transport").to_string();
+    let host_lbl = rust_i18n::t!("registrar").to_string();
+    let port_lbl = rust_i18n::t!("registrar_port").to_string();
+    let user_lbl = rust_i18n::t!("username").to_string();
+    let auth_lbl = rust_i18n::t!("auth_user").to_string();
+    let pass_lbl = rust_i18n::t!("password").to_string();
+    let exp_lbl = rust_i18n::t!("re_register_every").to_string();
+    let local_port_lbl = rust_i18n::t!("port").to_string();
+    let transport_lbl = rust_i18n::t!("transport").to_string();
 
     let content = column![
         field(
@@ -639,7 +639,7 @@ fn account_section<'a>(
         ),
         field(
             auth_lbl,
-            hidden(&rust_i18n::t!("settings.auth_user_placeholder"), &state.auth_user, Message::AuthUser)
+            hidden(&rust_i18n::t!("auth_user_placeholder"), &state.auth_user, Message::AuthUser)
         ),
         field(
             pass_lbl,
@@ -674,19 +674,19 @@ fn account_section<'a>(
     .spacing(9);
 
     let hint = if first_run {
-        rust_i18n::t!("settings.account_hint_first").to_string()
+        rust_i18n::t!("account_hint_first").to_string()
     } else {
-        rust_i18n::t!("settings.account_hint_applied").to_string()
+        rust_i18n::t!("account_hint_applied").to_string()
     };
 
-    let title_acc = rust_i18n::t!("categories.account").to_string();
+    let title_acc = rust_i18n::t!("account").to_string();
     section(title_acc, Some(hint), content.into())
 }
 
 fn audio_section<'a>(state: &'a State, devices: &'a DeviceSelection) -> Element<'a, Message> {
-    let audio_title = rust_i18n::t!("categories.audio").to_string();
+    let audio_title = rust_i18n::t!("audio").to_string();
     if !state.devices_loaded {
-        let looking_str = rust_i18n::t!("settings.looking_audio").to_string();
+        let looking_str = rust_i18n::t!("looking_audio").to_string();
         return section(
             audio_title,
             None::<&str>,
@@ -719,9 +719,9 @@ fn audio_section<'a>(state: &'a State, devices: &'a DeviceSelection) -> Element<
     .padding(7)
     .width(Length::Fill);
 
-    let mic_lbl = rust_i18n::t!("settings.microphone").to_string();
-    let speaker_lbl = rust_i18n::t!("settings.speaker").to_string();
-    let audio_hint_str = rust_i18n::t!("settings.audio_hint").to_string();
+    let mic_lbl = rust_i18n::t!("microphone").to_string();
+    let speaker_lbl = rust_i18n::t!("speaker").to_string();
+    let audio_hint_str = rust_i18n::t!("audio_hint").to_string();
 
     section(
         audio_title,
@@ -750,10 +750,10 @@ fn appearance_section(ui: &UiSettings) -> Element<'_, Message> {
         .padding(7)
         .width(Length::Fill);
 
-    let title_app = rust_i18n::t!("categories.appearance").to_string();
-    let lang_lbl = rust_i18n::t!("settings.language").to_string();
-    let theme_lbl = rust_i18n::t!("settings.theme").to_string();
-    let banner_lbl = rust_i18n::t!("settings.show_banner").to_string();
+    let title_app = rust_i18n::t!("appearance").to_string();
+    let lang_lbl = rust_i18n::t!("language").to_string();
+    let theme_lbl = rust_i18n::t!("theme").to_string();
+    let banner_lbl = rust_i18n::t!("show_banner").to_string();
 
     section(
         title_app,
@@ -785,12 +785,12 @@ fn sounds_section(ui: &UiSettings) -> Element<'_, Message> {
             .text_size(13)
     };
 
-    let title_snd = rust_i18n::t!("categories.sounds").to_string();
-    let hint_snd = rust_i18n::t!("settings.sounds_hint").to_string();
-    let ring_lbl = rust_i18n::t!("settings.ring_incoming").to_string();
-    let notif_lbl = rust_i18n::t!("settings.desktop_notifications").to_string();
-    let dtmf_lbl = rust_i18n::t!("settings.beep_dialpad").to_string();
-    let chimes_lbl = rust_i18n::t!("settings.call_chimes").to_string();
+    let title_snd = rust_i18n::t!("sounds").to_string();
+    let hint_snd = rust_i18n::t!("sounds_hint").to_string();
+    let ring_lbl = rust_i18n::t!("ring_incoming").to_string();
+    let notif_lbl = rust_i18n::t!("desktop_notifications").to_string();
+    let dtmf_lbl = rust_i18n::t!("beep_dialpad").to_string();
+    let chimes_lbl = rust_i18n::t!("call_chimes").to_string();
 
     section(
         title_snd,
@@ -819,7 +819,7 @@ fn sounds_section(ui: &UiSettings) -> Element<'_, Message> {
 }
 
 fn integration_section(ui: &UiSettings) -> Element<'_, Message> {
-    let streaming_cb_lbl = rust_i18n::t!("settings.streaming_mode_cb").to_string();
+    let streaming_cb_lbl = rust_i18n::t!("streaming_mode_cb").to_string();
     let streaming_cb: Element<'_, Message> = checkbox(ui.streaming_mode)
         .label(streaming_cb_lbl)
         .on_toggle(Message::StreamingMode)
@@ -827,7 +827,7 @@ fn integration_section(ui: &UiSettings) -> Element<'_, Message> {
         .text_size(13)
         .into();
 
-    let uri_cb_lbl = rust_i18n::t!("settings.register_uri_cb").to_string();
+    let uri_cb_lbl = rust_i18n::t!("register_uri_cb").to_string();
     let uri_cb: Element<'_, Message> = checkbox(ui.register_uri_schemes)
         .label(uri_cb_lbl)
         .on_toggle(Message::RegisterUriSchemes)
@@ -835,7 +835,7 @@ fn integration_section(ui: &UiSettings) -> Element<'_, Message> {
         .text_size(13)
         .into();
 
-    let tray_cb_lbl = rust_i18n::t!("settings.close_to_tray_cb").to_string();
+    let tray_cb_lbl = rust_i18n::t!("close_to_tray_cb").to_string();
     let tray_cb: Element<'_, Message> = checkbox(ui.close_to_tray)
         .label(tray_cb_lbl)
         .on_toggle(Message::CloseToTray)
@@ -843,9 +843,9 @@ fn integration_section(ui: &UiSettings) -> Element<'_, Message> {
         .text_size(13)
         .into();
 
-    let title_desk = rust_i18n::t!("settings.desktop_integration").to_string();
-    let hint_desk = rust_i18n::t!("settings.desktop_integration_hint").to_string();
-    let desc_streaming = rust_i18n::t!("settings.streaming_mode_desc").to_string();
+    let title_desk = rust_i18n::t!("desktop_integration").to_string();
+    let hint_desk = rust_i18n::t!("desktop_integration_hint").to_string();
+    let desc_streaming = rust_i18n::t!("streaming_mode_desc").to_string();
 
     section(
         title_desk,

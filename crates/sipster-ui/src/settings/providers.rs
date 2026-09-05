@@ -35,7 +35,7 @@ pub(super) fn providers_section<'a>(
     content = content.push(rule::horizontal(1)).push(carddav_panel(state, integration));
     content = content.push(rule::horizontal(1)).push(vdir_panel(state, integration));
 
-    let history_label = rust_i18n::t!("settings.record_history");
+    let history_label = rust_i18n::t!("record_history");
     content = content.push(rule::horizontal(1)).push(
         checkbox(integration.local_history_enabled)
             .label(history_label.to_string())
@@ -46,15 +46,15 @@ pub(super) fn providers_section<'a>(
 
     // The config path lived in an About section that was otherwise just a
     // version number; it belongs where credentials are entered.
-    let stored_in = rust_i18n::t!("settings.stored_in", path = config_path);
+    let stored_in = rust_i18n::t!("stored_in", path = config_path);
     content = content.push(
         text(stored_in)
             .size(11)
             .color(iced::Color::from_rgb(0.62, 0.62, 0.66)),
     );
 
-    let title_integ = rust_i18n::t!("categories.integrations").to_string();
-    let hint_integ = rust_i18n::t!("settings.integrations_sub").to_string();
+    let title_integ = rust_i18n::t!("integrations").to_string();
+    let hint_integ = rust_i18n::t!("integrations_sub").to_string();
 
     section(
         title_integ,
@@ -69,12 +69,12 @@ fn fritzbox_panel<'a>(
 ) -> Element<'a, Message> {
     let fb = &integration.fritzbox;
 
-    let title_fb = rust_i18n::t!("settings.fritzbox").to_string();
-    let sync_fb = rust_i18n::t!("settings.fritzbox_sync").to_string();
-    let host_lbl = rust_i18n::t!("settings.host").to_string();
-    let port_lbl = rust_i18n::t!("settings.port").to_string();
-    let user_lbl = rust_i18n::t!("settings.username").to_string();
-    let pass_lbl = rust_i18n::t!("settings.password").to_string();
+    let title_fb = rust_i18n::t!("fritzbox").to_string();
+    let sync_fb = rust_i18n::t!("fritzbox_sync").to_string();
+    let host_lbl = rust_i18n::t!("host").to_string();
+    let port_lbl = rust_i18n::t!("port").to_string();
+    let user_lbl = rust_i18n::t!("username").to_string();
+    let pass_lbl = rust_i18n::t!("password").to_string();
 
     column![
         text(title_fb).size(14),
@@ -114,9 +114,9 @@ fn google_panel<'a>(
     state: &'a State,
     integration: &'a IntegrationSettings,
 ) -> Element<'a, Message> {
-    let title_g = rust_i18n::t!("settings.google_contacts").to_string();
-    let note_g = rust_i18n::t!("settings.google_oauth_note").to_string();
-    let rm_lbl = rust_i18n::t!("ui.remove").to_string();
+    let title_g = rust_i18n::t!("google_contacts").to_string();
+    let note_g = rust_i18n::t!("google_oauth_note").to_string();
+    let rm_lbl = rust_i18n::t!("remove").to_string();
 
     let mut content = column![
         text(title_g).size(14),
@@ -142,9 +142,9 @@ fn google_panel<'a>(
     let ready = !state.draft_google_client_id.trim().is_empty()
         && !state.draft_google_client_secret.trim().is_empty();
 
-    let id_field_lbl = rust_i18n::t!("settings.client_id").to_string();
-    let secret_field_lbl = rust_i18n::t!("settings.client_secret").to_string();
-    let connect_btn_lbl = rust_i18n::t!("settings.connect_google").to_string();
+    let id_field_lbl = rust_i18n::t!("client_id").to_string();
+    let secret_field_lbl = rust_i18n::t!("client_secret").to_string();
+    let connect_btn_lbl = rust_i18n::t!("connect_google").to_string();
     content
         .push(field(
             id_field_lbl,
@@ -177,8 +177,8 @@ fn carddav_panel<'a>(
     state: &'a State,
     integration: &'a IntegrationSettings,
 ) -> Element<'a, Message> {
-    let title_cd = rust_i18n::t!("settings.carddav").to_string();
-    let rm_lbl = rust_i18n::t!("ui.remove").to_string();
+    let title_cd = rust_i18n::t!("carddav").to_string();
+    let rm_lbl = rust_i18n::t!("remove").to_string();
 
     let mut content = column![text(title_cd).size(14)].spacing(6);
 
@@ -205,10 +205,10 @@ fn carddav_panel<'a>(
 
     let can_add = !state.draft_carddav_url.trim().is_empty();
 
-    let url_lbl = rust_i18n::t!("settings.url").to_string();
-    let user_lbl = rust_i18n::t!("settings.username").to_string();
-    let pass_lbl = rust_i18n::t!("settings.password").to_string();
-    let add_btn_lbl = rust_i18n::t!("settings.add_address_book").to_string();
+    let url_lbl = rust_i18n::t!("url").to_string();
+    let user_lbl = rust_i18n::t!("username").to_string();
+    let pass_lbl = rust_i18n::t!("password").to_string();
+    let add_btn_lbl = rust_i18n::t!("add_address_book").to_string();
 
     content
         .push(field(
@@ -248,7 +248,7 @@ fn vdir_panel<'a>(
 ) -> Element<'a, Message> {
     let found = sipster_integrations::VdirStore::discover();
     let discovered = if found.is_empty() {
-        rust_i18n::t!("settings.none_found").to_string()
+        rust_i18n::t!("none_found").to_string()
     } else {
         found
             .iter()
@@ -259,20 +259,20 @@ fn vdir_panel<'a>(
 
     let eds_available = sipster_integrations::eds_available();
     let eds_note = if eds_available {
-        rust_i18n::t!("settings.evolution_found").to_string()
+        rust_i18n::t!("evolution_found").to_string()
     } else {
-        rust_i18n::t!("settings.evolution_not_found").to_string()
+        rust_i18n::t!("evolution_not_found").to_string()
     };
 
-    let title_eds = rust_i18n::t!("settings.evolution").to_string();
-    let desc_eds = rust_i18n::t!("settings.evolution_desc").to_string();
-    let read_eds = rust_i18n::t!("settings.evolution_read").to_string();
+    let title_eds = rust_i18n::t!("evolution").to_string();
+    let desc_eds = rust_i18n::t!("evolution_desc").to_string();
+    let read_eds = rust_i18n::t!("evolution_read").to_string();
 
-    let title_vdir = rust_i18n::t!("settings.local_vcard").to_string();
-    let desc_vdir = rust_i18n::t!("settings.local_vcard_desc").to_string();
-    let read_vdir = rust_i18n::t!("settings.local_vcard_read").to_string();
-    let folder_lbl = rust_i18n::t!("settings.folder").to_string();
-    let auto_detected = rust_i18n::t!("settings.auto_detected", discovered = discovered).to_string();
+    let title_vdir = rust_i18n::t!("local_vcard").to_string();
+    let desc_vdir = rust_i18n::t!("local_vcard_desc").to_string();
+    let read_vdir = rust_i18n::t!("local_vcard_read").to_string();
+    let folder_lbl = rust_i18n::t!("folder").to_string();
+    let auto_detected = rust_i18n::t!("auto_detected", discovered = discovered).to_string();
 
     column![
         text(title_eds).size(14),
@@ -321,11 +321,11 @@ impl BlockActionChoice {
         vec![
             Self {
                 action: BlockAction::Reject,
-                label: rust_i18n::t!("settings.block_action.reject").to_string(),
+                label: rust_i18n::t!("reject").to_string(),
             },
             Self {
                 action: BlockAction::Mute,
-                label: rust_i18n::t!("settings.block_action.mute").to_string(),
+                label: rust_i18n::t!("mute").to_string(),
             },
         ]
     }
@@ -339,8 +339,8 @@ impl std::fmt::Display for BlockActionChoice {
 
 pub(crate) fn block_action_label(action: BlockAction) -> String {
     match action {
-        BlockAction::Reject => rust_i18n::t!("settings.block_action.reject").to_string(),
-        BlockAction::Mute => rust_i18n::t!("settings.block_action.mute").to_string(),
+        BlockAction::Reject => rust_i18n::t!("reject").to_string(),
+        BlockAction::Mute => rust_i18n::t!("mute").to_string(),
     }
 }
 
@@ -358,18 +358,18 @@ pub(super) fn blocking_section(integration: &IntegrationSettings) -> Element<'_,
     .padding(7)
     .width(Length::Fill);
 
-    let default_action_lbl = rust_i18n::t!("settings.default_action").to_string();
+    let default_action_lbl = rust_i18n::t!("default_action").to_string();
     let mut content = column![field(default_action_lbl, action_pick.into())].spacing(8);
 
     if integration.blocked_numbers.is_empty() {
-        let nothing_lbl = rust_i18n::t!("settings.nothing_blocked").to_string();
+        let nothing_lbl = rust_i18n::t!("nothing_blocked").to_string();
         content = content.push(
             text(nothing_lbl)
                 .size(12)
                 .color(iced::Color::from_rgb(0.62, 0.62, 0.66)),
         );
     } else {
-        let unblock_lbl = rust_i18n::t!("ui.unblock").to_string();
+        let unblock_lbl = rust_i18n::t!("unblock").to_string();
         for blocked in &integration.blocked_numbers {
             let label = blocked.name.clone().map_or_else(
                 || blocked.number.clone(),
@@ -395,8 +395,8 @@ pub(super) fn blocking_section(integration: &IntegrationSettings) -> Element<'_,
         }
     }
 
-    let title_block = rust_i18n::t!("categories.call_blocking").to_string();
-    let sub_block = rust_i18n::t!("settings.call_blocking_sub").to_string();
+    let title_block = rust_i18n::t!("call_blocking").to_string();
+    let sub_block = rust_i18n::t!("call_blocking_sub").to_string();
 
     section(
         title_block,

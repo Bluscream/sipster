@@ -184,21 +184,21 @@ pub fn view(state: &State, mask: bool) -> Element<'_, Message> {
 
     let matching = state.matching();
     let subtitle = if state.search.trim().is_empty() {
-        rust_i18n::t!("contacts.count", count = state.contacts.len()).to_string()
+        rust_i18n::t!("count", count = state.contacts.len()).to_string()
     } else {
         rust_i18n::t!("contacts.count_filtered", count = matching.len(), total = state.contacts.len()).to_string()
     };
 
-    let title_contacts = rust_i18n::t!("ui.contacts").to_string();
+    let title_contacts = rust_i18n::t!("contacts").to_string();
     let filter_text = if state.hidden_sources.is_empty() {
-        rust_i18n::t!("contacts.filter").to_string()
+        rust_i18n::t!("filter").to_string()
     } else {
-        rust_i18n::t!("contacts.filter_count", count = state.hidden_sources.len()).to_string()
+        rust_i18n::t!("filter_count", count = state.hidden_sources.len()).to_string()
     };
     let sync_text = if state.loading {
-        rust_i18n::t!("ui.syncing").to_string()
+        rust_i18n::t!("syncing").to_string()
     } else {
-        rust_i18n::t!("ui.sync").to_string()
+        rust_i18n::t!("sync").to_string()
     };
 
     let toolbar = ui::toolbar(
@@ -218,17 +218,17 @@ pub fn view(state: &State, mask: bool) -> Element<'_, Message> {
 
     let filter_menu = filter_menu(state);
 
-    let search_placeholder = rust_i18n::t!("ui.search_placeholder").to_string();
+    let search_placeholder = rust_i18n::t!("search_placeholder").to_string();
     let search = text_input(&search_placeholder, &state.search)
         .on_input(Message::SearchChanged)
         .padding(8)
         .size(14);
 
-    let syncing_title = rust_i18n::t!("ui.syncing").to_string();
+    let syncing_title = rust_i18n::t!("syncing").to_string();
     let syncing_desc = rust_i18n::t!("contacts.syncing_desc").to_string();
-    let no_contacts_title = rust_i18n::t!("contacts.no_contacts").to_string();
-    let no_contacts_desc = rust_i18n::t!("contacts.no_contacts_desc").to_string();
-    let no_matches_title = rust_i18n::t!("ui.no_matches").to_string();
+    let no_contacts_title = rust_i18n::t!("no_contacts").to_string();
+    let no_contacts_desc = rust_i18n::t!("no_contacts_desc").to_string();
+    let no_matches_title = rust_i18n::t!("no_matches").to_string();
     let no_matches_desc = rust_i18n::t!("contacts.no_matches_desc").to_string();
 
     let body: Element<'_, Message> = if state.loading && state.contacts.is_empty() {
@@ -281,7 +281,7 @@ fn contact_row<'a>(
     let is_selected = selected == Some(contact.id.as_str());
 
     let summary_line = if contact.numbers.is_empty() {
-        rust_i18n::t!("contacts.no_number").to_string()
+        rust_i18n::t!("no_number").to_string()
     } else {
         contact
             .numbers
@@ -325,8 +325,8 @@ fn contact_row<'a>(
 fn contact_detail(contact: &Contact, mask: bool) -> Element<'_, Message> {
     let mut detail = column![].spacing(5).padding(Padding::from([4, 0]));
 
-    let call_lbl = rust_i18n::t!("ui.call").to_string();
-    let block_lbl = rust_i18n::t!("ui.block").to_string();
+    let call_lbl = rust_i18n::t!("call").to_string();
+    let block_lbl = rust_i18n::t!("block").to_string();
 
     for number in &contact.numbers {
         detail = detail.push(
@@ -361,12 +361,12 @@ fn contact_detail(contact: &Contact, mask: bool) -> Element<'_, Message> {
     
     let mut actions = row![].spacing(6);
     if editable_externally {
-        let edit_lbl = rust_i18n::t!("ui.edit").to_string();
+        let edit_lbl = rust_i18n::t!("edit").to_string();
         actions = actions
             .push(ui::row_action(edit_lbl, Message::OpenEditContact(contact.clone())));
     }
     let src_str = contact.source.to_string();
-    let synced = rust_i18n::t!("contacts.synced_from", source = src_str).to_string();
+    let synced = rust_i18n::t!("synced_from", source = src_str).to_string();
     actions = actions.push(ui::caption(synced));
 
     column![detail, actions].spacing(6).into()
@@ -377,9 +377,9 @@ fn contact_detail(contact: &Contact, mask: bool) -> Element<'_, Message> {
 fn block_prompt<'a>(number: &'a str, name: Option<&'a str>) -> Element<'a, Message> {
     let who = name.map_or_else(|| number.to_string(), |n| format!("{n} ({number})"));
 
-    let title_str = rust_i18n::t!("contacts.block_prompt_title").to_string();
-    let desc_str = rust_i18n::t!("contacts.block_prompt_desc").to_string();
-    let cancel_str = rust_i18n::t!("ui.cancel").to_string();
+    let title_str = rust_i18n::t!("block_prompt_title").to_string();
+    let desc_str = rust_i18n::t!("block_prompt_desc").to_string();
+    let cancel_str = rust_i18n::t!("cancel").to_string();
     let mute_str = crate::settings::providers::block_action_label(BlockAction::Mute);
     let reject_str = crate::settings::providers::block_action_label(BlockAction::Reject);
 

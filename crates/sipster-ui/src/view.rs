@@ -96,9 +96,9 @@ fn show(value: &str, mask: bool) -> String {
 
 fn statusbar(app: &SipsterApp) -> Element<'_, Message> {
     let registration = app.active_registration();
-    let reg_registered = rust_i18n::t!("registration.registered");
-    let reg_registering = rust_i18n::t!("registration.registering");
-    let reg_offline = rust_i18n::t!("registration.not_registered");
+    let reg_registered = rust_i18n::t!("registered");
+    let reg_registering = rust_i18n::t!("registering");
+    let reg_offline = rust_i18n::t!("not_registered");
     let (circle_char, circle_color, reg_text) = match &registration {
         RegistrationState::Registered => ("●", iced::Color::from_rgb(0.2, 0.85, 0.3), reg_registered),
         RegistrationState::Registering => ("●", iced::Color::from_rgb(0.95, 0.8, 0.2), reg_registering),
@@ -116,7 +116,7 @@ fn statusbar(app: &SipsterApp) -> Element<'_, Message> {
     let acc_info = match (info_str, number_str) {
         (Some(i), Some(n)) => format!("{i} - {n}"),
         (Some(i), None) => i,
-        (None, Some(n)) => rust_i18n::t!("call.unknown", number = n).to_string(),
+        (None, Some(n)) => rust_i18n::t!("unknown", number = n).to_string(),
         (None, None) => String::new(),
     };
 
@@ -151,9 +151,9 @@ fn incoming_prompt(remote: &str, mask: bool) -> Element<'_, Message> {
     let (display_name, sip_addr) = parse_caller_display(remote);
     let (display_name, sip_addr) = (show(&display_name, mask), show(&sip_addr, mask));
 
-    let incoming_title = rust_i18n::t!("call.incoming").to_string();
-    let answer_label = rust_i18n::t!("call.answer");
-    let decline_label = rust_i18n::t!("call.decline");
+    let incoming_title = rust_i18n::t!("incoming").to_string();
+    let answer_label = rust_i18n::t!("answer");
+    let decline_label = rust_i18n::t!("decline");
 
     column![
         text(incoming_title).size(22),
@@ -249,7 +249,7 @@ fn dialer(app: &SipsterApp, compact: bool) -> Element<'_, Message> {
     // The dial field is hidden with `secure`, not by rewriting its value:
     // substituting a mask would feed the mask back through `on_input` and
     // destroy what the user typed.
-    let placeholder = rust_i18n::t!("ui.number_placeholder");
+    let placeholder = rust_i18n::t!("number_placeholder");
     let number_input = text_input(&placeholder, &app.dial_number)
         .id(dial_input_id())
         .secure(app.ui().streaming_mode)
@@ -258,8 +258,8 @@ fn dialer(app: &SipsterApp, compact: bool) -> Element<'_, Message> {
         .padding(10)
         .size(20);
 
-    let hangup_label = rust_i18n::t!("ui.hangup");
-    let call_label = rust_i18n::t!("ui.call");
+    let hangup_label = rust_i18n::t!("hangup");
+    let call_label = rust_i18n::t!("call");
     let action = if app.active.is_some() {
         action_button(&hangup_label, Message::HangupPressed, iced::Color::from_rgb(0.85, 0.25, 0.25))
     } else {
@@ -289,9 +289,9 @@ fn dialer(app: &SipsterApp, compact: bool) -> Element<'_, Message> {
     .spacing(8);
 
     // Hold and transfer only exist while there is a call to apply them to.
-    let resume_label = rust_i18n::t!("ui.resume");
-    let hold_label = rust_i18n::t!("ui.hold");
-    let transfer_label = rust_i18n::t!("ui.transfer");
+    let resume_label = rust_i18n::t!("resume");
+    let hold_label = rust_i18n::t!("hold");
+    let transfer_label = rust_i18n::t!("transfer");
     let in_call_row: Element<'_, Message> = match &app.active {
         Some(call) => row![
             call_action(
@@ -332,10 +332,10 @@ fn dialer(app: &SipsterApp, compact: bool) -> Element<'_, Message> {
 
 fn state_label(state: CallState) -> String {
     match state {
-        CallState::Dialing => rust_i18n::t!("call.dialing").to_string(),
-        CallState::Ringing => rust_i18n::t!("call.ringing").to_string(),
-        CallState::Active => rust_i18n::t!("call.connected").to_string(),
-        CallState::Terminated => rust_i18n::t!("call.terminated").to_string(),
+        CallState::Dialing => rust_i18n::t!("dialing").to_string(),
+        CallState::Ringing => rust_i18n::t!("ringing").to_string(),
+        CallState::Active => rust_i18n::t!("connected").to_string(),
+        CallState::Terminated => rust_i18n::t!("terminated").to_string(),
     }
 }
 

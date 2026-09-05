@@ -66,9 +66,9 @@ impl Placement {
     #[must_use]
     pub fn label(self) -> String {
         match self {
-            Self::Hidden => rust_i18n::t!("app.placement_hidden").to_string(),
-            Self::Docked => rust_i18n::t!("app.placement_docked").to_string(),
-            Self::Window => rust_i18n::t!("app.placement_window").to_string(),
+            Self::Hidden => rust_i18n::t!("placement_hidden").to_string(),
+            Self::Docked => rust_i18n::t!("placement_docked").to_string(),
+            Self::Window => rust_i18n::t!("placement_window").to_string(),
         }
     }
 }

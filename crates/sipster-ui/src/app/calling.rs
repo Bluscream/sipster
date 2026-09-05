@@ -237,7 +237,7 @@ impl SipsterApp {
                         BlockAction::Reject => {
                             tracing::info!(remote = %remote_uri, "rejecting call from blocked number");
                             let engine = self.engine().cloned();
-                            self.status = rust_i18n::t!("call.rejected_blocked", number = remote_uri).to_string();
+                            self.status = rust_i18n::t!("rejected_blocked", number = remote_uri).to_string();
                             if self.config.integration.local_history_enabled {
                                 self.sync_manager.record_local_call(CallRecord {
                                     id: format!("local-blocked-{id}"),
@@ -275,7 +275,7 @@ impl SipsterApp {
                                 });
                             }
                             self.incoming = Some(IncomingCall { id, remote: remote_uri });
-                            self.status = rust_i18n::t!("call.incoming_muted").to_string();
+                            self.status = rust_i18n::t!("incoming_muted").to_string();
                             return Task::none();
                         }
                     }
@@ -302,7 +302,7 @@ impl SipsterApp {
                 // call cannot leave two rings overlapping.
                 self.ringtone = self.config.ui.ringtone.then(sound::start_ringing);
                 self.incoming = Some(IncomingCall { id, remote: remote_uri });
-                self.status = rust_i18n::t!("call.incoming_ellipsis").to_string();
+                self.status = rust_i18n::t!("incoming_ellipsis").to_string();
             }
             CallEvent::StateChanged { id, state } => {
                 self.apply_state(id, state);
@@ -341,7 +341,7 @@ impl SipsterApp {
                 if let Some(ref cmd) = self.config.commands.on_call_ended {
                     let _ = run_hook(cmd, &[("reason", reason.as_str())]);
                 }
-                self.status = rust_i18n::t!("call.call_ended_reason", reason = reason.clone()).to_string();
+                self.status = rust_i18n::t!("call_ended_reason", reason = reason.clone()).to_string();
             }
         }
         self.sync_tray_state();
@@ -416,7 +416,7 @@ impl SipsterApp {
             });
         }
 
-        self.status = rust_i18n::t!("call.dialing_target", target = target).to_string();
+        self.status = rust_i18n::t!("dialing_target", target = target).to_string();
         Task::future(async move { Message::Dialed(engine.dial(&target).await.map_err(|e| e.to_string())) })
     }
 
@@ -431,7 +431,7 @@ impl SipsterApp {
         };
         self.chime(sound::call_ended);
         let id = call.id;
-        self.status = rust_i18n::t!("call.hanging_up").to_string();
+        self.status = rust_i18n::t!("hanging_up").to_string();
         self.sync_tray_state();
         Task::future(async move { Message::ActionDone(engine.hangup(id).await.map_err(|e| e.to_string())) })
     }
@@ -445,7 +445,7 @@ impl SipsterApp {
         };
         self.ringtone = None;
         let id = call.id;
-        self.status = rust_i18n::t!("call.answering_call").to_string();
+        self.status = rust_i18n::t!("answering_call").to_string();
         self.active = Some(ActiveCall {
             id,
             state: CallState::Active,
@@ -464,7 +464,7 @@ impl SipsterApp {
         };
         self.ringtone = None;
         let id = call.id;
-        self.status = rust_i18n::t!("call.call_declined").to_string();
+        self.status = rust_i18n::t!("call_declined").to_string();
         Task::future(async move { Message::ActionDone(engine.hangup(id).await.map_err(|e| e.to_string())) })
     }
 
@@ -486,9 +486,9 @@ impl SipsterApp {
         }
 
         self.status = if on_hold {
-            rust_i18n::t!("call.on_hold").to_string()
+            rust_i18n::t!("on_hold").to_string()
         } else {
-            rust_i18n::t!("call.connected").to_string()
+            rust_i18n::t!("connected").to_string()
         };
         Task::none()
     }
@@ -506,9 +506,9 @@ impl SipsterApp {
         };
         let (id, hold) = (call.id, !call.on_hold);
         self.status = if hold {
-            rust_i18n::t!("call.holding_ellipsis").to_string()
+            rust_i18n::t!("holding_ellipsis").to_string()
         } else {
-            rust_i18n::t!("call.resuming_ellipsis").to_string()
+            rust_i18n::t!("resuming_ellipsis").to_string()
         };
         Task::future(async move {
             match engine.set_hold(id, hold).await {
@@ -528,11 +528,11 @@ impl SipsterApp {
             return Task::none();
         };
         if target.is_empty() {
-            self.status = rust_i18n::t!("call.type_number_transfer").to_string();
+            self.status = rust_i18n::t!("type_number_transfer").to_string();
             return Task::none();
         }
         let id = call.id;
-        self.status = rust_i18n::t!("call.transferring_to", target = target).to_string();
+        self.status = rust_i18n::t!("transferring_to", target = target).to_string();
         Task::future(async move {
             Message::ActionDone(
                 engine

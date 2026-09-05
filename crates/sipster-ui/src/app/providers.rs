@@ -69,7 +69,7 @@ impl SipsterApp {
                     .or_else(|| crate::consts::home_dir().map(|h| h.join("Downloads")));
                 let mut builder = rfd::FileDialog::new()
                     .add_filter("JSON Files", &["json"])
-                    .set_title(rust_i18n::t!("settings.pick_google_json").to_string());
+                    .set_title(rust_i18n::t!("pick_google_json").to_string());
                 if let Some(dir) = default_dir {
                     builder = builder.set_directory(dir);
                 }
@@ -213,7 +213,7 @@ impl SipsterApp {
                 } else {
                     Some(crate::consts::expand_home_path(self.settings.draft_vdir_path.trim()))
                 };
-                let mut builder = rfd::FileDialog::new().set_title(rust_i18n::t!("settings.pick_vcard_folder").to_string());
+                let mut builder = rfd::FileDialog::new().set_title(rust_i18n::t!("pick_vcard_folder").to_string());
                 if let Some(dir) = default_dir {
                     builder = builder.set_directory(dir);
                 }
@@ -269,7 +269,7 @@ impl SipsterApp {
         };
 
         let Ok(json) = serde_json::from_str::<serde_json::Value>(&text) else {
-            self.settings.error = Some(rust_i18n::t!("app.invalid_json").into());
+            self.settings.error = Some(rust_i18n::t!("invalid_json").into());
             return;
         };
 
@@ -288,14 +288,14 @@ impl SipsterApp {
 
         if id.is_empty() || secret.is_empty() {
             self.settings.error =
-                Some(rust_i18n::t!("app.no_creds_json").into());
+                Some(rust_i18n::t!("no_creds_json").into());
             return;
         }
 
         self.settings.draft_google_client_id = id.to_string();
         self.settings.draft_google_client_secret = secret.to_string();
         self.settings.error = None;
-        self.settings.notice = Some(rust_i18n::t!("app.creds_loaded").into());
+        self.settings.notice = Some(rust_i18n::t!("creds_loaded").into());
     }
 
     /// The Google account flow, which is long enough to stand on its own.
@@ -306,14 +306,14 @@ impl SipsterApp {
                 cancel_pending_auth();
                 let client_id = self.settings.draft_google_client_id.trim().to_string();
                 let secret = self.settings.draft_google_client_secret.trim().to_string();
-                self.settings.notice = Some(rust_i18n::t!("app.waiting_browser").into());
+                self.settings.notice = Some(rust_i18n::t!("waiting_browser").into());
                 self.settings.error = None;
                 return Task::future(async move {
                     let result = tokio::task::spawn_blocking(move || {
                         GoogleContactsClient::authorize(&client_id, &secret, 8765)
                     })
                     .await
-                    .map_err(|e| rust_i18n::t!("app.signin_failed", error = e).to_string())
+                    .map_err(|e| rust_i18n::t!("signin_failed", error = e).to_string())
                     .and_then(|inner| inner);
                     Message::Settings(S::GoogleAuthFinished(result))
                 });

@@ -417,15 +417,16 @@ mod locale_tests {
     //! than calling `set_locale` — tests run in parallel and would otherwise
     //! race each other into whichever locale ran last.
 
-    /// The locale files use flat, dotted keys rather than nested maps. That is
-    /// only safe if the loader treats `a.b` written flat exactly as it treated
-    /// `a:` / `  b:` — so this asserts a real lookup rather than trusting it.
+    /// The locale files are flat, and mostly bare names rather than nested
+    /// maps. That is only safe if the loader reads a top-level key the same
+    /// way it read a nested one, so this asserts real lookups rather than
+    /// trusting it.
     #[test]
-    fn flat_dotted_keys_resolve() {
-        assert_eq!(rust_i18n::t!("ui.call", locale = "en"), "Call");
-        // Three levels deep, which was nested twice before flattening.
+    fn flat_keys_resolve() {
+        assert_eq!(rust_i18n::t!("call", locale = "en"), "Call");
+        // Was `settings.block_action.reject`, nested two deep.
         assert_eq!(
-            rust_i18n::t!("settings.block_action.reject", locale = "en"),
+            rust_i18n::t!("reject", locale = "en"),
             "Reject (Instant SIP 603)"
         );
     }
@@ -434,7 +435,7 @@ mod locale_tests {
     #[test]
     fn placeholders_still_interpolate() {
         assert_eq!(
-            rust_i18n::t!("registration.failed", locale = "en", error = "401"),
+            rust_i18n::t!("failed", locale = "en", error = "401"),
             "Registration failed: 401"
         );
     }
@@ -443,7 +444,7 @@ mod locale_tests {
     /// English so they are not translated into something that is not their name.
     #[test]
     fn german_translates_and_falls_back() {
-        assert_eq!(rust_i18n::t!("ui.call", locale = "de"), "Anrufen");
-        assert_eq!(rust_i18n::t!("settings.fritzbox", locale = "de"), "FRITZ!Box");
+        assert_eq!(rust_i18n::t!("call", locale = "de"), "Anrufen");
+        assert_eq!(rust_i18n::t!("fritzbox", locale = "de"), "FRITZ!Box");
     }
 }

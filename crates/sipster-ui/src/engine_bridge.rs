@@ -73,13 +73,13 @@ pub fn run() -> impl iced::futures::Stream<Item = Message> {
             let reason = if account.enabled {
                 match account.validate() {
                     Err(e) => {
-                        rust_i18n::t!("registration.account_invalid", error = e.to_string())
+                        rust_i18n::t!("account_invalid", error = e.to_string())
                             .to_string()
                     }
                     Ok(()) => unreachable!("the loop condition says otherwise"),
                 }
             } else {
-                rust_i18n::t!("registration.account_disabled").to_string()
+                rust_i18n::t!("account_disabled").to_string()
             };
             tracing::warn!(%reason, "not registering");
 

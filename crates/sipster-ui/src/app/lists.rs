@@ -21,7 +21,7 @@ impl SipsterApp {
         self.contacts_at = next;
         // The button gives no other hint about which of the three states a
         // press just landed on.
-        self.status = rust_i18n::t!("app.contacts_pane_status", placement = next.label()).to_string();
+        self.status = rust_i18n::t!("contacts_pane_status", placement = next.label()).to_string();
         tracing::info!(placement = %next.label(), "contacts pane");
 
         let mut tasks = vec![self.prefetch_contacts()];
@@ -44,7 +44,7 @@ impl SipsterApp {
             self.contacts_at = Placement::Hidden;
         }
         self.calls_at = next;
-        self.status = rust_i18n::t!("app.history_pane_status", placement = next.label()).to_string();
+        self.status = rust_i18n::t!("history_pane_status", placement = next.label()).to_string();
         tracing::info!(placement = %next.label(), "history pane");
 
         let mut tasks = vec![self.prefetch_calls()];

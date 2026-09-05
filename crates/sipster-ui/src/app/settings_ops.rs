@@ -178,8 +178,8 @@ impl SipsterApp {
         };
 
         self.settings.error = None;
-        self.settings.notice = Some(rust_i18n::t!("app.reconnecting").into());
-        self.status = rust_i18n::t!("app.applying_settings").into();
+        self.settings.notice = Some(rust_i18n::t!("reconnecting").into());
+        self.status = rust_i18n::t!("applying_settings").into();
 
         // Persist first: if the reconnect fails the user still has the values
         // they typed, and can fix them without retyping everything. Only the
@@ -217,11 +217,11 @@ impl SipsterApp {
         match self.config.save(&self.config_path) {
             Ok(()) => {
                 self.settings.error = None;
-                self.settings.notice = Some(rust_i18n::t!("app.saved").into());
+                self.settings.notice = Some(rust_i18n::t!("saved").into());
             }
             Err(e) => {
                 tracing::error!(error = %e, "could not save settings");
-                self.settings.error = Some(rust_i18n::t!("app.save_failed", error = e).into());
+                self.settings.error = Some(rust_i18n::t!("save_failed", error = e).into());
             }
         }
     }

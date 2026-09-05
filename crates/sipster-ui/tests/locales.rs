@@ -24,10 +24,10 @@ const LOCALES: &[&str] = &["en", "de"];
 /// is not what the thing is called. Anything else missing is an oversight and
 /// the test says so.
 const UNTRANSLATED_ON_PURPOSE: &[&str] = &[
-    "settings.carddav",       // a protocol name
-    "settings.evolution",     // an application name
-    "settings.fritzbox",      // a product name
-    "settings.fritzbox_sync", // ditto, in a phrase built around it
+    "carddav",       // a protocol name
+    "evolution",     // an application name
+    "fritzbox",      // a product name
+    "fritzbox_sync", // ditto, in a phrase built around it
 ];
 
 /// What separates a key from its value on a line.
@@ -257,6 +257,33 @@ fn placeholders_match_the_fallback() {
         }
     }
     report("placeholders differ from the fallback", &problems);
+}
+
+/// A prefix is only worth carrying when it tells two keys apart.
+///
+/// `add_contact` means the same thing wherever it appears, so writing
+/// `history.add_contact` adds length without adding meaning. Where two areas
+/// genuinely need different words for the same idea — a contacts count and a
+/// call count — the prefix earns its place and stays.
+#[test]
+fn no_key_carries_a_prefix_it_does_not_need() {
+    let keys: Vec<String> = map(&read(FALLBACK)).into_keys().collect();
+    let mut by_leaf: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for key in &keys {
+        let leaf = key.rsplit('.').next().unwrap_or(key);
+        by_leaf.entry(leaf).or_default().push(key);
+    }
+
+    let problems: Vec<String> = keys
+        .iter()
+        .filter(|key| key.contains('.'))
+        .filter_map(|key| {
+            let leaf = key.rsplit('.').next().unwrap_or(key);
+            let shared = by_leaf.get(leaf).map_or(0, Vec::len);
+            (shared < 2).then(|| format!("  {key} could just be {leaf}"))
+        })
+        .collect();
+    report("keys carry prefixes that distinguish nothing", &problems);
 }
 
 /// A key nothing asks for is dead weight every future translation carries; a

@@ -482,7 +482,85 @@ async fn translate(
         }
         EndpointEvent::RegistrationChanged(info) => on_registration_changed(&info, tx),
 
-        _ => debug!("unhandled rvoip event"),
+        // Everything else is informational and does not change Sipster's own
+        // call state. Logged one variant at a time all the same: a bare
+        // catch-all hid which event had arrived, which is how incoming REFER
+        // stayed invisible for so long.
+        other => log_informational(other),
+    }
+}
+
+/// Logs an rvoip event that Sipster does not otherwise act on.
+///
+/// Hold is not tracked here because the UI reads it back from the session when
+/// it needs it, so these arms exist to make the traffic visible rather than to
+/// drive state.
+// One flat arm per event, each of which just logs. Clippy scores a wide match
+// as complexity, but splitting a dispatch table across functions to satisfy it
+// would make it harder to check that every variant is covered, not easier.
+#[allow(clippy::cognitive_complexity)]
+fn log_informational(event: EndpointEvent) {
+    match event {
+        EndpointEvent::LocalHold { call_id } => {
+            debug!(%call_id, "the local side put the call on hold");
+        }
+        EndpointEvent::LocalResume { call_id } => {
+            debug!(%call_id, "the local side took the call off hold");
+        }
+        EndpointEvent::RemoteHold { call_id } => {
+            info!(%call_id, "the remote side put us on hold");
+        }
+        EndpointEvent::RemoteResume { call_id } => {
+            info!(%call_id, "the remote side took us off hold");
+        }
+        EndpointEvent::DtmfReceived { call_id, digit } => {
+            info!(%call_id, %digit, "received a DTMF digit");
+        }
+        EndpointEvent::NetworkError { call_id, error } => {
+            warn!(
+                call_id = call_id.map(|id| id.to_string()).unwrap_or_default(),
+                %error,
+                "the SIP engine reported a network error"
+            );
+        }
+        // Every SIP message crossing the transport. Far too noisy for anything
+        // but `trace`, and invaluable there — this is the only place the raw
+        // signalling is visible.
+        EndpointEvent::SipTrace(trace) => {
+            tracing::trace!(
+                direction = ?trace.direction,
+                transport = %trace.transport,
+                local = %trace.local_addr,
+                remote = %trace.remote_addr,
+                start_line = %trace.start_line,
+                "SIP"
+            );
+        }
+        // rvoip's endpoint facade models only part of its own event set and
+        // funnels the rest through `Info` as a debug string. Inbound REFER
+        // arrives this way, so it is worth saying so plainly rather than
+        // leaving a transfer to look like nothing happened.
+        EndpointEvent::Info { call_id, message } => {
+            let call_id = call_id.map(|id| id.to_string()).unwrap_or_default();
+            if message.contains("ReferReceived") {
+                info!(
+                    %call_id,
+                    %message,
+                    "a transfer was requested of us; rvoip accepts it on our behalf"
+                );
+            } else {
+                debug!(%call_id, %message, "SIP engine event");
+            }
+        }
+        // Handled by the caller; listed so that a new rvoip event cannot be
+        // added without this match failing to compile.
+        EndpointEvent::IncomingCall(_)
+        | EndpointEvent::CallProgress { .. }
+        | EndpointEvent::CallAnswered { .. }
+        | EndpointEvent::CallEnded { .. }
+        | EndpointEvent::CallFailed { .. }
+        | EndpointEvent::CallCancelled { .. }
+        | EndpointEvent::RegistrationChanged(_) => {}
     }
 }
 

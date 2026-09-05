@@ -4,7 +4,7 @@
 //! the Contacts window into Settings, and out of `app` into here, because
 //! together they are longer than everything else the app does.
 
-use super::{expand_home, Message, SipsterApp, Task};
+use super::{Message, SipsterApp, Task};
 use crate::{contacts, settings};
 use sipster_integrations::{
     cancel_pending_auth, CardDavClient, CardDavConfig, FritzConfig, GoogleContactsClient,
@@ -191,7 +191,7 @@ impl SipsterApp {
                 self.settings.draft_vdir_path.clone_from(&path);
                 let trimmed = path.trim();
                 self.config.integration.vdir_path = (!trimmed.is_empty())
-                    .then(|| std::path::PathBuf::from(expand_home(trimmed)));
+                    .then(|| crate::consts::expand_home_path(trimmed));
                 self.apply_vdir();
                 self.persist();
             }
@@ -229,15 +229,7 @@ impl SipsterApp {
             return;
         }
 
-        let expanded = path.strip_prefix("~/").map_or_else(
-            || std::path::PathBuf::from(path),
-            |rest| {
-                std::env::var_os("HOME")
-                    .map_or_else(|| std::path::PathBuf::from(path), |home| {
-                        std::path::Path::new(&home).join(rest)
-                    })
-            },
-        );
+        let expanded = crate::consts::expand_home_path(path);
 
         let Ok(text) = std::fs::read_to_string(&expanded) else {
             // Silent while the user is still typing the path; only a complete,

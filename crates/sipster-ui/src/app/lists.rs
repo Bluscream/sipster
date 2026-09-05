@@ -2,8 +2,7 @@
 //! in, and everything their messages ask for.
 
 use super::{
-    chrono_now_iso, BlockAction, BlockedNumber, Contact, Message, NumberType, PhoneNumber,
-    RecordSource, SipsterApp, Task,
+    chrono_now_iso, run_custom_command, BlockAction, BlockedNumber, Message, RecordSource, SipsterApp, Task,
 };
 use crate::pane::Placement;
 use crate::{calls, contacts};
@@ -222,6 +221,10 @@ impl SipsterApp {
             contacts::Message::SyncFinished => {
                 self.contacts.loading = false;
                 self.store_learned_certificate();
+                if let Some(ref cmd) = self.config.commands.on_contacts_synced {
+                    let formatted = cmd.replace("{count}", &self.contacts.contacts.len().to_string());
+                    let _ = run_custom_command(&formatted);
+                }
                 Task::none()
             }
             contacts::Message::DialContact(target) => {
@@ -235,85 +238,68 @@ impl SipsterApp {
             }
 
             // Contact modal:
-            contacts::Message::OpenNewContact => {
-                self.contacts.edit_draft = Some(contacts::EditContactDraft {
-                    id: None,
-                    name: String::new(),
-                    phone: String::new(),
-                    email: String::new(),
-                });
-                Task::none()
-            }
             contacts::Message::OpenEditContact(c) => {
-                let phone = c.numbers.first().map_or(String::new(), |p| p.number.clone());
-                let email = c.emails.first().cloned().unwrap_or_default();
-                self.contacts.edit_draft = Some(contacts::EditContactDraft {
-                    id: Some(c.id),
-                    name: c.name,
-                    phone,
-                    email,
-                });
-                Task::none()
-            }
-            contacts::Message::EditNameChanged(v) => {
-                if let Some(ref mut d) = self.contacts.edit_draft {
-                    d.name = v;
-                }
-                Task::none()
-            }
-            contacts::Message::EditPhoneChanged(v) => {
-                if let Some(ref mut d) = self.contacts.edit_draft {
-                    d.phone = v;
-                }
-                Task::none()
-            }
-            contacts::Message::EditEmailChanged(v) => {
-                if let Some(ref mut d) = self.contacts.edit_draft {
-                    d.email = v;
-                }
-                Task::none()
-            }
-            contacts::Message::SaveContact => {
-                if let Some(draft) = self.contacts.edit_draft.take() {
-                    let id = draft.id.unwrap_or_else(|| {
-                        format!(
-                            "local-contact-{}",
-                            std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap_or_default()
-                                .as_millis()
-                        )
-                    });
-                    let mut numbers = Vec::new();
-                    if !draft.phone.trim().is_empty() {
-                        numbers.push(PhoneNumber {
-                            number: draft.phone.trim().to_string(),
-                            number_type: NumberType::Mobile,
-                            priority: 1,
-                        });
-                    }
-                    let mut emails = Vec::new();
-                    if !draft.email.trim().is_empty() {
-                        emails.push(draft.email.trim().to_string());
-                    }
-                    let contact = Contact {
-                        id,
-                        name: draft.name,
-                        numbers,
-                        emails,
-                        source: RecordSource::Local,
-                    };
-                    let _ = self.sync_manager.local_store().upsert_contact(contact);
-                    return Task::done(Message::Contacts(contacts::Message::SyncPressed));
-                }
-                Task::none()
-            }
-            contacts::Message::CancelEditContact => {
-                self.contacts.edit_draft = None;
+                let template_cmd = match &c.source {
+                    RecordSource::Google { .. } => &self.config.commands.edit_google,
+                    RecordSource::FritzBox { .. } => &self.config.commands.edit_fritzbox,
+                    RecordSource::CardDav { .. } => &self.config.commands.edit_carddav,
+                    RecordSource::Local => &self.config.commands.edit_local,
+                    RecordSource::Other(s) if s.contains("Evolution") => &self.config.commands.edit_eds,
+                    RecordSource::Other(_) => &self.config.commands.edit_default,
+                };
+
+                let short_id = c.id.split('-').last().unwrap_or(&c.id);
+                let primary_num = c.primary_number().unwrap_or_default();
+                let account = match &c.source {
+                    RecordSource::CardDav { account } => account.as_str(),
+                    RecordSource::Google { email } => email.as_str(),
+                    _ => "",
+                };
+                let (phonebook_id_str, registrar_str) = match &c.source {
+                    RecordSource::FritzBox { phonebook_id, .. } => (
+                        phonebook_id.to_string(),
+                        self.config.account.registrar.as_str(),
+                    ),
+                    _ => (String::new(), ""),
+                };
+                let path = crate::consts::default_contacts_dir_string();
+                let target = if !account.is_empty() {
+                    account.to_string()
+                } else {
+                    path.clone()
+                };
+
+                let cmd = template_cmd
+                    .replace("{id}", &c.id)
+                    .replace("{short_id}", short_id)
+                    .replace("{phonebook_id}", &phonebook_id_str)
+                    .replace("{registrar}", registrar_str)
+                    .replace("{account}", account)
+                    .replace("{path}", &path)
+                    .replace("{target}", &target)
+                    .replace("{name}", &c.name)
+                    .replace("{number}", primary_num)
+                    .replace("{source}", &c.source.to_string());
+
+                let _ = run_custom_command(&cmd);
                 Task::none()
             }
             contacts::Message::DeleteContact(id) => {
-                let _ = self.sync_manager.local_store().delete_contact(&id);
+                if let Some(dir) = crate::consts::default_contacts_dir() {
+                    if let Ok(entries) = std::fs::read_dir(dir) {
+                        for entry in entries.flatten() {
+                            let path = entry.path();
+                            if path.is_file() && path.extension().and_then(|e| e.to_str()) == Some("vcf") {
+                                if let Ok(content) = std::fs::read_to_string(&path) {
+                                    if content.contains(&id) || path.to_string_lossy().contains(&id) {
+                                        let _ = std::fs::remove_file(path);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 Task::done(Message::Contacts(contacts::Message::SyncPressed))
             }
 
@@ -367,6 +353,10 @@ impl SipsterApp {
             }
             calls::Message::SyncFinished => {
                 self.calls.loading = false;
+                if let Some(ref cmd) = self.config.commands.on_history_synced {
+                    let formatted = cmd.replace("{count}", &self.calls.calls.len().to_string());
+                    let _ = run_custom_command(&formatted);
+                }
                 Task::none()
             }
             calls::Message::DialNumber(target) => {
@@ -394,14 +384,26 @@ impl SipsterApp {
                 Task::none()
             }
             calls::Message::AddContact(number, name) => {
-                // Seed the contact editor from the call and switch to it.
-                self.contacts.edit_draft = Some(contacts::EditContactDraft {
-                    id: None,
-                    name: name.unwrap_or_default(),
-                    phone: number,
-                    email: String::new(),
-                });
-                self.open_contacts()
+                let name_str = name.unwrap_or_else(|| number.clone());
+                if let Some(dir) = crate::consts::default_contacts_dir() {
+                    let _ = std::fs::create_dir_all(&dir);
+                    let filename = format!(
+                        "contact_{}.vcf",
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_millis()
+                    );
+                    let vcard_content = format!(
+                        "BEGIN:VCARD\r\nVERSION:3.0\r\nFN:{}\r\nTEL:{}\r\nEND:VCARD\r\n",
+                        name_str, number
+                    );
+                    let _ = std::fs::write(dir.join(filename), vcard_content);
+                }
+                Task::batch([
+                    Task::done(Message::Contacts(contacts::Message::SyncPressed)),
+                    self.open_contacts(),
+                ])
             }
             calls::Message::ClearHistoryPressed => {
                 let _ = self.sync_manager.local_store().clear_calls();
@@ -447,3 +449,6 @@ impl SipsterApp {
         self.persist();
     }
 }
+
+
+

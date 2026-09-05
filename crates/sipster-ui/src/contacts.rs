@@ -35,28 +35,13 @@ pub enum Message {
     Select(String),
     DialContact(String),
 
-    // Editing:
-    OpenNewContact,
     OpenEditContact(Contact),
-    EditNameChanged(String),
-    EditPhoneChanged(String),
-    EditEmailChanged(String),
-    SaveContact,
-    CancelEditContact,
     DeleteContact(String),
 
     // Blocking:
     BlockNumberPrompt(String, Option<String>),
     ConfirmBlockNumber(String, Option<String>, BlockAction),
     CancelBlockPrompt,
-}
-
-#[derive(Debug, Clone)]
-pub struct EditContactDraft {
-    pub id: Option<String>,
-    pub name: String,
-    pub phone: String,
-    pub email: String,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -67,7 +52,6 @@ pub struct State {
     pub error: Option<String>,
     /// Id of the expanded contact, if any.
     pub selected: Option<String>,
-    pub edit_draft: Option<EditContactDraft>,
     pub block_prompt: Option<(String, Option<String>)>,
     /// Sources the user has switched off, by their display name.
     ///
@@ -123,9 +107,18 @@ impl State {
     /// it stays coherent while providers are still arriving.
     pub fn merge(&mut self, batch: Vec<Contact>) {
         self.contacts.extend(batch);
-        self.contacts.sort_by_cached_key(|c| c.name.to_lowercase());
+        self.contacts.sort_by_cached_key(|c| c.name.trim().to_lowercase());
         self.contacts.dedup_by(|a, b| {
-            a.name.eq_ignore_ascii_case(&b.name) && a.primary_number() == b.primary_number()
+            let same_name = a.name.trim().eq_ignore_ascii_case(b.name.trim());
+            let same_number = if a.numbers.is_empty() && b.numbers.is_empty() {
+                true
+            } else {
+                a.numbers.iter().any(|na| {
+                    let norm_a = normalize_number(&na.number);
+                    b.numbers.iter().any(|nb| norm_a == normalize_number(&nb.number))
+                })
+            };
+            same_name && same_number
         });
     }
 
@@ -156,9 +149,7 @@ impl State {
 }
 
 pub fn view(state: &State, mask: bool) -> Element<'_, Message> {
-    if let Some(draft) = &state.edit_draft {
-        return edit_contact(draft);
-    }
+
     if let Some((number, name)) = &state.block_prompt {
         return block_prompt(number, name.as_deref());
     }
@@ -174,7 +165,6 @@ pub fn view(state: &State, mask: bool) -> Element<'_, Message> {
         "Contacts",
         subtitle,
         vec![
-            ui::tool_button("New", Some(Message::OpenNewContact)),
             ui::tool_button_owned(
                 if state.hidden_sources.is_empty() {
                     "Filter".to_string()
@@ -318,20 +308,25 @@ fn contact_detail(contact: &Contact, mask: bool) -> Element<'_, Message> {
         detail = detail.push(ui::caption(emails.join("  ·  ")));
     }
 
-    // Only local contacts are editable; the rest are owned by their provider,
-    // so offering Edit on them would promise something sync would overwrite.
-    let editable = matches!(contact.source, RecordSource::Local);
+    let editable_externally = match contact.source {
+        RecordSource::Google { .. } | RecordSource::Local | RecordSource::FritzBox { .. } => true,
+        _ => false,
+    };
+    
     let mut actions = row![].spacing(6);
-    if editable {
+    if editable_externally {
         actions = actions
-            .push(ui::row_action("Edit", Message::OpenEditContact(contact.clone())))
+            .push(ui::row_action("Edit", Message::OpenEditContact(contact.clone())));
+    }
+    if matches!(contact.source, RecordSource::Local) {
+        actions = actions
             .push(ui::row_action_danger(
                 "Delete",
                 Message::DeleteContact(contact.id.clone()),
             ));
     } else {
         actions = actions.push(ui::caption(format!(
-            "Synced from {} — edit it there",
+            "Synced from {}",
             contact.source
         )));
     }
@@ -339,48 +334,6 @@ fn contact_detail(contact: &Contact, mask: bool) -> Element<'_, Message> {
     column![detail, actions].spacing(6).into()
 }
 
-/// Full-window editor, reached from a row and dismissed back to the list.
-fn edit_contact(draft: &EditContactDraft) -> Element<'_, Message> {
-    let heading = if draft.id.is_some() { "Edit contact" } else { "New contact" };
-
-    let field = |label: &'static str, placeholder: &'static str, value: &str,
-                 on_change: fn(String) -> Message| {
-        row![
-            text(label).size(13).width(Length::Fixed(80.0)),
-            text_input(placeholder, value).on_input(on_change).padding(7).size(14),
-        ]
-        .align_y(Alignment::Center)
-        .spacing(10)
-    };
-
-    let can_save = !draft.name.trim().is_empty() && !normalize_number(&draft.phone).is_empty();
-
-    let content = column![
-        ui::toolbar(
-            heading,
-            "Stored on this computer only".into(),
-            vec![
-                ui::tool_button("Cancel", Some(Message::CancelEditContact)),
-                ui::tool_button("Save", can_save.then_some(Message::SaveContact)),
-            ],
-        ),
-        Space::new().height(6),
-        field("Name", "Full name", &draft.name, Message::EditNameChanged),
-        field("Number", "+49 30 123456", &draft.phone, Message::EditPhoneChanged),
-        field("Email", "optional", &draft.email, Message::EditEmailChanged),
-        Space::new().height(4),
-        // Say why Save is unavailable rather than leaving a dead button.
-        if can_save {
-            ui::caption("")
-        } else {
-            ui::caption("A name and at least one number are required.")
-        },
-    ]
-    .spacing(8)
-    .padding(Padding::new(16.0));
-
-    container(content).width(Length::Fill).height(Length::Fill).into()
-}
 
 /// Confirmation for adding a block rule, shared in shape with the history one.
 fn block_prompt<'a>(number: &'a str, name: Option<&'a str>) -> Element<'a, Message> {

@@ -291,8 +291,7 @@ impl FritzBoxClient {
         // Built once and shared: over TLS this carries the certificate pin, and
         // the downloads are served by the same router as the SOAP calls. Using
         // the default agent here made every download fail certificate
-        // validation while the SOAP calls succeeded — six empty phonebooks and
-        // a sync that reported success.
+        // validation.
         let (agent, _) = self.agent();
 
         let all_contacts: Vec<Contact> = std::thread::scope(|scope| {

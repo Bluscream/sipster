@@ -2,9 +2,9 @@
 //! things a user can do to a call.
 
 use super::{
-    call_status, chrono_now_iso, dialable, display_name, registration_status, ActiveCall,
-    BlockAction, CallEvent, CallId, CallRecord, CallState, CallType, Command, IncomingCall,
-    Message, RecordSource, SipsterApp, Task,
+    call_status, chrono_now_iso, dialable, display_name, registration_status, run_custom_command,
+    ActiveCall, BlockAction, CallEvent, CallId, CallRecord, CallState, CallType, Command,
+    IncomingCall, Message, RecordSource, RegistrationState, SipsterApp, Task,
 };
 use crate::{sound, tray};
 use iced::window;
@@ -175,10 +175,44 @@ impl SipsterApp {
     pub(super) fn on_call_event(&mut self, event: CallEvent) -> Task<Message> {
         match event {
             CallEvent::Registration(state) => {
+                match &state {
+                    RegistrationState::Registered => {
+                        if let Some(ref cmd) = self.config.commands.on_sip_registered {
+                            let formatted = cmd
+                                .replace("{user}", &self.config.account.username)
+                                .replace("{registrar}", &self.config.account.registrar)
+                                .replace("{port}", &self.config.account.port.to_string());
+                            let _ = run_custom_command(&formatted);
+                        }
+                    }
+                    RegistrationState::Unregistered => {
+                        if let Some(ref cmd) = self.config.commands.on_sip_unregistered {
+                            let formatted = cmd
+                                .replace("{user}", &self.config.account.username)
+                                .replace("{registrar}", &self.config.account.registrar)
+                                .replace("{port}", &self.config.account.port.to_string());
+                            let _ = run_custom_command(&formatted);
+                        }
+                    }
+                    RegistrationState::Failed(err) => {
+                        if let Some(ref cmd) = self.config.commands.on_sip_registration_failed {
+                            let formatted = cmd.replace("{error}", err.as_str());
+                            let _ = run_custom_command(&formatted);
+                        }
+                    }
+                    _ => {}
+                }
                 self.status = registration_status(&state);
                 self.registration = state;
             }
             CallEvent::IncomingCall { id, remote_uri, .. } => {
+                if let Some(ref cmd) = self.config.commands.on_call_incoming {
+                    let formatted = cmd
+                        .replace("{number}", &dialable(&remote_uri))
+                        .replace("{name}", &display_name(&remote_uri).unwrap_or_default());
+                    let _ = run_custom_command(&formatted);
+                }
+
                 // Check if the remote party is blocked
                 // Match on the caller's number, not the whole URI. A raw
                 // `contains` matched the host and any longer number, and a
@@ -296,6 +330,10 @@ impl SipsterApp {
                         });
                     }
                 }
+                if let Some(ref cmd) = self.config.commands.on_call_ended {
+                    let formatted = cmd.replace("{reason}", &reason.to_string());
+                    let _ = run_custom_command(&formatted);
+                }
                 self.status = format!("Call ended: {reason}");
             }
         }
@@ -329,6 +367,16 @@ impl SipsterApp {
             .or_else(|| self.incoming.as_ref().filter(|c| c.id == id).map(|c| c.remote.clone()))
             .unwrap_or_else(|| self.dial_number.clone());
         let on_hold = self.active.as_ref().is_some_and(|c| c.id == id && c.on_hold);
+
+        if state == CallState::Active {
+            if let Some(ref cmd) = self.config.commands.on_call_connected {
+                let formatted = cmd
+                    .replace("{number}", &dialable(&remote))
+                    .replace("{name}", &display_name(&remote).unwrap_or_default());
+                let _ = run_custom_command(&formatted);
+            }
+        }
+
         self.active = Some(ActiveCall { id, state, remote, on_hold });
         self.status = call_status(state);
     }
@@ -340,6 +388,11 @@ impl SipsterApp {
         self.chime(sound::call_started);
         let engine = engine.clone();
         let target = self.dial_number.clone();
+
+        if let Some(ref cmd) = self.config.commands.on_call_outgoing {
+            let formatted = cmd.replace("{number}", &target).replace("{name}", "");
+            let _ = run_custom_command(&formatted);
+        }
 
         if self.config.integration.local_history_enabled {
             self.sync_manager.record_local_call(CallRecord {
@@ -408,9 +461,25 @@ impl SipsterApp {
 
     /// Records a hold or resume the far end accepted.
     pub(super) fn on_hold_changed(&mut self, on_hold: bool) -> Task<Message> {
-        if let Some(call) = self.active.as_mut() {
+        let (number, name) = if let Some(call) = self.active.as_mut() {
             call.on_hold = on_hold;
+            (dialable(&call.remote), display_name(&call.remote).unwrap_or_default())
+        } else {
+            (String::new(), String::new())
+        };
+
+        if on_hold {
+            if let Some(ref cmd) = self.config.commands.on_call_held {
+                let formatted = cmd.replace("{number}", &number).replace("{name}", &name);
+                let _ = run_custom_command(&formatted);
+            }
+        } else {
+            if let Some(ref cmd) = self.config.commands.on_call_unheld {
+                let formatted = cmd.replace("{number}", &number).replace("{name}", &name);
+                let _ = run_custom_command(&formatted);
+            }
         }
+
         self.status = if on_hold { "On hold".into() } else { "Connected".into() };
         Task::none()
     }

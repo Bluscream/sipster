@@ -555,6 +555,30 @@ fn enabled() -> bool {
     true
 }
 
+fn default_google_edit_cmd() -> String {
+    "xdg-open https://contacts.google.com/person/{short_id}".to_string()
+}
+
+fn default_fritzbox_edit_cmd() -> String {
+    "xdg-open https://{registrar}/#/phone-books/book/{phonebook_id}/entry/{short_id}".to_string()
+}
+
+fn default_carddav_edit_cmd() -> String {
+    "xdg-open https://{account}".to_string()
+}
+
+fn default_local_edit_cmd() -> String {
+    "xdg-open {path}".to_string()
+}
+
+fn default_eds_edit_cmd() -> String {
+    "gnome-contacts".to_string()
+}
+
+fn default_fallback_edit_cmd() -> String {
+    "xdg-open {target}".to_string()
+}
+
 /// Comprehensive settings for contact and call history providers, local storage, and call blocking.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -597,6 +621,74 @@ impl Default for IntegrationSettings {
             vdir_path: None,
             blocked_numbers: Vec::new(),
             default_block_action: BlockAction::default(),
+        }
+    }
+}
+
+/// Custom command hooks for app lifecycle, call events, and contact editing.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct CommandsSettings {
+    pub on_app_start: Option<String>,
+    pub on_app_exit: Option<String>,
+
+    pub on_contacts_synced: Option<String>,
+    pub on_history_synced: Option<String>,
+
+    pub on_sip_registered: Option<String>,
+    pub on_sip_unregistered: Option<String>,
+    pub on_sip_registration_failed: Option<String>,
+
+    pub on_call_incoming: Option<String>,
+    pub on_call_outgoing: Option<String>,
+    pub on_call_connected: Option<String>,
+    pub on_call_held: Option<String>,
+    pub on_call_unheld: Option<String>,
+    pub on_call_transferred: Option<String>,
+    pub on_call_ended: Option<String>,
+
+    #[serde(default = "default_google_edit_cmd")]
+    pub edit_google: String,
+
+    #[serde(default = "default_fritzbox_edit_cmd")]
+    pub edit_fritzbox: String,
+
+    #[serde(default = "default_carddav_edit_cmd")]
+    pub edit_carddav: String,
+
+    #[serde(default = "default_local_edit_cmd")]
+    pub edit_local: String,
+
+    #[serde(default = "default_eds_edit_cmd")]
+    pub edit_eds: String,
+
+    #[serde(default = "default_fallback_edit_cmd")]
+    pub edit_default: String,
+}
+
+impl Default for CommandsSettings {
+    fn default() -> Self {
+        Self {
+            on_app_start: None,
+            on_app_exit: None,
+            on_contacts_synced: None,
+            on_history_synced: None,
+            on_sip_registered: None,
+            on_sip_unregistered: None,
+            on_sip_registration_failed: None,
+            on_call_incoming: None,
+            on_call_outgoing: None,
+            on_call_connected: None,
+            on_call_held: None,
+            on_call_unheld: None,
+            on_call_transferred: None,
+            on_call_ended: None,
+            edit_google: default_google_edit_cmd(),
+            edit_fritzbox: default_fritzbox_edit_cmd(),
+            edit_carddav: default_carddav_edit_cmd(),
+            edit_local: default_local_edit_cmd(),
+            edit_eds: default_eds_edit_cmd(),
+            edit_default: default_fallback_edit_cmd(),
         }
     }
 }
@@ -681,6 +773,8 @@ pub struct Config {
     pub log: LogSettings,
     #[serde(default)]
     pub integration: IntegrationSettings,
+    #[serde(default)]
+    pub commands: CommandsSettings,
 }
 
 impl Config {

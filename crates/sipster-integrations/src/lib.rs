@@ -189,7 +189,6 @@ impl SyncManager {
     /// results were already in hand. Each batch is sent as it lands; the
     /// receiver merges and re-sorts.
     pub fn sync_contacts_streaming(&self, tx: tokio::sync::mpsc::UnboundedSender<Vec<Contact>>) {
-        let local = self.local_store.clone();
         let fritz = self.fritz_client.clone();
         let google = self.google_clients.clone();
         let carddav = self.carddav_clients.clone();
@@ -200,16 +199,7 @@ impl SyncManager {
         tokio::spawn(async move {
             let mut everything = Vec::new();
 
-            // Local first: it is on disk and costs nothing, so the list is
-            // never empty while the network is still working.
-            match local.load_contacts() {
-                Ok(contacts) if !contacts.is_empty() => {
-                    everything.extend(contacts.clone());
-                    let _ = tx.send(contacts);
-                }
-                Ok(_) => {}
-                Err(e) => warn!(error = %e, "could not read local contacts"),
-            }
+
 
             let mut tasks: Vec<
                 std::pin::Pin<Box<dyn std::future::Future<Output = Vec<Contact>> + Send>>,
@@ -294,10 +284,7 @@ impl SyncManager {
     pub async fn sync_contacts(&self) -> Vec<Contact> {
         let mut merged = Vec::new();
 
-        // 1. Local contacts
-        if let Ok(local_contacts) = self.local_store.load_contacts() {
-            merged.extend(local_contacts);
-        }
+
 
         // 2. Remote providers
         merged.extend(self.fetch_remote_contacts().await);

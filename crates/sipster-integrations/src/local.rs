@@ -6,11 +6,10 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::{CallRecord, Contact};
+use crate::model::CallRecord;
 
-/// File name for local call history and contacts.
+/// File name for local call history.
 const HISTORY_FILE: &str = "history.json";
-const CONTACTS_FILE: &str = "contacts.json";
 /// Cap on retained call records, so history cannot grow without bound.
 const MAX_HISTORY_RECORDS: usize = 500;
 
@@ -37,11 +36,6 @@ pub struct LocalStore {
 #[derive(Debug, Default, Serialize, Deserialize)]
 struct HistoryPayload {
     calls: Vec<CallRecord>,
-}
-
-#[derive(Debug, Default, Serialize, Deserialize)]
-struct ContactsPayload {
-    contacts: Vec<Contact>,
 }
 
 impl LocalStore {
@@ -82,10 +76,6 @@ impl LocalStore {
         self.data_dir.as_ref().map(|dir| dir.join(HISTORY_FILE))
     }
 
-    fn contacts_path(&self) -> Option<PathBuf> {
-        self.data_dir.as_ref().map(|dir| dir.join(CONTACTS_FILE))
-    }
-
     /// Loads all recorded local call records.
     pub fn load_calls(&self) -> Result<Vec<CallRecord>, LocalStoreError> {
         let Some(path) = self.history_path() else {
@@ -104,40 +94,6 @@ impl LocalStore {
         calls.insert(0, call);
         calls.truncate(MAX_HISTORY_RECORDS);
         write_json(&path, &HistoryPayload { calls })
-    }
-
-    /// Loads custom local contacts.
-    pub fn load_contacts(&self) -> Result<Vec<Contact>, LocalStoreError> {
-        let Some(path) = self.contacts_path() else {
-            return Ok(Vec::new());
-        };
-        Ok(read_json::<ContactsPayload>(&path)?.contacts)
-    }
-
-    /// Saves custom local contacts.
-    pub fn save_contacts(&self, contacts: &[Contact]) -> Result<(), LocalStoreError> {
-        let Some(path) = self.contacts_path() else {
-            return Ok(());
-        };
-        write_json(&path, &ContactsPayload { contacts: contacts.to_vec() })
-    }
-
-    /// Adds or updates a local contact.
-    pub fn upsert_contact(&self, contact: Contact) -> Result<(), LocalStoreError> {
-        let mut contacts = self.load_contacts().unwrap_or_default();
-        if let Some(idx) = contacts.iter().position(|c| c.id == contact.id) {
-            contacts[idx] = contact;
-        } else {
-            contacts.push(contact);
-        }
-        self.save_contacts(&contacts)
-    }
-
-    /// Deletes a local contact by ID.
-    pub fn delete_contact(&self, contact_id: &str) -> Result<(), LocalStoreError> {
-        let mut contacts = self.load_contacts().unwrap_or_default();
-        contacts.retain(|c| c.id != contact_id);
-        self.save_contacts(&contacts)
     }
 
     /// Clears all stored local call history.
@@ -213,7 +169,7 @@ fn restrict_dir(_path: &Path) -> Result<(), LocalStoreError> {
 }
 
 /// XDG data directory resolution, without pulling in a crate for two lookups.
-fn data_directory() -> Option<PathBuf> {
+pub fn data_directory() -> Option<PathBuf> {
     if let Ok(dir) = std::env::var("XDG_DATA_HOME") {
         if !dir.trim().is_empty() {
             return Some(Path::new(&dir).join("sipster"));

@@ -76,19 +76,47 @@ impl SipsterApp {
                 "the router knows this account's numbers"
             );
         }
+
+        // Auto-insert router telephony devices into contacts as internal numbers with ** prefix
+        let mut router_contacts = Vec::new();
+        for dev in found {
+            let internal = dev.internal.trim();
+            if internal.is_empty() {
+                continue;
+            }
+            let int_num = if internal.starts_with("**") {
+                internal.to_string()
+            } else {
+                format!("**{internal}")
+            };
+            let name = if !dev.phone_name.trim().is_empty() {
+                dev.phone_name.trim().to_string()
+            } else {
+                format!("Internal {internal}")
+            };
+            router_contacts.push(sipster_integrations::Contact {
+                id: format!("fritzbox-dev-{}", dev.username),
+                name,
+                numbers: vec![sipster_integrations::PhoneNumber {
+                    number: int_num,
+                    number_type: sipster_integrations::NumberType::Intern,
+                    priority: 1,
+                }],
+                emails: Vec::new(),
+                source: sipster_integrations::RecordSource::FritzBox {
+                    phonebook_id: 0,
+                    phonebook_name: "Router Devices".to_string(),
+                },
+            });
+        }
+        if !router_contacts.is_empty() {
+            self.contacts.merge(router_contacts);
+        }
     }
 
-    /// How the active account's own numbers should read in the status line,
-    /// if the router told us any.
-    ///
-    /// Renders as `620 · 2671078`, dropping either half when the router did
-    /// not supply it.
-    pub fn active_account_numbers(&self) -> Option<String> {
+    /// Returns the internal and external numbers for the active account, if known.
+    pub fn active_numbers(&self) -> Option<(&str, &str)> {
         let entry = self.numbers.as_ref()?;
-        let parts: Vec<&str> = [entry.internal.as_str(), entry.external.as_str()]
-            .into_iter()
-            .filter(|part| !part.is_empty())
-            .collect();
-        (!parts.is_empty()).then(|| parts.join(" · "))
+        Some((entry.internal.as_str(), entry.external.as_str()))
     }
 }

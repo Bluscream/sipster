@@ -25,7 +25,7 @@ use sipster_core::{
 };
 
 use sipster_integrations::{
-    CardDavClient, CardDavConfig, Contact, FritzConfig, GoogleContactsClient, NumberType, PhoneNumber,
+    CardDavClient, CardDavConfig, FritzConfig, GoogleContactsClient,
     CallRecord, CallType, RecordSource, SyncManager,
 };
 
@@ -602,19 +602,6 @@ fn display_name(remote: &str) -> Option<String> {
         .then(|| name.to_string())
 }
 
-/// Expands a leading `~/` so a typed path behaves the way a shell would.
-fn expand_home(path: &str) -> String {
-    path.strip_prefix("~/").map_or_else(
-        || path.to_string(),
-        |rest| {
-            std::env::var("HOME").map_or_else(
-                |_| path.to_string(),
-                |home| format!("{home}/{rest}"),
-            )
-        },
-    )
-}
-
 fn registration_status(state: &RegistrationState) -> String {
     match state {
         RegistrationState::Unregistered => "Not registered".into(),
@@ -725,16 +712,16 @@ impl SipsterApp {
     /// Records the engine that finished connecting.
     fn on_engine_ready(&mut self, engine: EngineHandle) -> Task<Message> {
         let account = engine.account();
-        self.account_info = if account.port == 5060 {
-            format!("{} at {}", account.username, account.registrar)
-        } else {
-            format!("{} at {}:{}", account.username, account.registrar, account.port)
-        };
+        self.account_info = format!("{}@{}:{}", account.username, account.registrar, account.port);
 
         let account = account.clone();
         self.engine = Some(engine);
         self.settings.load_account(&account);
         self.status = "Ready".into();
+
+        if let Some(ref cmd) = self.config.commands.on_app_start {
+            let _ = run_custom_command(cmd);
+        }
 
         if let Some(cmd) = self.pending_command.take() {
             return self.handle_ipc(cmd);
@@ -742,4 +729,23 @@ impl SipsterApp {
         Task::none()
     }
 }
+
+pub(super) fn run_custom_command(cmd: &str) -> std::io::Result<()> {
+    if cmd.trim().is_empty() {
+        return Ok(());
+    }
+    #[cfg(target_os = "windows")]
+    let (shell, arg) = ("cmd", "/C");
+    #[cfg(not(target_os = "windows"))]
+    let (shell, arg) = ("sh", "-c");
+
+    std::process::Command::new(shell)
+        .arg(arg)
+        .arg(cmd)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()?;
+    Ok(())
+}
+
 

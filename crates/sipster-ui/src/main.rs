@@ -6,6 +6,7 @@
 
 mod app;
 mod calls;
+mod consts;
 mod contacts;
 mod engine_bridge;
 mod glow;

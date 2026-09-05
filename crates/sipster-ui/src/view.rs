@@ -106,21 +106,22 @@ fn statusbar(app: &SipsterApp) -> Element<'_, Message> {
     // The account line carries the SIP username and registrar, both of which
     // identify the user on a shared screen.
     let mask = app.ui().streaming_mode;
-    let mut msg = match (app.active_account_info(), &registration) {
-        (Some(info), RegistrationState::Registered) => {
-            format!("{reg_text} as {}", show(info, mask))
-        }
-        (Some(info), _) => format!("{reg_text} ({})", show(info, mask)),
-        (None, _) => reg_text.to_string(),
+    
+    let info_str = app.active_account_info().map(|s| show(s, mask));
+    let number_str = app.active_numbers().map(|(_, ext)| show(ext, mask));
+    
+    let acc_info = match (info_str, number_str) {
+        (Some(i), Some(n)) => format!("{i} - {n}"),
+        (Some(i), None) => i,
+        (None, Some(n)) => format!("Unknown - {n}"),
+        (None, None) => String::new(),
     };
 
-    // The account's own numbers, when the router has told us: the extension
-    // to reach it on, and the number it presents when calling out. Masked
-    // along with the rest of the account line, being just as identifying.
-    if let Some(numbers) = app.active_account_numbers() {
-        use std::fmt::Write as _;
-        let _ = write!(msg, " · {}", show(&numbers, mask));
-    }
+    let msg = match &registration {
+        RegistrationState::Registered if !acc_info.is_empty() => acc_info,
+        _ if !acc_info.is_empty() => format!("{reg_text} ({acc_info})"),
+        _ => reg_text.to_string(),
+    };
 
     let status_bar_content = row![
         text(circle_char).size(14).color(circle_color),

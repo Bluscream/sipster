@@ -112,6 +112,7 @@ pub enum Message {
     ToggleEds(bool),
     ToggleVdir(bool),
     VdirPathChanged(String),
+    PickVdirFolder,
     DefaultBlockActionChanged(BlockAction),
     UnblockNumber(String),
 

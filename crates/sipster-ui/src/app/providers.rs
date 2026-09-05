@@ -211,6 +211,26 @@ impl SipsterApp {
                 self.apply_vdir();
                 self.persist();
             }
+            S::PickVdirFolder => {
+                let default_dir = if !self.settings.draft_vdir_path.trim().is_empty() {
+                    Some(crate::consts::expand_home_path(self.settings.draft_vdir_path.trim()))
+                } else {
+                    crate::consts::default_contacts_dir()
+                        .or_else(|| crate::consts::home_dir())
+                };
+                let mut builder = rfd::FileDialog::new().set_title("Select vCard Folder");
+                if let Some(dir) = default_dir {
+                    builder = builder.set_directory(dir);
+                }
+                if let Some(folder) = builder.pick_folder() {
+                    let path_str = folder.to_string_lossy().to_string();
+                    self.settings.draft_vdir_path.clone_from(&path_str);
+                    self.config.integration.vdir_path = Some(folder);
+                    self.apply_vdir();
+                    self.persist();
+                    return Task::done(Message::Contacts(contacts::Message::SyncPressed));
+                }
+            }
             other => return self.on_google_settings(other),
         }
         Task::none()

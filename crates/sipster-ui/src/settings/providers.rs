@@ -305,10 +305,11 @@ fn vdir_panel<'a>(
             .text_size(13),
         field(
             folder_lbl,
-            input(
+            file_input(
                 crate::consts::LOCAL_CONTACTS_DIR_DISPLAY,
                 &state.draft_vdir_path,
                 Message::VdirPathChanged,
+                Message::PickVdirFolder,
             ),
         ),
         text(auto_detected)

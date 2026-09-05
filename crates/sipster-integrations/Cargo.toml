@@ -20,7 +20,7 @@ tracing = { workspace = true }
 tokio = { workspace = true }
 uuid = { workspace = true }
 md-5 = "0.10"
-ureq = { version = "2.10", features = ["json", "tls"] }
+ureq = { version = "3.0", features = ["json", "tls"] }
 # TLS to the router, whose certificate is self-signed and therefore pinned
 # rather than validated against a CA. See `pinned_tls`.
 rustls = "0.23"

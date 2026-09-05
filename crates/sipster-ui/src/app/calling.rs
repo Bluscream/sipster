@@ -2,7 +2,7 @@
 //! things a user can do to a call.
 
 use super::{
-    call_status, chrono_now_iso, dialable, display_name, registration_status, run_custom_command,
+    call_status, chrono_now_iso, dialable, display_name, registration_status, run_hook,
     ActiveCall, BlockAction, CallEvent, CallId, CallRecord, CallState, CallType, Command,
     IncomingCall, Message, RecordSource, RegistrationState, SipsterApp, Task,
 };
@@ -178,39 +178,47 @@ impl SipsterApp {
                 match &state {
                     RegistrationState::Registered => {
                         if let Some(ref cmd) = self.config.commands.on_sip_registered {
-                            let formatted = cmd
-                                .replace("{user}", &self.config.account.username)
-                                .replace("{registrar}", &self.config.account.registrar)
-                                .replace("{port}", &self.config.account.port.to_string());
-                            let _ = run_custom_command(&formatted);
+                            let _ = run_hook(
+                                cmd,
+                                &[
+                                    ("user", &self.config.account.username),
+                                    ("registrar", &self.config.account.registrar),
+                                    ("port", &self.config.account.port.to_string()),
+                                ],
+                            );
                         }
                     }
                     RegistrationState::Unregistered => {
                         if let Some(ref cmd) = self.config.commands.on_sip_unregistered {
-                            let formatted = cmd
-                                .replace("{user}", &self.config.account.username)
-                                .replace("{registrar}", &self.config.account.registrar)
-                                .replace("{port}", &self.config.account.port.to_string());
-                            let _ = run_custom_command(&formatted);
+                            let _ = run_hook(
+                                cmd,
+                                &[
+                                    ("user", &self.config.account.username),
+                                    ("registrar", &self.config.account.registrar),
+                                    ("port", &self.config.account.port.to_string()),
+                                ],
+                            );
                         }
                     }
                     RegistrationState::Failed(err) => {
                         if let Some(ref cmd) = self.config.commands.on_sip_registration_failed {
-                            let formatted = cmd.replace("{error}", err.as_str());
-                            let _ = run_custom_command(&formatted);
+                            let _ = run_hook(cmd, &[("error", err.as_str())]);
                         }
                     }
-                    _ => {}
+                    RegistrationState::Registering => {}
                 }
                 self.status = registration_status(&state);
                 self.registration = state;
             }
             CallEvent::IncomingCall { id, remote_uri, .. } => {
                 if let Some(ref cmd) = self.config.commands.on_call_incoming {
-                    let formatted = cmd
-                        .replace("{number}", &dialable(&remote_uri))
-                        .replace("{name}", &display_name(&remote_uri).unwrap_or_default());
-                    let _ = run_custom_command(&formatted);
+                    let _ = run_hook(
+                        cmd,
+                        &[
+                            ("number", &dialable(&remote_uri)),
+                            ("name", &display_name(&remote_uri).unwrap_or_default()),
+                        ],
+                    );
                 }
 
                 // Check if the remote party is blocked
@@ -331,10 +339,9 @@ impl SipsterApp {
                     }
                 }
                 if let Some(ref cmd) = self.config.commands.on_call_ended {
-                    let formatted = cmd.replace("{reason}", &reason.to_string());
-                    let _ = run_custom_command(&formatted);
+                    let _ = run_hook(cmd, &[("reason", reason.as_str())]);
                 }
-                self.status = rust_i18n::t!("call.call_ended_reason", reason = reason.to_string()).to_string();
+                self.status = rust_i18n::t!("call.call_ended_reason", reason = reason.clone()).to_string();
             }
         }
         self.sync_tray_state();
@@ -370,10 +377,13 @@ impl SipsterApp {
 
         if state == CallState::Active {
             if let Some(ref cmd) = self.config.commands.on_call_connected {
-                let formatted = cmd
-                    .replace("{number}", &dialable(&remote))
-                    .replace("{name}", &display_name(&remote).unwrap_or_default());
-                let _ = run_custom_command(&formatted);
+                let _ = run_hook(
+                    cmd,
+                    &[
+                        ("number", &dialable(&remote)),
+                        ("name", &display_name(&remote).unwrap_or_default()),
+                    ],
+                );
             }
         }
 
@@ -390,8 +400,7 @@ impl SipsterApp {
         let target = self.dial_number.clone();
 
         if let Some(ref cmd) = self.config.commands.on_call_outgoing {
-            let formatted = cmd.replace("{number}", &target).replace("{name}", "");
-            let _ = run_custom_command(&formatted);
+            let _ = run_hook(cmd, &[("number", target.as_str()), ("name", "")]);
         }
 
         if self.config.integration.local_history_enabled {
@@ -470,14 +479,10 @@ impl SipsterApp {
 
         if on_hold {
             if let Some(ref cmd) = self.config.commands.on_call_held {
-                let formatted = cmd.replace("{number}", &number).replace("{name}", &name);
-                let _ = run_custom_command(&formatted);
+                let _ = run_hook(cmd, &[("number", number.as_str()), ("name", name.as_str())]);
             }
-        } else {
-            if let Some(ref cmd) = self.config.commands.on_call_unheld {
-                let formatted = cmd.replace("{number}", &number).replace("{name}", &name);
-                let _ = run_custom_command(&formatted);
-            }
+        } else if let Some(ref cmd) = self.config.commands.on_call_unheld {
+            let _ = run_hook(cmd, &[("number", number.as_str()), ("name", name.as_str())]);
         }
 
         self.status = if on_hold {

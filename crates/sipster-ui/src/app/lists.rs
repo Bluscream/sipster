@@ -2,7 +2,7 @@
 //! in, and everything their messages ask for.
 
 use super::{
-    chrono_now_iso, run_custom_command, BlockAction, BlockedNumber, Message, RecordSource, SipsterApp, Task,
+    chrono_now_iso, run_hook, BlockAction, BlockedNumber, Message, RecordSource, SipsterApp, Task,
 };
 use crate::pane::Placement;
 use crate::{calls, contacts};
@@ -222,8 +222,7 @@ impl SipsterApp {
                 self.contacts.loading = false;
                 self.store_learned_certificate();
                 if let Some(ref cmd) = self.config.commands.on_contacts_synced {
-                    let formatted = cmd.replace("{count}", &self.contacts.contacts.len().to_string());
-                    let _ = run_custom_command(&formatted);
+                    let _ = run_hook(cmd, &[("count", &self.contacts.contacts.len().to_string())]);
                 }
                 Task::none()
             }
@@ -248,7 +247,7 @@ impl SipsterApp {
                     RecordSource::Other(_) => &self.config.commands.edit_default,
                 };
 
-                let short_id = c.id.split('-').last().unwrap_or(&c.id);
+                let short_id = c.id.rsplit('-').next().unwrap_or(&c.id);
                 let primary_num = c.primary_number().unwrap_or_default();
                 let account = match &c.source {
                     RecordSource::CardDav { account } => account.as_str(),
@@ -263,25 +262,30 @@ impl SipsterApp {
                     _ => (String::new(), ""),
                 };
                 let path = crate::consts::default_contacts_dir_string();
-                let target = if !account.is_empty() {
-                    account.to_string()
-                } else {
+                let target = if account.is_empty() {
                     path.clone()
+                } else {
+                    account.to_string()
                 };
 
-                let cmd = template_cmd
-                    .replace("{id}", &c.id)
-                    .replace("{short_id}", short_id)
-                    .replace("{phonebook_id}", &phonebook_id_str)
-                    .replace("{registrar}", registrar_str)
-                    .replace("{account}", account)
-                    .replace("{path}", &path)
-                    .replace("{target}", &target)
-                    .replace("{name}", &c.name)
-                    .replace("{number}", primary_num)
-                    .replace("{source}", &c.source.to_string());
-
-                let _ = run_custom_command(&cmd);
+                // Every one of these comes from a contact provider — a router
+                // phonebook, a Google account, a CardDAV server — so none of
+                // them may reach the shell as syntax. See `run_hook`.
+                let _ = run_hook(
+                    template_cmd,
+                    &[
+                        ("id", &c.id),
+                        ("short_id", short_id),
+                        ("phonebook_id", &phonebook_id_str),
+                        ("registrar", registrar_str),
+                        ("account", account),
+                        ("path", &path),
+                        ("target", &target),
+                        ("name", &c.name),
+                        ("number", primary_num),
+                        ("source", &c.source.to_string()),
+                    ],
+                );
                 Task::none()
             }
             contacts::Message::DeleteContact(id) => {
@@ -354,8 +358,7 @@ impl SipsterApp {
             calls::Message::SyncFinished => {
                 self.calls.loading = false;
                 if let Some(ref cmd) = self.config.commands.on_history_synced {
-                    let formatted = cmd.replace("{count}", &self.calls.calls.len().to_string());
-                    let _ = run_custom_command(&formatted);
+                    let _ = run_hook(cmd, &[("count", &self.calls.calls.len().to_string())]);
                 }
                 Task::none()
             }

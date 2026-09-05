@@ -6,6 +6,8 @@ registration:
   registering: "Registering…"
   registered: "Registered"
   failed: "Registration failed: %{error}"
+  account_disabled: "The account is switched off"
+  account_invalid: "The account cannot register: %{error}"
 
 # Call States
 call:
@@ -145,6 +147,8 @@ settings:
   looking_audio: "Looking for audio devices…"
   audio_hint: "Switches immediately, including on a call in progress."
   changes_immediately: "Changes apply immediately unless noted."
+  pick_vcard_folder: "Select vCard folder"
+  pick_google_json: "Select Google client_secret JSON"
 
 # Contacts Window
 contacts:

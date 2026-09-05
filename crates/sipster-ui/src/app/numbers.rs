@@ -143,6 +143,13 @@ impl SipsterApp {
             .filter(|internal| !internal.is_empty())
             .unwrap_or(account.username.as_str());
 
-        Some(format!("{who}@{}:{}", account.registrar, account.port))
+        // The port is only worth the space when it is not the one implied by
+        // the transport — 5060 for UDP and TCP, 5061 for TLS. Showing `:5060`
+        // on every line is noise.
+        if account.port == account.transport.default_port() {
+            Some(format!("{who}@{}", account.registrar))
+        } else {
+            Some(format!("{who}@{}:{}", account.registrar, account.port))
+        }
     }
 }

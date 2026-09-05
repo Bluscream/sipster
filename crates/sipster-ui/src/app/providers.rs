@@ -69,7 +69,7 @@ impl SipsterApp {
                     .or_else(|| crate::consts::home_dir().map(|h| h.join("Downloads")));
                 let mut builder = rfd::FileDialog::new()
                     .add_filter("JSON Files", &["json"])
-                    .set_title("Select Google client_secret JSON");
+                    .set_title(rust_i18n::t!("settings.pick_google_json").to_string());
                 if let Some(dir) = default_dir {
                     builder = builder.set_directory(dir);
                 }
@@ -213,7 +213,7 @@ impl SipsterApp {
                 } else {
                     Some(crate::consts::expand_home_path(self.settings.draft_vdir_path.trim()))
                 };
-                let mut builder = rfd::FileDialog::new().set_title("Select vCard Folder");
+                let mut builder = rfd::FileDialog::new().set_title(rust_i18n::t!("settings.pick_vcard_folder").to_string());
                 if let Some(dir) = default_dir {
                     builder = builder.set_directory(dir);
                 }
